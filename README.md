@@ -4,16 +4,18 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Status
 
-**Milestone 3 complete**: Full definitional equality.
+**Milestone 4 in progress**: Inductive types & recursors.
 
 - [x] Parser for names, levels, expressions
 - [x] Well-scoped expressions (indexed by depth)
 - [x] Type inference (`inferType`) for closed terms
-- [x] Reduction (`whnf`) - beta, let, and delta reduction
+- [x] Reduction (`whnf`) - beta, let, delta, and iota reduction
 - [x] Definitional equality (`isDefEq`) - structural + beta + delta + eta
 - [x] Delta reduction with reducibility hints (abbrev unfolds, opaque doesn't)
 - [x] Eta expansion (λx. f x = f)
-- [ ] Inductive types & recursors
+- [x] Iota reduction (recursor computation when major premise is a constructor)
+- [ ] Recursor type inference
+- [ ] Parser for inductive type declarations
 
 ## Build
 

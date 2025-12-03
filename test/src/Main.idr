@@ -222,6 +222,153 @@ testEta = do
 
   putStrLn $ "\nλx. f x == f (axiom): " ++ show (isDefEq envWithF fEtaExpanded fRef)
 
+||| Test iota reduction (recursor reduction)
+testIota : IO ()
+testIota = do
+  putStrLn "\n=== Testing Iota Reduction ==="
+
+  -- Set up a simple inductive type: Nat
+  -- inductive Nat : Type where
+  --   | zero : Nat
+  --   | succ : Nat → Nat
+
+  let natName = Str "Nat" Anonymous
+  let zeroName = Str "zero" (Str "Nat" Anonymous)
+  let succName = Str "succ" (Str "Nat" Anonymous)
+  let recName = Str "rec" (Str "Nat" Anonymous)
+
+  -- Nat : Type 0
+  let natType : ClosedExpr = Sort (Succ Zero)
+  let natConst : ClosedExpr = Const natName []
+
+  -- zero : Nat
+  let zeroType : ClosedExpr = natConst
+
+  -- succ : Nat → Nat
+  let natInBody : Expr 1 = Const natName []
+  let succType : ClosedExpr = Pi (Str "n" Anonymous) Default natConst natInBody
+
+  -- Create the inductive info
+  let natIndInfo = MkInductiveInfo
+        natName
+        natType
+        0  -- numParams
+        0  -- numIndices
+        [ MkConstructorInfo zeroName zeroType
+        , MkConstructorInfo succName succType ]
+        True   -- isRecursive
+        False  -- isReflexive
+
+  -- Recursor: Nat.rec
+  -- Type: (motive : Nat → Sort u) → motive Nat.zero → ((n : Nat) → motive n → motive (Nat.succ n)) → (t : Nat) → motive t
+  --
+  -- Reduction rules:
+  --   Nat.rec motive hz hs Nat.zero => hz
+  --   Nat.rec motive hz hs (Nat.succ n) => hs n (Nat.rec motive hz hs n)
+  --
+  -- The rhs in each rule is already abstracted over params, motives, minors, and ctor fields
+
+  -- For zero rule: no ctor fields, rhs should be λmotive.λhz.λhs. hz
+  -- In de Bruijn: λ.λ.λ. BVar 1  (hz is at index 1)
+  -- Actually, looking at lean4lean, the rhs is already abstracted but when applied,
+  -- we apply: (params, motives, minors) then (ctor fields) then (remaining args)
+  -- So rhs for zero: should evaluate to hz when given motive, hz, hs
+
+  -- Build: λmotive.λhz.λhs. hz
+  let zeroRhs : ClosedExpr =
+        let motiveTy : ClosedExpr = Pi (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
+            motive1 : Expr 1 = BVar FZ
+            hzTy1 : Expr 1 = App motive1 (Const zeroName [])
+        in Lam (Str "motive" Anonymous) Default motiveTy
+             (Lam (Str "hz" Anonymous) Default hzTy1
+               (Lam (Str "hs" Anonymous) Default (Sort Zero)  -- placeholder type
+                 (BVar (FS FZ))))  -- hz
+
+  let zeroRule = MkRecursorRule zeroName 0 zeroRhs
+
+  -- Recursor type (simplified for testing)
+  let recType : ClosedExpr = Sort Zero  -- placeholder, not used in iota reduction
+
+  let natRecInfo = MkRecursorInfo
+        recName
+        recType
+        0  -- numParams
+        0  -- numIndices
+        1  -- numMotives
+        2  -- numMinors (zero case and succ case)
+        [zeroRule]
+        False  -- isK
+
+  -- Create environment with Nat, zero, succ, and rec
+  let env0 = emptyEnv
+  let env1 = addDecl (IndDecl natIndInfo []) env0
+  let env2 = addDecl (CtorDecl zeroName zeroType natName 0 0 0 []) env1
+  let env3 = addDecl (CtorDecl succName succType natName 1 0 1 []) env2
+  let env4 = addDecl (RecDecl natRecInfo []) env3
+
+  putStrLn $ "Environment set up with Nat, zero, succ, rec"
+
+  -- Test: Nat.rec motive hz hs Nat.zero should reduce to hz
+  -- Build: rec motive hz hs zero
+  let motive : ClosedExpr = Lam (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
+  let hz : ClosedExpr = Sort Zero  -- our "zero result"
+  let hs : ClosedExpr = Lam (Str "n" Anonymous) Default natConst
+                          (Lam (Str "ih" Anonymous) Default (Sort (Succ Zero)) (BVar FZ))
+  let zero : ClosedExpr = Const zeroName []
+
+  let recApp = App (App (App (App (Const recName []) motive) hz) hs) zero
+
+  putStrLn $ "Test 1: rec motive hz hs zero => hz"
+  putStrLn $ "  before: " ++ ppClosedExpr recApp
+  case whnf env4 recApp of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right result => do
+      putStrLn $ "  after:  " ++ ppClosedExpr result
+      putStrLn $ "  correct: " ++ show (result == hz)
+
+  -- Test 2: Add succ rule and test succ case
+  -- For succ rule: ctor has 1 field (n : Nat), rhs should be λmotive.λhz.λhs.λn.λih. hs n ih
+  -- where ih is the recursive call result
+  -- But for simplicity, let's just test the structure is right by having hs return a known value
+
+  -- Create succ rule: λmotive.λhz.λhs.λn. hs n (placeholder for ih)
+  -- For testing, let's make rhs = λmotive.λhz.λhs.λn. Sort 1  (always returns Sort 1)
+  let succRhs : ClosedExpr =
+        let motiveTy : ClosedExpr = Pi (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
+            motive1 : Expr 1 = BVar FZ
+            hzTy1 : Expr 1 = App motive1 (Const zeroName [])
+        in Lam (Str "motive" Anonymous) Default motiveTy
+             (Lam (Str "hz" Anonymous) Default hzTy1
+               (Lam (Str "hs" Anonymous) Default (Sort Zero)
+                 (Lam (Str "n" Anonymous) Default (weaken1 (weaken1 (weaken1 natConst)))
+                   (Sort (Succ Zero)))))  -- always returns Sort 1
+
+  let succRule = MkRecursorRule succName 1 succRhs  -- 1 field (n)
+
+  let natRecInfoWithSucc = MkRecursorInfo
+        recName
+        recType
+        0  -- numParams
+        0  -- numIndices
+        1  -- numMotives
+        2  -- numMinors
+        [zeroRule, succRule]
+        False  -- isK
+
+  let env5 = addDecl (RecDecl natRecInfoWithSucc []) env3  -- override recursor
+
+  -- Build: rec motive hz hs (succ zero)
+  let one : ClosedExpr = App (Const succName []) (Const zeroName [])
+  let recAppSucc = App (App (App (App (Const recName []) motive) hz) hs) one
+
+  putStrLn $ "\nTest 2: rec motive hz hs (succ zero) => Sort 1"
+  putStrLn $ "  before: " ++ ppClosedExpr recAppSucc
+  case whnf env5 recAppSucc of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right result => do
+      putStrLn $ "  after:  " ++ ppClosedExpr result
+      putStrLn $ "  correct: " ++ show (result == Sort (Succ Zero))
+
 main : IO ()
 main = do
   putStrLn "Lean4Idris Test Suite"
@@ -235,5 +382,6 @@ main = do
   testIsDefEq
   testDelta
   testEta
+  testIota
 
   putStrLn "\n\nAll tests completed!"

@@ -95,6 +95,37 @@ runTC : TC a -> Either TCError a
 runTC = id
 
 ------------------------------------------------------------------------
+-- Helper: Get app spine
+------------------------------------------------------------------------
+
+||| Decompose expression into head and arguments
+||| e.g., f a b c => (f, [a, b, c])
+getAppSpine : ClosedExpr -> (ClosedExpr, List ClosedExpr)
+getAppSpine e = go e []
+  where
+    go : ClosedExpr -> List ClosedExpr -> (ClosedExpr, List ClosedExpr)
+    go (App f x) args = go f (x :: args)
+    go head args = (head, args)
+
+||| Get the nth element of a list (0-indexed)
+listNth : List a -> Nat -> Maybe a
+listNth [] _ = Nothing
+listNth (x :: _) Z = Just x
+listNth (_ :: xs) (S n) = listNth xs n
+
+||| Drop first n elements
+listDrop : Nat -> List a -> List a
+listDrop Z xs = xs
+listDrop (S n) [] = []
+listDrop (S n) (_ :: xs) = listDrop n xs
+
+||| Take first n elements
+listTake : Nat -> List a -> List a
+listTake Z _ = []
+listTake (S n) [] = []
+listTake (S n) (x :: xs) = x :: listTake n xs
+
+------------------------------------------------------------------------
 -- Delta Reduction (Constant Unfolding)
 ------------------------------------------------------------------------
 
@@ -144,6 +175,98 @@ unfoldHead env e =
         _ => Nothing
 
 ------------------------------------------------------------------------
+-- Iota Reduction (Recursor Application)
+------------------------------------------------------------------------
+
+||| Get the recursor info for a name
+getRecursorInfo : TCEnv -> Name -> Maybe RecursorInfo
+getRecursorInfo env name =
+  case lookupDecl name env of
+    Just (RecDecl info _) => Just info
+    _ => Nothing
+
+||| Get the constructor info for a name
+getConstructorInfo : TCEnv -> Name -> Maybe (Name, Nat, Nat, Nat)  -- (inductName, ctorIdx, numParams, numFields)
+getConstructorInfo env name =
+  case lookupDecl name env of
+    Just (CtorDecl _ _ indName ctorIdx numParams numFields _) => Just (indName, ctorIdx, numParams, numFields)
+    _ => Nothing
+
+||| Find the recursor rule for a given constructor
+findRecRule : List RecursorRule -> Name -> Maybe RecursorRule
+findRecRule [] _ = Nothing
+findRecRule (rule :: rules) ctorName =
+  if rule.ctorName == ctorName
+    then Just rule
+    else findRecRule rules ctorName
+
+||| Get the major premise index for a recursor
+||| majorIdx = numParams + numMotives + numMinors + numIndices
+getMajorIdx : RecursorInfo -> Nat
+getMajorIdx info = info.numParams + info.numMotives + info.numMinors + info.numIndices
+
+||| Iterate a whnf step function until fixed point
+iterWhnfStep : (ClosedExpr -> Maybe ClosedExpr) -> ClosedExpr -> Nat -> ClosedExpr
+iterWhnfStep step m 0 = m
+iterWhnfStep step m (S fuel) =
+  case step m of
+    Just m' => iterWhnfStep step m' fuel
+    Nothing => m
+
+||| Get constant name and levels from head of expression
+getConstHead : ClosedExpr -> Maybe (Name, List Level)
+getConstHead (Const n ls) = Just (n, ls)
+getConstHead _ = Nothing
+
+||| Try iota reduction on a recursor application
+||| If the expression is `Rec.rec params motives minors indices (Ctor args)`,
+||| reduce it using the matching recursor rule.
+tryIotaReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryIotaReduction env e whnfStep = do
+  -- Check if head is a recursor
+  let (head, args) = getAppSpine e
+  (recName, recLevels) <- getConstHead head
+  recInfo <- getRecursorInfo env recName
+
+  -- Get the major premise
+  let majorIdx = getMajorIdx recInfo
+  major <- listNth args majorIdx
+
+  -- Try to reduce major to WHNF
+  let major' = iterWhnfStep whnfStep major 100
+
+  -- Check if major is a constructor application
+  let (majorHead, majorArgs) = getAppSpine major'
+  (ctorName, _) <- getConstHead majorHead
+  (_, _, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
+
+  -- Find the matching recursor rule
+  rule <- findRecRule recInfo.rules ctorName
+
+  -- Check we have enough constructor arguments for the fields
+  guard (length majorArgs >= ctorNumParams + ctorNumFields)
+
+  -- Build the result:
+  -- rhs[levels] applied to:
+  --   1. params, motives, minors (first firstIndexIdx of recArgs)
+  --   2. constructor fields (skip params from majorArgs)
+  --   3. remaining args after major
+
+  let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
+  let rhs = instantiateLevelParams (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
+
+  -- Apply: rhs params motives minors
+  let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
+
+  -- Apply constructor fields (skip params from majorArgs)
+  let ctorFields = listDrop ctorNumParams majorArgs
+  let rhsWithFields = mkApp rhsWithParamsMotivesMinors ctorFields
+
+  -- Apply remaining args after major
+  let remainingArgs = listDrop (majorIdx + 1) args
+  pure (mkApp rhsWithFields remainingArgs)
+
+------------------------------------------------------------------------
 -- WHNF (Weak Head Normal Form)
 ------------------------------------------------------------------------
 
@@ -153,6 +276,7 @@ unfoldHead env e =
 ||| - Beta reduction: (λx.body) arg → body[0 := arg]
 ||| - Let substitution: let x = v in body → body[0 := v]
 ||| - Delta reduction: unfold constant definitions
+||| - Iota reduction: reduce recursor applications when major premise is a constructor
 |||
 ||| We use a fuel parameter to ensure termination.
 export
@@ -161,10 +285,24 @@ whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
 whnf env e = whnfFuel 1000 e
   where
     ||| Single step of whnf (beta/let reduction)
+    ||| For nested applications like (((λ...) a) b), we reduce the innermost
+    ||| beta-redex first.
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0 body arg)
+    whnfStepCore (App f arg) =
+      -- If f is reducible, reduce it and reconstruct
+      case whnfStepCore f of
+        Just f' => Just (App f' arg)
+        Nothing => Nothing
     whnfStepCore (Let _ _ val body) = Just (subst0 body val)
     whnfStepCore _ = Nothing
+
+    ||| Combined step including delta
+    whnfStepWithDelta : ClosedExpr -> Maybe ClosedExpr
+    whnfStepWithDelta e =
+      case whnfStepCore e of
+        Just e' => Just e'
+        Nothing => unfoldHead env e
 
     whnfFuel : Nat -> ClosedExpr -> TC ClosedExpr
     whnfFuel 0 e = Right e  -- out of fuel, return as-is
@@ -173,10 +311,14 @@ whnf env e = whnfFuel 1000 e
       case whnfStepCore e of
         Just e' => whnfFuel k e'
         Nothing =>
-          -- Then try delta reduction
-          case unfoldHead env e of
+          -- Then try iota reduction (recursors)
+          case tryIotaReduction env e whnfStepWithDelta of
             Just e' => whnfFuel k e'
-            Nothing => Right e
+            Nothing =>
+              -- Then try delta reduction
+              case unfoldHead env e of
+                Just e' => whnfFuel k e'
+                Nothing => Right e
 
 ||| WHNF without delta reduction (for internal use)
 ||| Used when we want to reduce but not unfold definitions

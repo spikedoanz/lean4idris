@@ -2,12 +2,10 @@
 |||
 ||| Core operations:
 ||| - inferType: compute the type of an expression
-||| - whnf: reduce to weak head normal form
+||| - whnf: reduce to weak head normal form (beta, let, delta)
 ||| - isDefEq: check definitional equality
 |||
 ||| For now, we only handle closed expressions (no local context).
-||| Delta reduction (constant unfolding) requires environment lookup,
-||| which will be added in Milestone 3.
 module Lean4Idris.TypeChecker
 
 import Lean4Idris.Name
@@ -97,44 +95,113 @@ runTC : TC a -> Either TCError a
 runTC = id
 
 ------------------------------------------------------------------------
+-- Delta Reduction (Constant Unfolding)
+------------------------------------------------------------------------
+
+||| Get the value of a definition if it can be unfolded
+||| Returns Nothing for axioms, opaque definitions, etc.
+getDeclValue : Declaration -> Maybe ClosedExpr
+getDeclValue (DefDecl _ _ value hint _ _) =
+  case hint of
+    Opaq => Nothing  -- Opaque definitions don't unfold
+    _    => Just value
+getDeclValue (ThmDecl _ _ value _) = Just value  -- Theorems can unfold (for proof irrelevance later)
+getDeclValue _ = Nothing  -- Axioms, inductives, etc. don't have values to unfold
+
+||| Try to unfold a constant reference
+||| Returns the unfolded value with universe levels instantiated
+unfoldConst : TCEnv -> Name -> List Level -> Maybe ClosedExpr
+unfoldConst env name levels = do
+  decl <- lookupDecl name env
+  value <- getDeclValue decl
+  let params = declLevelParams decl
+  -- Check level count matches
+  guard (length params == length levels)
+  pure (instantiateLevelParams params levels value)
+
+||| Get the head constant of an application spine
+||| e.g., for `f a b c` returns `Just (f, [a, b, c])`
+getAppConst : ClosedExpr -> Maybe (Name, List Level, List ClosedExpr)
+getAppConst e = go e []
+  where
+    go : ClosedExpr -> List ClosedExpr -> Maybe (Name, List Level, List ClosedExpr)
+    go (App f x) args = go f (x :: args)
+    go (Const name levels) args = Just (name, levels, args)
+    go _ _ = Nothing
+
+||| Try to unfold the head of an expression (delta reduction)
+unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
+unfoldHead env e =
+  case getAppConst e of
+    Just (name, levels, args) =>
+      case unfoldConst env name levels of
+        Just value => Just (mkApp value args)
+        Nothing => Nothing
+    Nothing =>
+      -- Not an application of a constant, try direct constant
+      case e of
+        Const name levels => unfoldConst env name levels
+        _ => Nothing
+
+------------------------------------------------------------------------
 -- WHNF (Weak Head Normal Form)
 ------------------------------------------------------------------------
 
 ||| Reduce expression to weak head normal form.
 |||
-||| This performs beta reduction and let substitution, but not:
-||| - Delta reduction (constant unfolding) - requires environment
-||| - Iota reduction (recursor reduction) - requires inductives
+||| This performs:
+||| - Beta reduction: (λx.body) arg → body[0 := arg]
+||| - Let substitution: let x = v in body → body[0 := v]
+||| - Delta reduction: unfold constant definitions
 |||
 ||| We use a fuel parameter to ensure termination.
 export
 covering
-whnf : ClosedExpr -> TC ClosedExpr
-whnf e = whnfFuel 1000 e
+whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
+whnf env e = whnfFuel 1000 e
   where
-    ||| Beta reduce: (λx.body) arg → body[0 := arg]
-    betaReduce : ClosedExpr -> ClosedExpr
-    betaReduce (App (Lam _ _ _ body) arg) = subst0 body arg
-    betaReduce e = e
-
-    ||| Single step of whnf
-    whnfStep : ClosedExpr -> Maybe ClosedExpr
-    whnfStep (App (Lam _ _ _ body) arg) = Just (subst0 body arg)
-    whnfStep (Let _ _ val body) = Just (subst0 body val)
-    whnfStep _ = Nothing
+    ||| Single step of whnf (beta/let reduction)
+    whnfStepCore : ClosedExpr -> Maybe ClosedExpr
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0 body arg)
+    whnfStepCore (Let _ _ val body) = Just (subst0 body val)
+    whnfStepCore _ = Nothing
 
     whnfFuel : Nat -> ClosedExpr -> TC ClosedExpr
     whnfFuel 0 e = Right e  -- out of fuel, return as-is
-    whnfFuel (S k) e = case whnfStep e of
+    whnfFuel (S k) e =
+      -- First try beta/let reduction
+      case whnfStepCore e of
+        Just e' => whnfFuel k e'
+        Nothing =>
+          -- Then try delta reduction
+          case unfoldHead env e of
+            Just e' => whnfFuel k e'
+            Nothing => Right e
+
+||| WHNF without delta reduction (for internal use)
+||| Used when we want to reduce but not unfold definitions
+export
+covering
+whnfCore : ClosedExpr -> TC ClosedExpr
+whnfCore e = whnfCoreFuel 1000 e
+  where
+    whnfStepCore : ClosedExpr -> Maybe ClosedExpr
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0 body arg)
+    whnfStepCore (Let _ _ val body) = Just (subst0 body val)
+    whnfStepCore _ = Nothing
+
+    whnfCoreFuel : Nat -> ClosedExpr -> TC ClosedExpr
+    whnfCoreFuel 0 e = Right e
+    whnfCoreFuel (S k) e = case whnfStepCore e of
       Nothing => Right e
-      Just e' => whnfFuel k e'
+      Just e' => whnfCoreFuel k e'
 
 ||| Check if expression is a Sort
 export
 covering
-ensureSort : ClosedExpr -> TC Level
-ensureSort e = do
-  e' <- whnf e
+ensureSort : TCEnv -> ClosedExpr -> TC Level
+ensureSort env e = do
+  e' <- whnf env e
   case e' of
     Sort l => Right l
     _      => Left (TypeExpected e)
@@ -142,9 +209,9 @@ ensureSort e = do
 ||| Check if expression is a Pi type
 export
 covering
-ensurePi : ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
-ensurePi e = do
-  e' <- whnf e
+ensurePi : TCEnv -> ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
+ensurePi env e = do
+  e' <- whnf env e
   case e' of
     Pi name bi dom cod => Right (name, bi, dom, cod)
     _                  => Left (FunctionExpected e)
@@ -179,7 +246,7 @@ inferType env (Const name levels) =
 -- App: infer function type, check it's Pi, instantiate with arg
 inferType env (App f arg) = do
   fTy <- inferType env f
-  (_, _, dom, cod) <- ensurePi fTy
+  (_, _, dom, cod) <- ensurePi env fTy
   -- In a full checker we'd verify: argTy <- inferType env arg; isDefEq dom argTy
   Right (subst0 cod arg)
 
@@ -187,7 +254,7 @@ inferType env (App f arg) = do
 -- We need the type annotation on the lambda to be able to infer its type
 inferType env (Lam name bi ty body) = do
   -- Check that ty is a type
-  _ <- inferType env ty >>= ensureSort
+  _ <- inferType env ty >>= ensureSort env
   -- For the body, we need to add a local variable - but we're working with closed exprs
   -- In Milestone 2 we handle only closed terms so we return an error for now if body needs context
   -- Actually, for lambdas we can still type them: the body has access to var 0
@@ -196,7 +263,7 @@ inferType env (Lam name bi ty body) = do
 
 -- Pi: infer universe
 inferType env (Pi name bi dom cod) = do
-  domLevel <- inferType env dom >>= ensureSort
+  domLevel <- inferType env dom >>= ensureSort env
   -- For cod, we need to infer with extended context
   -- For now, simplify: if cod doesn't use var 0, we can type it directly
   -- Full implementation requires local context
@@ -209,7 +276,7 @@ inferType env (Pi name bi dom cod) = do
 
 -- Let: infer body type with substituted value
 inferType env (Let name ty val body) = do
-  _ <- inferType env ty >>= ensureSort
+  _ <- inferType env ty >>= ensureSort env
   -- In full checker: valTy <- inferType env val; check isDefEq valTy ty
   Right (subst0 body val) >>= inferType env
 
@@ -248,36 +315,36 @@ levelListEq _ _ = False
 ||| Helper for comparing bodies (Expr 1)
 ||| We compare them by substituting a fresh variable placeholder
 covering
-isDefEqBody : (ClosedExpr -> ClosedExpr -> TC Bool) -> Expr 1 -> Expr 1 -> TC Bool
-isDefEqBody recur b1 b2 =
+isDefEqBody : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBody recur env b1 b2 =
   -- Create a placeholder for var 0 - use a fresh constant
   let placeholder = Const (Str "_x" Anonymous) []
       e1 = subst0 b1 placeholder
       e2 = subst0 b2 placeholder
-  in recur e1 e2
+  in recur env e1 e2
 
 ||| Check definitional equality of two expressions.
 |||
 ||| Two expressions are definitionally equal if they reduce to
 ||| syntactically equal expressions (up to alpha equivalence).
 |||
-||| For now this handles:
+||| This handles:
 ||| - Syntactic equality
 ||| - Beta reduction
 ||| - Let unfolding
+||| - Delta reduction (constant unfolding)
 |||
 ||| Full implementation would add:
-||| - Delta reduction (constant unfolding)
 ||| - Eta expansion
 ||| - Proof irrelevance
 ||| - Nat/String literal reduction
 export
 covering
-isDefEq : ClosedExpr -> ClosedExpr -> TC Bool
-isDefEq e1 e2 = do
-  -- First reduce both to whnf
-  e1' <- whnf e1
-  e2' <- whnf e2
+isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
+isDefEq env e1 e2 = do
+  -- First reduce both to whnf (includes delta reduction)
+  e1' <- whnf env e1
+  e2' <- whnf env e2
   -- Then check structural equality
   isDefEqWhnf e1' e2'
   where
@@ -294,37 +361,37 @@ isDefEq e1 e2 = do
 
     -- App: check function and arg
     isDefEqWhnf (App f1 a1) (App f2 a2) = do
-      eqF <- isDefEq f1 f2
+      eqF <- isDefEq env f1 f2
       if eqF
-        then isDefEq a1 a2
+        then isDefEq env a1 a2
         else Right False
 
     -- Lam: check binder type and body (ignoring binder name and info)
     isDefEqWhnf (Lam _ _ ty1 body1) (Lam _ _ ty2 body2) = do
-      eqTy <- isDefEq ty1 ty2
+      eqTy <- isDefEq env ty1 ty2
       if eqTy
-        then isDefEqBody isDefEq body1 body2
+        then isDefEqBody isDefEq env body1 body2
         else Right False
 
     -- Pi: check domain and codomain
     isDefEqWhnf (Pi _ _ dom1 cod1) (Pi _ _ dom2 cod2) = do
-      eqDom <- isDefEq dom1 dom2
+      eqDom <- isDefEq env dom1 dom2
       if eqDom
-        then isDefEqBody isDefEq cod1 cod2
+        then isDefEqBody isDefEq env cod1 cod2
         else Right False
 
     -- Let: should have been reduced in whnf
     isDefEqWhnf (Let _ ty1 v1 b1) (Let _ ty2 v2 b2) = do
-      eqTy <- isDefEq ty1 ty2
-      eqV <- isDefEq v1 v2
+      eqTy <- isDefEq env ty1 ty2
+      eqV <- isDefEq env v1 v2
       if eqTy && eqV
-        then isDefEqBody isDefEq b1 b2
+        then isDefEqBody isDefEq env b1 b2
         else Right False
 
     -- Proj: same struct name, index, and argument
     isDefEqWhnf (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
       if sn1 == sn2 && i1 == i2
-        then isDefEq s1 s2
+        then isDefEq env s1 s2
         else Right False
 
     -- Literals
@@ -350,4 +417,4 @@ covering
 hasType : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
 hasType env e expectedTy = do
   actualTy <- inferType env e
-  isDefEq actualTy expectedTy
+  isDefEq env actualTy expectedTy

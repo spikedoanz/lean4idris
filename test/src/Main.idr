@@ -7,6 +7,7 @@ import Lean4Idris.Export.Lexer
 import Lean4Idris.Pretty
 import Lean4Idris.Subst
 import Lean4Idris.TypeChecker
+import Lean4Idris.Decl
 import Data.Fin
 
 ||| Test lexer on simple input
@@ -58,14 +59,15 @@ testExpr = do
   let succZero : ClosedExpr = App (Const succName []) (Const zeroName [])
   putStrLn $ "Nat.succ Nat.zero: " ++ ppClosedExpr succZero
 
-||| Test WHNF reduction
+||| Test WHNF reduction (beta and let)
 testWhnf : IO ()
 testWhnf = do
   putStrLn "\n=== Testing WHNF ==="
+  let env = emptyEnv
 
   -- Test 1: Sort is already in WHNF
   let sort1 : ClosedExpr = Sort (Succ Zero)
-  putStrLn $ "Sort 1 reduces to: " ++ show (whnf sort1)
+  putStrLn $ "Sort 1 reduces to: " ++ show (whnf env sort1)
 
   -- Test 2: Beta reduction - (λx:T. x) v → v
   -- Build: (\x : Nat. x) Nat.zero
@@ -78,7 +80,7 @@ testWhnf = do
   let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
   let app : ClosedExpr = App idLam zero
   putStrLn $ "Before: " ++ ppClosedExpr app
-  case whnf app of
+  case whnf env app of
     Left err => putStrLn $ "Error: " ++ show err
     Right result => putStrLn $ "After:  " ++ ppClosedExpr result
 
@@ -86,7 +88,7 @@ testWhnf = do
   -- let x = zero in x → zero
   let letExpr : ClosedExpr = Let (Str "x" Anonymous) nat zero (BVar FZ)
   putStrLn $ "\nBefore: let x = zero in x"
-  case whnf letExpr of
+  case whnf env letExpr of
     Left err => putStrLn $ "Error: " ++ show err
     Right result => putStrLn $ "After:  " ++ ppClosedExpr result
 
@@ -112,19 +114,20 @@ testInferType = do
 testIsDefEq : IO ()
 testIsDefEq = do
   putStrLn "\n=== Testing Definitional Equality ==="
+  let env = emptyEnv
 
   -- Test 1: Syntactically equal expressions
   let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
-  putStrLn $ "Nat == Nat: " ++ show (isDefEq nat nat)
+  putStrLn $ "Nat == Nat: " ++ show (isDefEq env nat nat)
 
   -- Test 2: Same Sort
   let sort1 : ClosedExpr = Sort (Succ Zero)
   let sort1' : ClosedExpr = Sort (Succ Zero)
-  putStrLn $ "Sort 1 == Sort 1: " ++ show (isDefEq sort1 sort1')
+  putStrLn $ "Sort 1 == Sort 1: " ++ show (isDefEq env sort1 sort1')
 
   -- Test 3: Different Sorts
   let sort0 : ClosedExpr = Sort Zero
-  putStrLn $ "Sort 0 == Sort 1: " ++ show (isDefEq sort0 sort1)
+  putStrLn $ "Sort 0 == Sort 1: " ++ show (isDefEq env sort0 sort1)
 
   -- Test 4: Beta-equivalent expressions
   -- (λx. x) y == y
@@ -132,7 +135,53 @@ testIsDefEq = do
   let idBody : Expr 1 = BVar FZ
   let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
   let appIdY : ClosedExpr = App idLam y
-  putStrLn $ "(λx. x) y == y: " ++ show (isDefEq appIdY y)
+  putStrLn $ "(λx. x) y == y: " ++ show (isDefEq env appIdY y)
+
+||| Test delta reduction (constant unfolding)
+testDelta : IO ()
+testDelta = do
+  putStrLn "\n=== Testing Delta Reduction ==="
+
+  -- Create an environment with a definition:
+  -- def myId : Nat -> Nat := λx. x
+  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
+  let natInBody : Expr 1 = Const (Str "Nat" Anonymous) []  -- Nat lifted to scope depth 1
+  let idBody : Expr 1 = BVar FZ  -- λx. x (body returns the bound var)
+  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+  let idType : ClosedExpr = Pi (Str "x" Anonymous) Default nat natInBody  -- Nat -> Nat
+
+  let myIdName = Str "myId" Anonymous
+  let myIdDecl = DefDecl myIdName idType idLam Abbrev Safe []
+
+  let env = addDecl myIdDecl emptyEnv
+
+  -- Test 1: myId should unfold to λx. x
+  let myIdRef : ClosedExpr = Const myIdName []
+  putStrLn $ "myId: " ++ ppClosedExpr myIdRef
+  case whnf env myIdRef of
+    Left err => putStrLn $ "Error: " ++ show err
+    Right result => putStrLn $ "whnf(myId): " ++ ppClosedExpr result
+
+  -- Test 2: myId zero should reduce to zero
+  let zeroName = Str "zero" (Str "Nat" Anonymous)
+  let zero : ClosedExpr = Const zeroName []
+  let myIdZero : ClosedExpr = App myIdRef zero
+  putStrLn $ "\nmyId zero: " ++ ppClosedExpr myIdZero
+  case whnf env myIdZero of
+    Left err => putStrLn $ "Error: " ++ show err
+    Right result => putStrLn $ "whnf(myId zero): " ++ ppClosedExpr result
+
+  -- Test 3: myId zero == zero via delta + beta
+  putStrLn $ "\nmyId zero == zero: " ++ show (isDefEq env myIdZero zero)
+
+  -- Test 4: Opaque definitions don't unfold
+  let opaqueIdDecl = DefDecl (Str "opaqueId" Anonymous) idType idLam Opaq Safe []
+  let envWithOpaque = addDecl opaqueIdDecl env
+  let opaqueIdRef : ClosedExpr = Const (Str "opaqueId" Anonymous) []
+  putStrLn $ "\nopaqueId (opaque): " ++ ppClosedExpr opaqueIdRef
+  case whnf envWithOpaque opaqueIdRef of
+    Left err => putStrLn $ "Error: " ++ show err
+    Right result => putStrLn $ "whnf(opaqueId): " ++ ppClosedExpr result ++ " (unchanged)"
 
 main : IO ()
 main = do
@@ -145,5 +194,6 @@ main = do
   testWhnf
   testInferType
   testIsDefEq
+  testDelta
 
   putStrLn "\n\nAll tests completed!"

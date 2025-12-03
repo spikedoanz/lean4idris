@@ -5,6 +5,9 @@ import Lean4Idris.Export.Token
 import Lean4Idris.Export.Parser
 import Lean4Idris.Export.Lexer
 import Lean4Idris.Pretty
+import Lean4Idris.Subst
+import Lean4Idris.TypeChecker
+import Data.Fin
 
 ||| Test lexer on simple input
 testLexer : IO ()
@@ -55,6 +58,82 @@ testExpr = do
   let succZero : ClosedExpr = App (Const succName []) (Const zeroName [])
   putStrLn $ "Nat.succ Nat.zero: " ++ ppClosedExpr succZero
 
+||| Test WHNF reduction
+testWhnf : IO ()
+testWhnf = do
+  putStrLn "\n=== Testing WHNF ==="
+
+  -- Test 1: Sort is already in WHNF
+  let sort1 : ClosedExpr = Sort (Succ Zero)
+  putStrLn $ "Sort 1 reduces to: " ++ show (whnf sort1)
+
+  -- Test 2: Beta reduction - (λx:T. x) v → v
+  -- Build: (\x : Nat. x) Nat.zero
+  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
+  let zeroName = Str "zero" (Str "Nat" Anonymous)
+  let zero : ClosedExpr = Const zeroName []
+  -- Identity lambda: λ(x : Nat). x
+  -- Body is BVar FZ which refers to x (index 0)
+  let idBody : Expr 1 = BVar FZ
+  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+  let app : ClosedExpr = App idLam zero
+  putStrLn $ "Before: " ++ ppClosedExpr app
+  case whnf app of
+    Left err => putStrLn $ "Error: " ++ show err
+    Right result => putStrLn $ "After:  " ++ ppClosedExpr result
+
+  -- Test 3: Let substitution
+  -- let x = zero in x → zero
+  let letExpr : ClosedExpr = Let (Str "x" Anonymous) nat zero (BVar FZ)
+  putStrLn $ "\nBefore: let x = zero in x"
+  case whnf letExpr of
+    Left err => putStrLn $ "Error: " ++ show err
+    Right result => putStrLn $ "After:  " ++ ppClosedExpr result
+
+||| Test type inference
+testInferType : IO ()
+testInferType = do
+  putStrLn "\n=== Testing Type Inference ==="
+  let env = emptyEnv
+
+  -- Test 1: Type of Sort 0 is Sort 1
+  let sort0 : ClosedExpr = Sort Zero
+  putStrLn $ "Type of Sort 0: " ++ show (inferType env sort0)
+
+  -- Test 2: Type of Sort u is Sort (u+1)
+  let sort1 : ClosedExpr = Sort (Succ Zero)
+  putStrLn $ "Type of Sort 1: " ++ show (inferType env sort1)
+
+  -- Test 3: Type of a nat literal is Nat
+  let natLit : ClosedExpr = NatLit 42
+  putStrLn $ "Type of 42: " ++ show (inferType env natLit)
+
+||| Test definitional equality
+testIsDefEq : IO ()
+testIsDefEq = do
+  putStrLn "\n=== Testing Definitional Equality ==="
+
+  -- Test 1: Syntactically equal expressions
+  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
+  putStrLn $ "Nat == Nat: " ++ show (isDefEq nat nat)
+
+  -- Test 2: Same Sort
+  let sort1 : ClosedExpr = Sort (Succ Zero)
+  let sort1' : ClosedExpr = Sort (Succ Zero)
+  putStrLn $ "Sort 1 == Sort 1: " ++ show (isDefEq sort1 sort1')
+
+  -- Test 3: Different Sorts
+  let sort0 : ClosedExpr = Sort Zero
+  putStrLn $ "Sort 0 == Sort 1: " ++ show (isDefEq sort0 sort1)
+
+  -- Test 4: Beta-equivalent expressions
+  -- (λx. x) y == y
+  let y : ClosedExpr = Const (Str "y" Anonymous) []
+  let idBody : Expr 1 = BVar FZ
+  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+  let appIdY : ClosedExpr = App idLam y
+  putStrLn $ "(λx. x) y == y: " ++ show (isDefEq appIdY y)
+
 main : IO ()
 main = do
   putStrLn "Lean4Idris Test Suite"
@@ -63,5 +142,8 @@ main = do
   testLexer
   testParser
   testExpr
+  testWhnf
+  testInferType
+  testIsDefEq
 
   putStrLn "\n\nAll tests completed!"

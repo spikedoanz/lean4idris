@@ -4,13 +4,14 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Status
 
-**Milestone 1 complete**: Parser and AST for lean4export format.
+**Milestone 2 complete**: Core type checking for closed terms.
 
 - [x] Parser for names, levels, expressions
 - [x] Well-scoped expressions (indexed by depth)
-- [ ] Type inference (`inferType`)
-- [ ] Reduction (`whnf`)
-- [ ] Definitional equality (`isDefEq`)
+- [x] Type inference (`inferType`) for closed terms
+- [x] Reduction (`whnf`) - beta reduction & let unfolding
+- [x] Definitional equality (`isDefEq`) - structural + beta
+- [ ] Delta reduction (constant unfolding)
 - [ ] Inductive types & recursors
 
 ## Build
@@ -47,6 +48,8 @@ src/Lean4Idris/
   Level.idr         -- Universe levels
   Expr.idr          -- Well-scoped expressions (Expr n indexed by scope depth)
   Decl.idr          -- Declarations
+  Subst.idr         -- Substitution operations
+  TypeChecker.idr   -- Core type checking (inferType, whnf, isDefEq)
   Pretty.idr        -- Pretty printing
   Export/
     Token.idr       -- Export format tokens

@@ -4,15 +4,15 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Status
 
-**Milestone 2.5 complete**: Delta reduction for definitions.
+**Milestone 3 complete**: Full definitional equality.
 
 - [x] Parser for names, levels, expressions
 - [x] Well-scoped expressions (indexed by depth)
 - [x] Type inference (`inferType`) for closed terms
 - [x] Reduction (`whnf`) - beta, let, and delta reduction
-- [x] Definitional equality (`isDefEq`) - structural + beta + delta
+- [x] Definitional equality (`isDefEq`) - structural + beta + delta + eta
 - [x] Delta reduction with reducibility hints (abbrev unfolds, opaque doesn't)
-- [ ] Eta expansion
+- [x] Eta expansion (λx. f x = f)
 - [ ] Inductive types & recursors
 
 ## Build

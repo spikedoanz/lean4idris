@@ -183,6 +183,45 @@ testDelta = do
     Left err => putStrLn $ "Error: " ++ show err
     Right result => putStrLn $ "whnf(opaqueId): " ++ ppClosedExpr result ++ " (unchanged)"
 
+||| Test eta expansion
+testEta : IO ()
+testEta = do
+  putStrLn "\n=== Testing Eta Expansion ==="
+
+  -- We need an environment with myId defined so we can get its type
+  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
+  let natInBody : Expr 1 = Const (Str "Nat" Anonymous) []
+  let idBody : Expr 1 = BVar FZ
+  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+  let idType : ClosedExpr = Pi (Str "x" Anonymous) Default nat natInBody
+
+  let myIdName = Str "myId" Anonymous
+  let myIdDecl = DefDecl myIdName idType idLam Abbrev Safe []
+  let env = addDecl myIdDecl emptyEnv
+
+  -- Test 1: λx. myId x == myId  (eta equivalence)
+  -- myId has type Nat -> Nat, and λx. myId x should be eta-equivalent to myId
+  let myIdRef : ClosedExpr = Const myIdName []
+  -- Build: λx. myId x
+  let etaExpanded : ClosedExpr = Lam (Str "x" Anonymous) Default nat (App (weaken1 myIdRef) (BVar FZ))
+
+  putStrLn $ "λx. myId x: " ++ ppClosedExpr etaExpanded
+  putStrLn $ "myId:       " ++ ppClosedExpr myIdRef
+  putStrLn $ "λx. myId x == myId: " ++ show (isDefEq env etaExpanded myIdRef)
+
+  -- Test 2: The other direction should also work
+  putStrLn $ "myId == λx. myId x: " ++ show (isDefEq env myIdRef etaExpanded)
+
+  -- Test 3: λx. f x == f for an axiom f : Nat -> Nat
+  let fName = Str "f" Anonymous
+  let fDecl = AxiomDecl fName idType []  -- f : Nat -> Nat (axiom, no value)
+  let envWithF = addDecl fDecl emptyEnv
+
+  let fRef : ClosedExpr = Const fName []
+  let fEtaExpanded : ClosedExpr = Lam (Str "x" Anonymous) Default nat (App (weaken1 fRef) (BVar FZ))
+
+  putStrLn $ "\nλx. f x == f (axiom): " ++ show (isDefEq envWithF fEtaExpanded fRef)
+
 main : IO ()
 main = do
   putStrLn "Lean4Idris Test Suite"
@@ -195,5 +234,6 @@ main = do
   testInferType
   testIsDefEq
   testDelta
+  testEta
 
   putStrLn "\n\nAll tests completed!"

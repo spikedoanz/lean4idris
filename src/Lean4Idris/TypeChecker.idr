@@ -323,6 +323,49 @@ isDefEqBody recur env b1 b2 =
       e2 = subst0 b2 placeholder
   in recur env e1 e2
 
+||| Try eta expansion: if t is λx.body and s is not a lambda,
+||| eta-expand s to λx:A. s x where A is the domain of s's type.
+||| Returns Just True/False if eta applies, Nothing if it doesn't.
+||| Takes the isDefEq function as parameter to break mutual recursion.
+covering
+tryEtaExpansionCore : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                      TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryEtaExpansionCore recurEq env t s =
+  case t of
+    Lam name bi ty body =>
+      case s of
+        Lam _ _ _ _ => Right Nothing  -- Both are lambdas, eta doesn't apply
+        _ => do
+          -- s is not a lambda, try to eta-expand it
+          -- We need the type of s to be a Pi type
+          sTy <- inferType env s
+          sTy' <- whnf env sTy
+          case sTy' of
+            Pi piName piBi dom cod =>
+              -- Eta-expand s to: λ(piName : dom). s x
+              -- where x is BVar FZ (the bound variable)
+              -- The body is: App (weaken1 s) (BVar FZ)
+              let sExpanded : ClosedExpr = Lam piName piBi dom (App (weaken1 s) (BVar FZ))
+              in do
+                -- Now compare t with the expanded s
+                result <- recurEq env t sExpanded
+                Right (Just result)
+            _ => Right Nothing  -- s's type is not a Pi, can't eta-expand
+    _ => Right Nothing  -- t is not a lambda
+
+||| Try eta expansion in both directions
+covering
+tryEtaExpansion : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                  TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryEtaExpansion recurEq env t s = do
+  -- Try t as lambda, s as non-lambda
+  result1 <- tryEtaExpansionCore recurEq env t s
+  case result1 of
+    Just b => Right (Just b)
+    Nothing => do
+      -- Try s as lambda, t as non-lambda
+      tryEtaExpansionCore recurEq env s t
+
 ||| Check definitional equality of two expressions.
 |||
 ||| Two expressions are definitionally equal if they reduce to
@@ -333,9 +376,9 @@ isDefEqBody recur env b1 b2 =
 ||| - Beta reduction
 ||| - Let unfolding
 ||| - Delta reduction (constant unfolding)
+||| - Eta expansion (λx. f x = f when x not free in f)
 |||
 ||| Full implementation would add:
-||| - Eta expansion
 ||| - Proof irrelevance
 ||| - Nat/String literal reduction
 export
@@ -398,8 +441,12 @@ isDefEq env e1 e2 = do
     isDefEqWhnf (NatLit n1) (NatLit n2) = Right (n1 == n2)
     isDefEqWhnf (StringLit s1) (StringLit s2) = Right (s1 == s2)
 
-    -- Different constructors
-    isDefEqWhnf _ _ = Right False
+    -- Try eta expansion for mismatched cases
+    isDefEqWhnf t s = do
+      etaResult <- tryEtaExpansion isDefEq env t s
+      case etaResult of
+        Just b => Right b
+        Nothing => Right False  -- No eta, different constructors
 
 ------------------------------------------------------------------------
 -- Convenience functions

@@ -13,10 +13,18 @@ authors = "spike"
 -- langversion
 
 -- packages to add to search path
--- depends =
+depends = contrib
 
 -- modules to install
-modules = Lean4idris
+modules = Lean4Idris
+        , Lean4Idris.Name
+        , Lean4Idris.Level
+        , Lean4Idris.Expr
+        , Lean4Idris.Decl
+        , Lean4Idris.Export.Token
+        , Lean4Idris.Export.Lexer
+        , Lean4Idris.Export.Parser
+        , Lean4Idris.Pretty
 
 -- main file (i.e. file to load at REPL)
 -- main =

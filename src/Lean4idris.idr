@@ -1,4 +1,7 @@
-module Lean4idris
+||| Lean4Idris: A type checker for Lean 4 export files, written in Idris 2
+module Lean4Idris
 
-test : String
-test = "Hello from Idris2!"
+import public Lean4Idris.Name
+import public Lean4Idris.Level
+import public Lean4Idris.Expr
+import public Lean4Idris.Decl

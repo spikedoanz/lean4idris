@@ -1,0 +1,8 @@
+0.0.0
+1 #NS 0 Nat
+2 #NS 0 zero
+3 #NS 1 succ
+1 #US 0
+1 #ES 1
+2 #EC 1
+3 #EC 2

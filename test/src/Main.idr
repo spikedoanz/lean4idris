@@ -9,6 +9,7 @@ import Lean4Idris.Subst
 import Lean4Idris.TypeChecker
 import Lean4Idris.Decl
 import Data.Fin
+import System.File
 
 ||| Test lexer on simple input
 testLexer : IO ()
@@ -369,6 +370,37 @@ testIota = do
       putStrLn $ "  after:  " ++ ppClosedExpr result
       putStrLn $ "  correct: " ++ show (result == Sort (Succ Zero))
 
+||| Test parsing a real Lean export file
+testRealExport : IO ()
+testRealExport = do
+  putStrLn "\n=== Testing Real Export File ==="
+
+  -- Read the Nat.gcd_self.export file
+  Right content <- readFile "lean4export/examples/Nat.gcd_self.export"
+    | Left err => putStrLn $ "Error reading file: " ++ show err
+
+  putStrLn $ "Read " ++ show (length content) ++ " bytes"
+
+  case parseExport content of
+    Left err => putStrLn $ "Parse error: " ++ err
+    Right st => do
+      putStrLn "Parsed successfully!"
+      putStrLn $ "Names: " ++ show (length (getNames st))
+      putStrLn $ "Levels: " ++ show (length (getLevels st))
+      putStrLn $ "Expressions: " ++ show (length (getExprs st))
+      putStrLn $ "Declarations: " ++ show (length (getDecls st))
+
+      -- Show first few declarations
+      putStrLn "\nFirst declarations:"
+      showDecls (getDecls st) 10
+  where
+    showDecls : List Declaration -> Nat -> IO ()
+    showDecls [] _ = pure ()
+    showDecls _ Z = pure ()
+    showDecls (d :: ds) (S n) = do
+      putStrLn $ "  " ++ show d
+      showDecls ds n
+
 main : IO ()
 main = do
   putStrLn "Lean4Idris Test Suite"
@@ -383,5 +415,6 @@ main = do
   testDelta
   testEta
   testIota
+  testRealExport
 
   putStrLn "\n\nAll tests completed!"

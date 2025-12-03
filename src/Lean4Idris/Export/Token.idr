@@ -55,6 +55,9 @@ data Command : Type where
   PARTIAL : Command  -- partial marker
   SAFE : Command     -- safe marker
 
+  -- Recursor rules
+  RR : Command    -- #RR: recursor rule
+
   -- Mutual definitions
   MUT : Command   -- #MUT: mutual block
 
@@ -88,6 +91,7 @@ Eq Command where
   IND == IND = True
   CTOR == CTOR = True
   REC == REC = True
+  RR == RR = True
   ABBREV == ABBREV = True
   OPAQUE == OPAQUE = True
   REGULAR == REGULAR = True
@@ -127,6 +131,7 @@ Show Command where
   show IND = "#IND"
   show CTOR = "#CTOR"
   show REC = "#REC"
+  show RR = "#RR"
   show ABBREV = "#ABBREV"
   show OPAQUE = "#OPAQUE"
   show REGULAR = "#REGULAR"
@@ -197,6 +202,7 @@ parseCommand "#QUOT" = Just QUOT
 parseCommand "#IND" = Just IND
 parseCommand "#CTOR" = Just CTOR
 parseCommand "#REC" = Just REC
+parseCommand "#RR" = Just RR
 parseCommand "#ABBREV" = Just ABBREV
 parseCommand "#OPAQUE" = Just OPAQUE
 parseCommand "#REGULAR" = Just REGULAR

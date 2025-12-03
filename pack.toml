@@ -1,0 +1,10 @@
+[custom.all.lean4idris]
+type = "local"
+path = "."
+ipkg = "lean4idris.ipkg"
+test = "test/test.ipkg"
+
+[custom.all.lean4idris-test]
+type = "local"
+path = "test"
+ipkg = "test.ipkg"

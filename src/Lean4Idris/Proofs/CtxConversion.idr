@@ -9,6 +9,7 @@ module Lean4Idris.Proofs.CtxConversion
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.Environment
 import Lean4Idris.Proofs.Reduction
 import Lean4Idris.Proofs.DefEq
 import Lean4Idris.Proofs.Typing
@@ -82,10 +83,10 @@ lookupVarEq (Extend ctx1 ty1) (Extend ctx2 ty2) (CEExtend rest tyEq) (FS i) =
 ||| The implementation requires mutual recursion with a well-typedness lemma,
 ||| which is technically involved in Idris's positivity checker.
 public export
-ctxConversion : {ctx1 : Ctx n} -> {ctx2 : Ctx n}
+ctxConversion : {env : Env} -> {ctx1 : Ctx n} -> {ctx2 : Ctx n}
              -> CtxEq ctx1 ctx2
-             -> HasType ctx1 e ty
-             -> (ty' : Expr n ** (HasType ctx2 e ty', DefEq ty ty'))
+             -> HasType env ctx1 e ty
+             -> (ty' : Expr n ** (HasType env ctx2 e ty', DefEq ty ty'))
 -- TVar case: type changes but is DefEq
 ctxConversion {ctx1 = Extend c1 t1} {ctx2 = Extend c2 t2} ctxEq (TVar FZ) =
   let CEExtend restEq tyEq = ctxEq
@@ -114,3 +115,7 @@ ctxConversion ctxEq (TLet l1 l2 ty val body bodyTy tyWf valWf bodyWf bodyTyWf) =
 -- TConv: follow through the conversion
 -- Full proof requires careful handling of the DefEq changes
 ctxConversion ctxEq (TConv l e ty1 ty2 eWf eq tyWf) = ?ctxConversion_TConv_hole
+
+-- TConst: global constants are independent of context
+-- The type is independent of context, so just use the same TConst rule
+ctxConversion ctxEq (TConst name levels ty lookup) = ?ctxConversion_TConst_hole

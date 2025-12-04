@@ -11,6 +11,7 @@ module Lean4Idris.Proofs.Reduction
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.Environment
 
 %default total
 
@@ -96,6 +97,31 @@ data Step : Expr n -> Expr n -> Type where
   SProj : Step struct struct' -> Step (Proj name idx struct) (Proj name idx struct')
 
 ------------------------------------------------------------------------
+-- Delta Reduction (Environment-Dependent)
+------------------------------------------------------------------------
+
+||| Delta reduction: unfolding global definitions.
+|||
+||| Unlike the structural reduction rules above, delta-reduction depends on
+||| the global environment. A constant c.{levels} reduces to its definition
+||| (with universe parameters instantiated) if one exists.
+|||
+||| This is separate from Step because:
+||| 1. Step is environment-independent for simpler reasoning
+||| 2. Delta reduction is not always desirable (for opacity control)
+||| 3. The subject reduction proof can treat them separately
+public export
+data DeltaStep : Env -> Expr n -> Expr n -> Type where
+  ||| δ-reduction: c.{levels} →δ def[params := levels]
+  |||
+  ||| When a constant has a definition in the environment,
+  ||| it can be unfolded to that definition with levels instantiated.
+  SDelta : (name : Name) -> (levels : List Level)
+        -> (def : Expr 0)  -- The definition from the environment (closed)
+        -> getDefValue name env = Just def
+        -> DeltaStep env (Const name levels) (weakenClosed (instantiateLevels def levels))
+
+------------------------------------------------------------------------
 -- Multi-Step Reduction (Reflexive-Transitive Closure)
 ------------------------------------------------------------------------
 
@@ -132,13 +158,16 @@ NormalForm {n} e = (e' : Expr n) -> Step e e' -> Void
 
 ||| Values: canonical forms that are "done computing"
 ||| (In full dependent types, this is more subtle)
+|||
+||| Note: Constants are values only if they have no definition (axioms/opaque).
+||| A constant with a definition is reducible via SDelta.
 public export
 data Value : Expr n -> Type where
   VSort : Value (Sort l)
   VPi : Value (Pi dom cod)
   VLam : Value (Lam ty body)
   VVar : Value (Var i)  -- Neutral: stuck on a variable
-  VConst : Value (Const n ls)  -- Global constants (axioms/opaque defs)
+  VConst : Value (Const n ls)  -- Global constants (axioms/opaque defs - may need env check)
 
 ------------------------------------------------------------------------
 -- Properties of Reduction

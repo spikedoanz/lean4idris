@@ -69,6 +69,13 @@ weakenN : (k : Nat) -> Expr n -> Expr (k + n)
 weakenN Z e = e
 weakenN (S k) e = weaken (weakenN k e)
 
+||| Weaken a closed expression to any context size
+||| This is used for global constants which have closed types
+public export
+weakenClosed : {n : Nat} -> Expr 0 -> Expr n
+weakenClosed {n = Z} e = e
+weakenClosed {n = S k} e = weaken (weakenClosed e)
+
 ------------------------------------------------------------------------
 -- Substitution
 ------------------------------------------------------------------------

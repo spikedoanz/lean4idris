@@ -11,6 +11,7 @@ module Lean4Idris.Proofs.SubjectReduction
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.Environment
 import Lean4Idris.Proofs.Typing
 import Lean4Idris.Proofs.Reduction
 import Lean4Idris.Proofs.Weakening
@@ -30,10 +31,10 @@ import Lean4Idris.Proofs.CtxConversion
 |||
 ||| Proof by induction on the reduction step.
 public export
-subjectReduction : {n : Nat} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
-                -> HasType ctx e ty
+subjectReduction : {n : Nat} -> {env : Env} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
+                -> HasType env ctx e ty
                 -> Step e e'
-                -> HasType ctx e' ty
+                -> HasType env ctx e' ty
 
 ------------------------------------------------------------------------
 -- β-reduction: (λx.b) a → b[x := a]
@@ -137,13 +138,13 @@ subjectReduction (TApp l dom cod f arg fTyping argTyping codWf) (SAppR {x'=arg'}
       -- Thus DefEq (subst0 cod arg') (subst0 cod arg) by DESym (defEqSubst0Arg ...)
       tyEq : DefEq (subst0 cod arg') (subst0 cod arg)
       tyEq = DESym (defEqSubst0Arg cod (DEStep argStep))
-      appTyping : HasType ctx (App f arg') (subst0 cod arg')
+      appTyping : HasType env ctx (App f arg') (subst0 cod arg')
       appTyping = TApp l dom cod f arg' fTyping argTyping' codWf
       -- Use typeOfType to get the well-typedness of subst0 cod arg
       -- We have codWf : HasType (Extend ctx dom) cod (Sort l)
       -- By substitution lemma with argTyping : HasType ctx arg dom
       -- We get: HasType ctx (subst0 cod arg) (Sort l)
-      tyWf : HasType ctx (subst0 cod arg) (Sort l)
+      tyWf : HasType env ctx (subst0 cod arg) (Sort l)
       tyWf = substitutionLemma codWf argTyping
   in TConv l (App f arg') (subst0 cod arg') (subst0 cod arg) appTyping tyEq tyWf
 
@@ -202,13 +203,13 @@ subjectReduction (TLet l1 l2 ty val body bodyTy tyWf valTyping bodyTyping bodyTy
       -- These are DefEq since val ≡ val'
       tyEq : DefEq (subst0 bodyTy val') (subst0 bodyTy val)
       tyEq = DESym (defEqSubst0Arg bodyTy (DEStep valStep))
-      letTyping : HasType ctx (Let ty val' body) (subst0 bodyTy val')
+      letTyping : HasType env ctx (Let ty val' body) (subst0 bodyTy val')
       letTyping = TLet l1 l2 ty val' body bodyTy tyWf valTyping' bodyTyping bodyTyWf
       -- Well-typedness of the result type
       -- bodyTyWf : HasType (Extend ctx ty) bodyTy (Sort l2)
       -- valTyping : HasType ctx val ty
       -- By substitution lemma: HasType ctx (subst0 bodyTy val) (Sort l2)
-      resultTyWf : HasType ctx (subst0 bodyTy val) (Sort l2)
+      resultTyWf : HasType env ctx (subst0 bodyTy val) (Sort l2)
       resultTyWf = substitutionLemma bodyTyWf valTyping
   in TConv l2 (Let ty val' body) (subst0 bodyTy val') (subst0 bodyTy val) letTyping tyEq resultTyWf
 
@@ -235,10 +236,10 @@ subjectReduction (TConv l e ty1 ty2 eTyping eq tyWf) step =
 ||| Note: The intermediate expression in Trans is not accessible in Idris 2.
 ||| We need a helper function that takes the intermediate expression explicitly.
 public export
-subjectReductionMulti : {n : Nat} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
-                     -> HasType ctx e ty
+subjectReductionMulti : {n : Nat} -> {env : Env} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
+                     -> HasType env ctx e ty
                      -> Steps e e'
-                     -> HasType ctx e' ty
+                     -> HasType env ctx e' ty
 subjectReductionMulti eTyping Refl = eTyping
 subjectReductionMulti {n} {ctx} {e} {ty} eTyping (Trans step rest) =
   -- Idris 2 implicit accessibility issue: the intermediate expression from Trans
@@ -280,3 +281,44 @@ For Lean specifically, definitional equality includes:
 - η-equivalence (function extensionality)
 - Proof irrelevance (all proofs of a Prop are equal)
 -}
+
+------------------------------------------------------------------------
+-- Delta Subject Reduction
+------------------------------------------------------------------------
+
+||| Subject reduction for delta steps (unfolding definitions).
+|||
+||| If Σ; Γ ⊢ c.{levels} : T and c.{levels} →δ def[levels], then Σ; Γ ⊢ def[levels] : T.
+|||
+||| The key insight is that the environment stores both the type and definition,
+||| and well-typed definitions have the declared type.
+|||
+||| Proof:
+||| - From TConst: HasType env ctx (Const name levels) (weakenClosed (instantiateLevels ty levels))
+||| - From SDelta: the definition unfolds to (weakenClosed (instantiateLevels def levels))
+||| - From environment well-formedness: the definition has the same type as declared
+||| - Therefore: HasType env ctx (weakenClosed (instantiateLevels def levels)) (weakenClosed (instantiateLevels ty levels))
+|||
+||| This requires a well-formedness invariant on the environment that ensures
+||| definitions have their declared types. For now, we use a hole.
+public export
+deltaSubjectReduction : {n : Nat} -> {env : Env} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
+                     -> HasType env ctx e ty
+                     -> DeltaStep env e e'
+                     -> HasType env ctx e' ty
+-- Main case: unfolding a constant
+-- TConst gives: HasType env ctx (Const name levels) (weakenClosed (instantiateLevels ty levels))
+-- SDelta gives: e' = weakenClosed (instantiateLevels def levels)
+-- Need: HasType env ctx (weakenClosed (instantiateLevels def levels)) (weakenClosed (instantiateLevels ty levels))
+-- This requires environment well-formedness: the definition has the declared type
+deltaSubjectReduction (TConst name levels ty lookup) (SDelta _ _ def defLookup) =
+  -- The pattern match ensures name and levels match between TConst and SDelta
+  -- We need to prove that the definition has the type from the environment
+  -- This requires WfEnv to ensure: HasType env Empty def ty
+  -- Then by weakening: HasType env ctx (weakenClosed def) (weakenClosed ty)
+  ?deltaSubjectReduction_TConst_hole
+
+-- TConv case: follow through the conversion
+deltaSubjectReduction (TConv l e ty1 ty2 eTyping eq tyWf) deltaStep =
+  let eTyping' = deltaSubjectReduction eTyping deltaStep
+  in TConv l _ ty1 ty2 eTyping' eq tyWf

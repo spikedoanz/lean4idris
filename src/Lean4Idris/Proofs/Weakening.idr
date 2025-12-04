@@ -13,6 +13,7 @@ module Lean4Idris.Proofs.Weakening
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.Environment
 import Lean4Idris.Proofs.DefEq
 import Lean4Idris.Proofs.Typing
 
@@ -81,23 +82,23 @@ liftRenWfHelper {r} {ctx} renWf (FS i) = rewrite renWf i in sym (renameLiftWeake
 ||| Renaming preserves typing, given a witness that variable types are preserved.
 |||
 ||| If for each variable i in ctx, looking up (r i) in ctx' gives the
-||| renamed type, and ctx ⊢ e : ty, then ctx' ⊢ rename r e : rename r ty.
+||| renamed type, and Σ; ctx ⊢ e : ty, then Σ; ctx' ⊢ rename r e : rename r ty.
 |||
 ||| The witness function renWf provides: lookupVar ctx' (r i) = rename r (lookupVar ctx i)
 public export
-renamingPreservesTyping : {n : Nat} -> {m : Nat}
+renamingPreservesTyping : {n : Nat} -> {m : Nat} -> {env : Env}
                        -> {r : Ren n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}
                        -> {e : Expr n} -> {ty : Expr n}
                        -> (renWf : (i : Fin n) -> lookupVar ctx' (r i) = rename r (lookupVar ctx i))
-                       -> HasType ctx e ty
-                       -> HasType ctx' (rename r e) (rename r ty)
+                       -> HasType env ctx e ty
+                       -> HasType env ctx' (rename r e) (rename r ty)
 
 -- Variable case: use the well-formedness witness
-renamingPreservesTyping {r} {ctx} {ctx'} renWf (TVar i) =
-  -- Goal: HasType ctx' (Var (r i)) (rename r (lookupVar ctx i))
-  -- TVar (r i) gives: HasType ctx' (Var (r i)) (lookupVar ctx' (r i))
+renamingPreservesTyping {env} {r} {ctx} {ctx'} renWf (TVar i) =
+  -- Goal: HasType env ctx' (Var (r i)) (rename r (lookupVar ctx i))
+  -- TVar (r i) gives: HasType env ctx' (Var (r i)) (lookupVar ctx' (r i))
   -- By renWf: lookupVar ctx' (r i) = rename r (lookupVar ctx i)
-  let tvarTyping : HasType ctx' (Var (r i)) (lookupVar ctx' (r i))
+  let tvarTyping : HasType env ctx' (Var (r i)) (lookupVar ctx' (r i))
       tvarTyping = TVar (r i)
   in rewrite sym (renWf i) in tvarTyping
 
@@ -147,6 +148,15 @@ renamingPreservesTyping {r} renWf (TConv l e ty1 ty2 eWf eq tyWf) =
       eq' = defEqRename r eq
   in TConv l (rename r e) (rename r ty1) (rename r ty2) eWf' eq' tyWf'
 
+-- Const case: constants are closed, renaming doesn't change them
+-- rename r (Const name levels) = Const name levels
+-- rename r (weakenClosed ty) = weakenClosed ty (closed expressions are unchanged by renaming)
+renamingPreservesTyping renWf (TConst name levels ty lookup) =
+  -- Goal: HasType env ctx' (rename r (Const name levels)) (rename r (weakenClosed (instantiateLevels ty levels)))
+  -- Since Const has no variables: rename r (Const name levels) = Const name levels
+  -- Since instantiateLevels ty levels is closed: rename r (weakenClosed ...) = weakenClosed ...
+  ?renamingPreservesTyping_TConst
+
 ------------------------------------------------------------------------
 -- Shift Renaming Preserves Variable Types
 ------------------------------------------------------------------------
@@ -169,13 +179,13 @@ shiftRenPreservesTypes ctx a i =
 
 ||| The weakening lemma: typing is preserved under context extension.
 |||
-||| If Γ ⊢ e : T, then Γ,x:A ⊢ weaken(e) : weaken(T)
+||| If Σ; Γ ⊢ e : T, then Σ; Γ,x:A ⊢ weaken(e) : weaken(T)
 |||
 ||| This is a special case of renamingPreservesTyping where the
 ||| renaming is the shift (FS).
 public export
-weakening : {n : Nat} -> {ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}
+weakening : {n : Nat} -> {env : Env} -> {ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}
          -> (a : Expr n)
-         -> HasType ctx e ty
-         -> HasType (Extend ctx a) (weaken e) (weaken ty)
+         -> HasType env ctx e ty
+         -> HasType env (Extend ctx a) (weaken e) (weaken ty)
 weakening {n} {ctx} a hasType = renamingPreservesTyping {n} {m = S n} (shiftRenPreservesTypes ctx a) hasType

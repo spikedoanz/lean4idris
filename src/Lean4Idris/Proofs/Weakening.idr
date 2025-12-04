@@ -28,12 +28,43 @@ weakenLookup : (ctx : Ctx n) -> (i : Fin n) -> (a : Expr n)
 weakenLookup ctx i a = Refl
 
 ------------------------------------------------------------------------
+-- Context Exchange
+------------------------------------------------------------------------
+
+||| The exchange renaming: swaps the two most recently bound variables
+||| Maps: 0 -> 1, 1 -> 0, n+2 -> n+2
+public export
+exchangeRen : Ren (S (S n)) (S (S n))
+exchangeRen FZ = FS FZ            -- 0 -> 1
+exchangeRen (FS FZ) = FZ          -- 1 -> 0
+exchangeRen (FS (FS i)) = FS (FS i)  -- n+2 -> n+2
+
+||| Exchange is self-inverse
+public export
+exchangeInvol : (i : Fin (S (S n))) -> exchangeRen (exchangeRen i) = i
+exchangeInvol FZ = Refl
+exchangeInvol (FS FZ) = Refl
+exchangeInvol (FS (FS i)) = Refl
+
+||| rename exchangeRen is involutive on expressions
+public export
+renameExchangeInvol : (e : Expr (S (S n))) -> rename exchangeRen (rename exchangeRen e) = e
+renameExchangeInvol e =
+  rewrite renameComp exchangeRen exchangeRen e in
+  rewrite renameExt (exchangeRen . exchangeRen) idRen exchangeInvol e in
+  renameId e
+
+------------------------------------------------------------------------
 -- Core Weakening Lemma
 ------------------------------------------------------------------------
 
 ||| The weakening lemma: typing is preserved under context extension.
 |||
 ||| If Γ ⊢ e : T, then Γ,x:A ⊢ weaken(e) : weaken(T)
+|||
+||| Note: The Pi/Lam/Let cases require context exchange, which requires
+||| proving that rename exchangeRen preserves typing. This is a non-trivial
+||| metatheoretic result that we leave as holes for now.
 |||
 ||| Proof: by induction on the typing derivation.
 public export
@@ -54,21 +85,22 @@ weakening a (TVar i) = rewrite sym (weakenLookup ctx i a) in TVar (FS i)
 weakening a TSort = TSort
 
 -- Pi case: needs weakening of both domain and codomain derivations
--- Plus a lemma about how weakening interacts with context extension
+-- Given: ctx ⊢ dom : Sort l1, and ctx,dom ⊢ cod : Sort l2
+-- Need: ctx,a ⊢ weaken(dom) : Sort l1, and ctx,a,weaken(dom) ⊢ weaken(cod) : Sort l2
+--
+-- For the codomain, we use:
+-- 1. weakening: ctx,dom,weaken(a) ⊢ weaken(cod) : Sort l2
+-- 2. exchange: rename swap gives ctx,weaken(a),weaken(dom) ⊢ ... : Sort l2
+-- 3. But weaken(a) in ctx,dom has an extra shift, so ctx,a,weaken(dom) after accounting for this
 weakening a (TPi domWf codWf) =
   let domWf' = weakening a domWf
-      -- For codomain, we need to weaken in the extended context
-      -- ctx, dom ⊢ cod : Sort l2
-      -- becomes
-      -- ctx, a, weaken(dom) ⊢ weaken(cod) : Sort l2
-      -- This requires a context swap lemma
-      codWf' = ?weakenPiCod
+      codWf' = ?weakenPiCod  -- requires exchange lemma
   in TPi domWf' codWf'
 
--- Lambda case: similar to Pi
+-- Lambda case: similar to Pi, requires context exchange
 weakening a (TLam tyWf bodyWf) =
   let tyWf' = weakening a tyWf
-      bodyWf' = ?weakenLamBody
+      bodyWf' = ?weakenLamBody  -- requires exchange lemma
   in TLam tyWf' bodyWf'
 
 -- Application case: straightforward recursion
@@ -76,19 +108,51 @@ weakening a (TLam tyWf bodyWf) =
 weakening a (TApp fWf argWf) =
   let fWf' = weakening a fWf
       argWf' = weakening a argWf
-  in rewrite weakenSubst0Comm cod arg a in TApp fWf' argWf'
+  in rewrite weakenSubst0Comm cod arg in TApp fWf' argWf'
   where
-    -- Weakening commutes with substitution
-    weakenSubst0Comm : (cod : Expr (S n)) -> (arg : Expr n) -> (a : Expr n)
+    -- Weakening commutes with single-variable substitution
+    -- weaken (subst0 cod arg) = subst0 (weaken cod) (weaken arg)
+    --
+    -- Proof:
+    -- weaken (subst (singleSub arg) cod)
+    --   = rename FS (subst (singleSub arg) cod)
+    --   = subst (rename FS . singleSub arg) cod          by renameSubst
+    --   = subst (liftSub (singleSub (weaken arg)) . FS) cod  (need to show these equal)
+    --   = subst (liftSub (singleSub (weaken arg))) (rename FS cod)  by substRename (backwards)
+    --   = subst (liftSub (singleSub (weaken arg))) (weaken cod)
+    --
+    -- The key is showing: rename FS . singleSub arg = liftSub (singleSub (weaken arg)) . FS
+    weakenSubst0Comm : (cod : Expr (S n)) -> (arg : Expr n)
                     -> weaken (subst0 cod arg) = subst0 (weaken cod) (weaken arg)
-    weakenSubst0Comm cod arg a = ?weakenSubst0Comm_proof
+    weakenSubst0Comm cod arg =
+      rewrite renameSubst (singleSub arg) FS cod in
+      rewrite sym (substRename FS (liftSub (singleSub (weaken arg))) cod) in
+      rewrite substExt (rename FS . singleSub arg) (liftSub (singleSub (weaken arg)) . FS) extPf cod in
+      Refl
+      where
+        extPf : (i : Fin (S n)) -> (rename FS . singleSub arg) i = (liftSub (singleSub (weaken arg)) . FS) i
+        extPf FZ = Refl  -- rename FS arg = weaken arg = liftSub (singleSub (weaken arg)) (FS FZ)
+        extPf (FS j) = Refl  -- rename FS (Var j) = Var (FS j) = liftSub ... (FS (FS j))
 
--- Let case
+-- Let case: similar to Pi/Lam, requires exchange for body
+-- Plus: result type involves subst0, need weakenSubst0Comm
 weakening a (TLet tyWf valWf bodyWf) =
   let tyWf' = weakening a tyWf
       valWf' = weakening a valWf
-      bodyWf' = ?weakenLetBody
-  in rewrite ?weakenLetSubst in TLet tyWf' valWf' bodyWf'
+      bodyWf' = ?weakenLetBody  -- requires exchange lemma
+  in rewrite weakenSubst0Comm bodyTy val in TLet tyWf' valWf' bodyWf'
+  where
+    weakenSubst0Comm : (bodyTy : Expr (S n)) -> (val : Expr n)
+                    -> weaken (subst0 bodyTy val) = subst0 (weaken bodyTy) (weaken val)
+    weakenSubst0Comm bodyTy val =
+      rewrite renameSubst (singleSub val) FS bodyTy in
+      rewrite sym (substRename FS (liftSub (singleSub (weaken val))) bodyTy) in
+      rewrite substExt (rename FS . singleSub val) (liftSub (singleSub (weaken val)) . FS) extPf bodyTy in
+      Refl
+      where
+        extPf : (i : Fin (S n)) -> (rename FS . singleSub val) i = (liftSub (singleSub (weaken val)) . FS) i
+        extPf FZ = Refl
+        extPf (FS j) = Refl
 
 -- Conversion case
 weakening a (TConv eWf eq tyWf) =

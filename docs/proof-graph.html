@@ -198,7 +198,7 @@
                 <div class="label">Modules</div>
             </div>
             <div class="stat">
-                <div class="num">70</div>
+                <div class="num">73</div>
                 <div class="label">Definitions</div>
             </div>
             <div class="stat">
@@ -206,7 +206,7 @@
                 <div class="label">Holes</div>
             </div>
             <div class="stat">
-                <div class="num" id="visible-count">98</div>
+                <div class="num" id="visible-count">101</div>
                 <div class="label">Visible</div>
             </div>
         </div>
@@ -314,7 +314,7 @@
       "fullName": "Lean4Idris.Proofs.Weakening",
       "type": "module",
       "color": "#e94560",
-      "size": 30,
+      "size": 36,
       "holes": 4,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr"
     },
@@ -1203,6 +1203,45 @@
       "typeSig": "(ctx : Ctx n) -> (i : Fin n) -> (a : Expr n)"
     },
     {
+      "id": "def_Lean4Idris.Proofs.Weakening_exchangeRen",
+      "label": "exchangeRen",
+      "fullName": "Lean4Idris.Proofs.Weakening.exchangeRen",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 37,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "Ren (S (S n)) (S (S n))"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_exchangeInvol",
+      "label": "exchangeInvol",
+      "fullName": "Lean4Idris.Proofs.Weakening.exchangeInvol",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 44,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "(i : Fin (S (S n))) -> exchangeRen (exchangeRen i)..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_renameExchangeInvol",
+      "label": "renameExchangeInvol",
+      "fullName": "Lean4Idris.Proofs.Weakening.renameExchangeInvol",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 51,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "(e : Expr (S (S n))) -> rename exchangeRen (rename..."
+    },
+    {
       "id": "def_Lean4Idris.Proofs.Weakening_weakening",
       "label": "weakening",
       "fullName": "Lean4Idris.Proofs.Weakening.weakening",
@@ -1211,7 +1250,7 @@
       "size": 10,
       "hasHoles": false,
       "holes": [],
-      "line": 40,
+      "line": 71,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
       "typeSig": "{ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}"
     },
@@ -1224,7 +1263,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 105,
+      "line": 169,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
       "typeSig": "{ctx : Ctx n}"
     },
@@ -1237,7 +1276,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 122,
+      "line": 186,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
       "typeSig": ""
     },
@@ -1255,7 +1294,7 @@
         "renameLam",
         "renameLet"
       ],
-      "line": 130,
+      "line": 194,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
       "typeSig": "{r : Ren n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}"
     },
@@ -1736,6 +1775,21 @@
     {
       "source": "mod_Lean4Idris.Proofs.Weakening",
       "target": "def_Lean4Idris.Proofs.Weakening_weakenLookup",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_exchangeRen",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_exchangeInvol",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_renameExchangeInvol",
       "type": "contains"
     },
     {

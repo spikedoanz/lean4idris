@@ -15,6 +15,7 @@ import Lean4Idris.Proofs.Typing
 import Lean4Idris.Proofs.Reduction
 import Lean4Idris.Proofs.Weakening
 import Lean4Idris.Proofs.SubstitutionLemma
+import Lean4Idris.Proofs.DefEq
 
 %default total
 
@@ -120,10 +121,19 @@ subjectReduction (TApp fTyping argTyping) (SAppL fStep) =
 --
 -- For now, we use a hole - a full proof requires defining ≡.
 
-subjectReduction (TApp fTyping argTyping) (SAppR argStep) =
+subjectReduction (TApp {dom} {cod} fTyping argTyping) (SAppR argStep) =
   let argTyping' = subjectReduction argTyping argStep
-  in ?appR_needs_conversion
-  -- In a full proof: TConv (TApp fTyping argTyping') ?eq ?tyWf
+      -- TApp fTyping argTyping' : HasType ctx (App f arg') (subst0 cod arg')
+      -- We need: HasType ctx (App f arg') (subst0 cod arg)
+      -- Since arg → arg', we have DefEq arg arg' by DEStep
+      -- Thus DefEq (subst0 cod arg) (subst0 cod arg') by defEqSubst0Arg
+      tyEq : DefEq (subst0 cod arg') (subst0 cod arg)
+      tyEq = DESym (defEqSubst0Arg cod (DEStep argStep))
+      appTyping : HasType ctx (App f arg') (subst0 cod arg')
+      appTyping = TApp fTyping argTyping'
+  -- To use TConv, we need a proof that subst0 cod arg is well-typed.
+  -- This requires the "type of type" lemma. For now we use a hole.
+  in ?appR_needs_tyWf  -- TConv appTyping tyEq ?tyWf
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in lambda body
@@ -142,19 +152,37 @@ subjectReduction (TLam tyWf bodyTyping) (SLamBody bodyStep) =
 --
 -- Hmm, this also needs conversion: (x:A) → B ≡ (x:A') → B when A ≡ A'.
 
-subjectReduction (TLam tyWf bodyTyping) (SLamTy tyStep) =
-  ?lamTy_needs_conversion
+subjectReduction (TLam {ty} {ty'} {body} {bodyTy} tyWf bodyTyping) (SLamTy tyStep) =
+  -- ty → ty', so TLam gives us Lam ty' body : Pi ty' bodyTy
+  -- But we need: Lam ty' body : Pi ty bodyTy
+  -- The result types Pi ty bodyTy and Pi ty' bodyTy are DefEq
+  let tyWf' = subjectReduction tyWf tyStep
+      -- We need bodyTyping' : HasType (Extend ctx ty') body bodyTy
+      -- Currently we have bodyTyping : HasType (Extend ctx ty) body bodyTy
+      -- The contexts are CtxEq since ty ≡ ty'
+      ctxEq : CtxEq (Extend ctx ty) (Extend ctx ty')
+      ctxEq = CEExtend (ctxEqRefl ctx) (DEStep tyStep)
+      (bodyTy'' ** (bodyTyping', bodyTyEq)) = ctxConversion ctxEq bodyTyping
+      -- Now we can form TLam with ty' in the annotation
+      -- But the bodyTy might have changed... we need the original bodyTy
+      -- This is getting complicated. Let's use a hole for now.
+  in ?lamTy_hole
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in Pi domain
 ------------------------------------------------------------------------
 
-subjectReduction (TPi domWf codWf) (SPiDom domStep) =
+subjectReduction (TPi {dom} {dom'} {cod} domWf codWf) (SPiDom domStep) =
   let domWf' = subjectReduction domWf domStep
-  -- codWf is in extended context with the OLD domain
-  -- We need it in context with the NEW domain
-  -- This requires showing the contexts are equivalent when A ≡ A'
-  in ?piDom_needs_context_conv
+      -- codWf : HasType (Extend ctx dom) cod (Sort l2)
+      -- We need: HasType (Extend ctx dom') cod (Sort l2)
+      ctxEq : CtxEq (Extend ctx dom) (Extend ctx dom')
+      ctxEq = CEExtend (ctxEqRefl ctx) (DEStep domStep)
+      (codTy' ** (codWf', codTyEq)) = ctxConversion ctxEq codWf
+      -- codTy' should be Sort l2 (up to DefEq)
+      -- But TPi requires exactly Sort l2
+      -- Result type Sort (lmax l1 l2) is unchanged
+  in ?piDom_hole
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in Pi codomain
@@ -168,12 +196,27 @@ subjectReduction (TPi domWf codWf) (SPiCod codStep) =
 -- Congruence: reduce in let
 ------------------------------------------------------------------------
 
-subjectReduction (TLet tyWf valTyping bodyTyping) (SLetTy tyStep) =
-  ?letTy_hole
+subjectReduction (TLet {ty} {ty'} tyWf valTyping bodyTyping) (SLetTy tyStep) =
+  let tyWf' = subjectReduction tyWf tyStep
+      -- valTyping : HasType ctx val ty, but now type annotation is ty'
+      -- bodyTyping : HasType (Extend ctx ty) body bodyTy
+      -- Need context conversion for body
+      ctxEq : CtxEq (Extend ctx ty) (Extend ctx ty')
+      ctxEq = CEExtend (ctxEqRefl ctx) (DEStep tyStep)
+      (bodyTy' ** (bodyTyping', bodyTyEq)) = ctxConversion ctxEq bodyTyping
+      -- Also need to convert valTyping to ty'
+      -- This requires TConv with ty ≡ ty'
+  in ?letTy_hole
 
-subjectReduction (TLet tyWf valTyping bodyTyping) (SLetVal valStep) =
+subjectReduction (TLet {val} {val'} {bodyTy} tyWf valTyping bodyTyping) (SLetVal valStep) =
   let valTyping' = subjectReduction valTyping valStep
-  in ?letVal_hole  -- Similar issue: result type depends on val
+      -- Result type is subst0 bodyTy val, but we get subst0 bodyTy val'
+      -- These are DefEq since val ≡ val'
+      tyEq : DefEq (subst0 bodyTy val') (subst0 bodyTy val)
+      tyEq = DESym (defEqSubst0Arg bodyTy (DEStep valStep))
+      letTyping : HasType ctx (Let ty val' body) (subst0 bodyTy val')
+      letTyping = TLet tyWf valTyping' bodyTyping
+  in ?letVal_hole  -- Need TConv with tyEq
 
 subjectReduction (TLet tyWf valTyping bodyTyping) (SLetBody bodyStep) =
   let bodyTyping' = subjectReduction bodyTyping bodyStep

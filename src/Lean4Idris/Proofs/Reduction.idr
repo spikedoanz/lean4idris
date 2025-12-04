@@ -209,3 +209,105 @@ whnfNoHead WVar s = absurd (varNoStep s)
 whnfNoHead (WApp wf notLam) SBeta = absurd (notLam _ _ Refl)
 whnfNoHead (WApp wf notLam) (SAppL s) = ?whnfApp1
 whnfNoHead (WApp wf notLam) (SAppR s) = Left (WApp wf notLam)
+
+------------------------------------------------------------------------
+-- Renaming Preserves Reduction
+------------------------------------------------------------------------
+
+||| Renaming commutes with single-variable substitution for reduction
+||| rename r (subst0 body arg) = subst0 (rename (liftRen r) body) (rename r arg)
+|||
+||| This is needed to show that renaming preserves β-reduction.
+public export
+renameSubst0Step : (r : Ren n m) -> (body : Expr (S n)) -> (arg : Expr n)
+                -> rename r (subst0 body arg) = subst0 (rename (liftRen r) body) (rename r arg)
+renameSubst0Step r body arg = renameSubst0 r body arg
+
+||| Renaming preserves single-step reduction.
+|||
+||| If e → e', then rename r e → rename r e'.
+|||
+||| This is crucial for showing that DefEq is preserved under weakening.
+public export
+stepRename : (r : Ren n m) -> Step e e' -> Step (rename r e) (rename r e')
+stepRename r SBeta =
+  -- rename r (App (Lam ty body) arg) = App (Lam (rename r ty) (rename (liftRen r) body)) (rename r arg)
+  -- rename r (subst0 body arg) = subst0 (rename (liftRen r) body) (rename r arg) by renameSubst0
+  -- SBeta gives: App (Lam _ body') arg' → subst0 body' arg'
+  rewrite renameSubst0 r body arg in SBeta
+stepRename r SZeta =
+  rewrite renameSubst0 r body val in SZeta
+stepRename r (SAppL s) = SAppL (stepRename r s)
+stepRename r (SAppR s) = SAppR (stepRename r s)
+stepRename r (SLamBody s) = SLamBody (stepRename (liftRen r) s)
+stepRename r (SLamTy s) = SLamTy (stepRename r s)
+stepRename r (SPiDom s) = SPiDom (stepRename r s)
+stepRename r (SPiCod s) = SPiCod (stepRename (liftRen r) s)
+stepRename r (SLetTy s) = SLetTy (stepRename r s)
+stepRename r (SLetVal s) = SLetVal (stepRename r s)
+stepRename r (SLetBody s) = SLetBody (stepRename (liftRen r) s)
+
+||| Weakening preserves single-step reduction.
+|||
+||| If e → e', then weaken e → weaken e'.
+public export
+stepWeaken : Step e e' -> Step (weaken e) (weaken e')
+stepWeaken = stepRename FS
+
+||| Multi-step reduction is preserved by renaming
+public export
+stepsRename : (r : Ren n m) -> Steps e e' -> Steps (rename r e) (rename r e')
+stepsRename r Refl = Refl
+stepsRename r (Trans s rest) = Trans (stepRename r s) (stepsRename r rest)
+
+||| Multi-step reduction is preserved by weakening
+public export
+stepsWeaken : Steps e e' -> Steps (weaken e) (weaken e')
+stepsWeaken = stepsRename FS
+
+------------------------------------------------------------------------
+-- Substitution Preserves Reduction
+------------------------------------------------------------------------
+
+||| Substitution commutes with single-variable substitution
+||| subst s (subst0 body arg) = subst0 (subst (liftSub s) body) (subst s arg)
+|||
+||| This is already proved as substSubst0 in Substitution.idr
+public export
+substSubst0Step : (s : Sub n m) -> (body : Expr (S n)) -> (arg : Expr n)
+               -> subst s (subst0 body arg) = subst0 (subst (liftSub s) body) (subst s arg)
+substSubst0Step = substSubst0
+
+||| Substitution preserves single-step reduction.
+|||
+||| If e → e', then subst s e → subst s e'.
+|||
+||| This is crucial for showing that DefEq is preserved under substitution.
+public export
+stepSubst : (s : Sub n m) -> Step e e' -> Step (subst s e) (subst s e')
+stepSubst s SBeta =
+  -- subst s (App (Lam ty body) arg) = App (Lam (subst s ty) (subst (liftSub s) body)) (subst s arg)
+  -- subst s (subst0 body arg) = subst0 (subst (liftSub s) body) (subst s arg) by substSubst0
+  rewrite substSubst0 s body arg in SBeta
+stepSubst s SZeta =
+  rewrite substSubst0 s body val in SZeta
+stepSubst s (SAppL step) = SAppL (stepSubst s step)
+stepSubst s (SAppR step) = SAppR (stepSubst s step)
+stepSubst s (SLamBody step) = SLamBody (stepSubst (liftSub s) step)
+stepSubst s (SLamTy step) = SLamTy (stepSubst s step)
+stepSubst s (SPiDom step) = SPiDom (stepSubst s step)
+stepSubst s (SPiCod step) = SPiCod (stepSubst (liftSub s) step)
+stepSubst s (SLetTy step) = SLetTy (stepSubst s step)
+stepSubst s (SLetVal step) = SLetVal (stepSubst s step)
+stepSubst s (SLetBody step) = SLetBody (stepSubst (liftSub s) step)
+
+||| Multi-step reduction is preserved by substitution
+public export
+stepsSubst : (s : Sub n m) -> Steps e e' -> Steps (subst s e) (subst s e')
+stepsSubst s Refl = Refl
+stepsSubst s (Trans step rest) = Trans (stepSubst s step) (stepsSubst s rest)
+
+||| Single-variable substitution preserves reduction
+public export
+stepSubst0 : (arg : Expr n) -> Step e e' -> Step (subst0 e arg) (subst0 e' arg)
+stepSubst0 arg = stepSubst (singleSub arg)

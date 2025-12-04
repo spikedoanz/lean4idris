@@ -161,11 +161,36 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
 -- Basic Properties
 ------------------------------------------------------------------------
 
-||| Every well-typed term has a type that is a Sort
-||| (This would require an inversion lemma on the typing judgment)
+||| Every well-typed term has a type that is itself well-typed (as a Sort).
+|||
+||| This is a key lemma showing the type system is well-formed.
+||| It's proved by induction on the typing derivation.
+|||
+||| Note: This requires knowing the types of context entries are well-typed,
+||| which we'd get from a well-formed context invariant. For now, we use
+||| a hole for the TVar case.
 public export
 typeOfType : HasType ctx e ty -> (l : Level ** HasType ctx ty (Sort l))
-typeOfType hasType = ?typeOfType_hole
+-- TVar: type is lookupVar ctx i, which should be well-typed in the context
+-- This requires a well-formed context invariant
+typeOfType (TVar i) = ?typeOfType_TVar
+-- TSort: Sort l has type Sort (LSucc l)
+typeOfType (TSort l) = (LSucc (LSucc l) ** TSort (LSucc l))
+-- TPi: Pi dom cod has type Sort (lmax l1 l2), which has type Sort (LSucc (lmax l1 l2))
+typeOfType (TPi l1 l2 dom cod domWf codWf) =
+  (LSucc (lmax l1 l2) ** TSort (lmax l1 l2))
+-- TLam: Lam ty body has type Pi ty bodyTy, need to show Pi ty bodyTy : Sort l
+typeOfType (TLam l ty body bodyTy tyWf bodyWf) =
+  let (l2 ** bodyTyWf) = typeOfType bodyWf
+  in (lmax l l2 ** TPi l l2 ty bodyTy tyWf bodyTyWf)
+-- TApp: App f arg has type subst0 cod arg
+-- Need: HasType ctx (subst0 cod arg) (Sort l)
+-- This requires the substitution lemma applied to the well-typedness of cod
+typeOfType (TApp dom cod f arg fWf argWf) = ?typeOfType_TApp
+-- TLet: Let ty val body has type subst0 bodyTy val
+typeOfType (TLet l ty val body bodyTy tyWf valWf bodyWf) = ?typeOfType_TLet
+-- TConv: e has type ty2, which has type Sort l (given as tyWf)
+typeOfType (TConv l e ty1 ty2 eWf eq tyWf) = (l ** tyWf)
 
 ------------------------------------------------------------------------
 -- Context Operations

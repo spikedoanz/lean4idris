@@ -8,6 +8,7 @@ import Lean4Idris.Decl
 import System.File
 import System
 import Data.List
+import System.FFI
 
 ||| Check all declarations in order, with verbose output
 checkAllDeclsVerbose : TCEnv -> List Declaration -> List String -> Either (String, List String) ()
@@ -25,6 +26,29 @@ checkAllDecls env (d :: ds) =
   case addDeclChecked env d of
     Left err => Left (show err)
     Right env' => checkAllDecls env' ds
+
+%foreign "C:fflush,libc"
+prim__fflush : AnyPtr -> PrimIO Int
+
+flushStdout : IO ()
+flushStdout = do
+  _ <- primIO $ prim__fflush prim__getNullAnyPtr
+  pure ()
+
+||| Check all declarations in IO (with progress output)
+checkAllDeclsIO : TCEnv -> List Declaration -> IO (Either String TCEnv)
+checkAllDeclsIO env [] = pure (Right env)
+checkAllDeclsIO env (d :: ds) = do
+  let name = show (declName d)
+  putStr $ "Checking: " ++ name ++ "... "
+  flushStdout
+  case addDeclChecked env d of
+    Left err => do
+      putStrLn "FAIL"
+      pure (Left (show err ++ " (in " ++ name ++ ")"))
+    Right env' => do
+      putStrLn "ok"
+      checkAllDeclsIO env' ds
 
 ||| Main entry point
 main : IO ()
@@ -44,14 +68,16 @@ main = do
               putStrLn $ "Parse error: " ++ err
               exitWith (ExitFailure 1)
             Right st => do
+              putStr "Getting declarations... "
+              flushStdout
               let decls = getDecls st
-              putStrLn $ "Parsed " ++ show (length decls) ++ " declarations"
-              case checkAllDeclsVerbose emptyEnv decls [] of
-                Left (err, checked) => do
+              putStrLn $ show (length decls) ++ " found"
+              result <- checkAllDeclsIO emptyEnv decls
+              case result of
+                Left err => do
                   putStrLn $ "Type error: " ++ err
-                  putStrLn $ "Last checked: " ++ show (take 5 (reverse checked))
                   exitWith (ExitFailure 1)
-                Right () => do
+                Right _ => do
                   putStrLn "OK"
                   exitWith ExitSuccess
     _ => do

@@ -13,6 +13,7 @@ import Lean4Idris.Expr
 import Data.Fin
 import Data.Nat
 import Data.List
+import Data.Vect
 
 %default total
 
@@ -89,3 +90,64 @@ public export
 instantiateLevelParamsSafe : List Name -> List Level -> Expr n -> Maybe (Expr n)
 instantiateLevelParamsSafe names levels e =
   substLevelParamsSafe (zip names levels) e
+
+------------------------------------------------------------------------
+-- Simultaneous substitution (closing open terms)
+------------------------------------------------------------------------
+
+||| Weaken a closed expression to any scope depth (uses believe_me since
+||| ClosedExpr has no BVars, indices don't need adjustment)
+weakenBy : (d : Nat) -> ClosedExpr -> Expr d
+weakenBy d e = believe_me e
+
+||| Substitute all free variables simultaneously with closed expressions.
+||| This is the correct operation for closing an open term: given `Expr n`
+||| and a vector of n replacements, substitute all BVar i with the i-th replacement.
+|||
+||| Unlike iterative subst0, this handles nested binders correctly because
+||| we track the current depth and adjust indices accordingly.
+|||
+||| @args Vector of closed expressions to substitute for each free variable
+||| @e The expression with n free variables
+||| Helper for substAll - recursively substitute with depth tracking
+||| Uses explicit Nat index to avoid type complexity with Fin
+||| @depth Number of local binders we're under
+||| @args List of replacements for free variables (index 0 in args = outermost free var)
+goSubstAllNat : (depth : Nat) -> List ClosedExpr -> Nat -> ClosedExpr
+goSubstAllNat depth args idx =
+  if idx < depth
+    then BVar (believe_me idx)  -- Local variable, keep it (index stays same)
+    else case getAt (minus idx depth) args of
+           Just replacement => replacement  -- Free variable, substitute
+           Nothing => BVar (believe_me idx)  -- Shouldn't happen
+
+covering
+goSubstAll : (depth : Nat) -> List ClosedExpr -> ClosedExpr -> ClosedExpr
+goSubstAll depth args (BVar idx) = goSubstAllNat depth args (finToNat idx)
+goSubstAll depth args (Sort l) = Sort l
+goSubstAll depth args (Const name lvls) = Const name lvls
+goSubstAll depth args (App f x) = App (goSubstAll depth args f) (goSubstAll depth args x)
+goSubstAll depth args (Lam name bi ty body) =
+  Lam name bi (goSubstAll depth args ty) (believe_me (goSubstAll (S depth) args (believe_me body)))
+goSubstAll depth args (Pi name bi ty body) =
+  Pi name bi (goSubstAll depth args ty) (believe_me (goSubstAll (S depth) args (believe_me body)))
+goSubstAll depth args (Let name ty val body) =
+  Let name (goSubstAll depth args ty) (goSubstAll depth args val) (believe_me (goSubstAll (S depth) args (believe_me body)))
+goSubstAll depth args (Proj sname fieldIdx s) = Proj sname fieldIdx (goSubstAll depth args s)
+goSubstAll depth args (NatLit k) = NatLit k
+goSubstAll depth args (StringLit s) = StringLit s
+
+covering export
+substAll : Vect n ClosedExpr -> Expr n -> ClosedExpr
+substAll args e = goSubstAll 0 (toList args) (believe_me e)
+
+||| Substitute the outermost bound variable at ALL depths with the given expression.
+||| Unlike subst0, this replaces BVar 0 at depth 0, BVar 1 at depth 1, etc.
+||| This is the correct operation for instantiating a binder for comparison purposes.
+|||
+||| For example, in `((a : #0) -> ((b : #1) -> T))` where both #0 and #1 refer to
+||| the same outer binding, `subst0Single` will replace BOTH with the substitution,
+||| whereas `subst0` would only replace #0 and shift #1 down to #0.
+covering export
+subst0Single : Expr 1 -> ClosedExpr -> ClosedExpr
+subst0Single e arg = goSubstAll 0 [arg] (believe_me e)

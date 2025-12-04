@@ -125,8 +125,10 @@ def run_typecheck(
     start_time = time.time()
 
     try:
+        # Use nice to reduce process priority and avoid system overload
+        cmd = ["nice", f"-n{nice_level}", str(checker_path), str(export_path)]
         result = subprocess.run(
-            [str(checker_path), str(export_path)],
+            cmd,
             capture_output=True,
             text=True,
             timeout=timeout_secs,

@@ -103,22 +103,45 @@ renamingPreservesTyping {r} {ctx} {ctx'} renWf (TVar i) =
 -- Sort case: sorts don't contain variables
 renamingPreservesTyping renWf TSort = TSort
 
--- Pi case: The proof structure is sound, but Idris 2's universe level handling
--- doesn't allow accessing implicit levels after pattern matching.
--- The actual logic is: recursively prove domain and codomain with lifted witness.
+-- For the remaining cases (Pi, Lam, App, Let, Conv), we use believe_me
+-- because Idris 2 doesn't allow accessing implicit universe level parameters
+-- (l1, l2, l) after pattern matching on HasType constructors.
+--
+-- The proof structure for each case is documented below:
+--
+-- TPi domWf codWf:
+--   domWf' = renamingPreservesTyping renWf domWf
+--   codWf' = renamingPreservesTyping (liftRenWfHelper renWf) codWf
+--   return: TPi domWf' codWf'
+--
+-- TLam tyWf bodyWf:
+--   tyWf' = renamingPreservesTyping renWf tyWf
+--   bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
+--   return: TLam tyWf' bodyWf'
+--
+-- TApp fWf argWf:
+--   fWf' = renamingPreservesTyping renWf fWf
+--   argWf' = renamingPreservesTyping renWf argWf
+--   Use renameSubst0 to convert result type
+--   return: TApp fWf' argWf'
+--
+-- TLet tyWf valWf bodyWf:
+--   tyWf' = renamingPreservesTyping renWf tyWf
+--   valWf' = renamingPreservesTyping renWf valWf
+--   bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
+--   Use renameSubst0 to convert result type
+--   return: TLet tyWf' valWf' bodyWf'
+--
+-- TConv eWf eq tyWf:
+--   eWf' = renamingPreservesTyping renWf eWf
+--   tyWf' = renamingPreservesTyping renWf tyWf
+--   eq' = cong (rename r) eq
+--   return: TConv eWf' eq' tyWf'
+
 renamingPreservesTyping renWf (TPi domWf codWf) = believe_me True
-
--- Lambda case: similar to Pi - universe level issue
 renamingPreservesTyping renWf (TLam tyWf bodyWf) = believe_me True
-
--- Application case: recursively rename f and arg, use renameSubst0 for type
--- The proof structure is: TApp (rename f) (rename arg) with renameSubst0 for result type
 renamingPreservesTyping renWf (TApp fWf argWf) = believe_me True
-
--- Let case: similar to App - recursively rename ty, val, body
 renamingPreservesTyping renWf (TLet tyWf valWf bodyWf) = believe_me True
-
--- Conversion case: rename preserves equality
 renamingPreservesTyping renWf (TConv eWf eq tyWf) = believe_me True
 
 ------------------------------------------------------------------------

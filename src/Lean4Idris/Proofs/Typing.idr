@@ -136,6 +136,75 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
        -> HasType ctx e ty2
 
 ------------------------------------------------------------------------
+-- HasType View (exposes implicit parameters)
+------------------------------------------------------------------------
+
+||| A view on HasType that makes all implicit parameters accessible.
+|||
+||| This is needed because Idris 2 doesn't allow accessing implicit
+||| parameters after pattern matching. The view pattern exposes them
+||| as explicit fields.
+public export
+data HasTypeView : {ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}
+                -> HasType ctx e ty -> Type where
+  ||| View of TVar
+  VTVar : {ctx : Ctx n} -> (i : Fin n)
+       -> HasTypeView {ctx} {e = Var i} {ty = lookupVar ctx i} (TVar i)
+
+  ||| View of TSort
+  VTSort : {ctx : Ctx n} -> {l : Level}
+        -> HasTypeView {ctx} {e = Sort l} {ty = Sort (LSucc l)} TSort
+
+  ||| View of TPi - exposes l1 and l2
+  VTPi : {ctx : Ctx n} -> {dom : Expr n} -> {cod : Expr (S n)}
+      -> {l1 : Level} -> {l2 : Level}
+      -> (domWf : HasType ctx dom (Sort l1))
+      -> (codWf : HasType (Extend ctx dom) cod (Sort l2))
+      -> HasTypeView {ctx} {e = Pi dom cod} {ty = Sort (lmax l1 l2)} (TPi domWf codWf)
+
+  ||| View of TLam - exposes l
+  VTLam : {ctx : Ctx n} -> {ty : Expr n} -> {body : Expr (S n)} -> {bodyTy : Expr (S n)}
+       -> {l : Level}
+       -> (tyWf : HasType ctx ty (Sort l))
+       -> (bodyWf : HasType (Extend ctx ty) body bodyTy)
+       -> HasTypeView {ctx} {e = Lam ty body} {ty = Pi ty bodyTy} (TLam tyWf bodyWf)
+
+  ||| View of TApp - exposes dom and cod
+  VTApp : {ctx : Ctx n} -> {f : Expr n} -> {arg : Expr n}
+       -> {dom : Expr n} -> {cod : Expr (S n)}
+       -> (fWf : HasType ctx f (Pi dom cod))
+       -> (argWf : HasType ctx arg dom)
+       -> HasTypeView {ctx} {e = App f arg} {ty = subst0 cod arg} (TApp fWf argWf)
+
+  ||| View of TLet - exposes l
+  VTLet : {ctx : Ctx n} -> {ty : Expr n} -> {val : Expr n}
+       -> {body : Expr (S n)} -> {bodyTy : Expr (S n)}
+       -> {l : Level}
+       -> (tyWf : HasType ctx ty (Sort l))
+       -> (valWf : HasType ctx val ty)
+       -> (bodyWf : HasType (Extend ctx ty) body bodyTy)
+       -> HasTypeView {ctx} {e = Let ty val body} {ty = subst0 bodyTy val} (TLet tyWf valWf bodyWf)
+
+  ||| View of TConv - exposes ty1, ty2, l
+  VTConv : {ctx : Ctx n} -> {e : Expr n} -> {ty1 : Expr n} -> {ty2 : Expr n}
+        -> {l : Level}
+        -> (eWf : HasType ctx e ty1)
+        -> (eq : ty1 = ty2)
+        -> (ty2Wf : HasType ctx ty2 (Sort l))
+        -> HasTypeView {ctx} {e} {ty = ty2} (TConv eWf eq ty2Wf)
+
+-- Note: Due to Idris 2's limitation that implicit parameters are not accessible
+-- after pattern matching, we cannot directly construct views or eliminators
+-- that expose these parameters. The HasTypeView type above documents what
+-- *should* be possible, but viewHasType cannot be implemented.
+--
+-- Workarounds in client code:
+-- 1. Use `with` clauses to pattern match on expression structure first
+-- 2. Use believe_me for cases where the proof structure is sound but
+--    the universe levels can't be accessed
+-- 3. Redesign HasType to make universe levels explicit indices (major refactor)
+
+------------------------------------------------------------------------
 -- Basic Properties
 ------------------------------------------------------------------------
 

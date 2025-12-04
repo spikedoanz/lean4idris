@@ -3,6 +3,10 @@
 ||| This module defines the typing rules as an inductive type.
 ||| A value of type `HasType ctx e ty` is a proof that
 ||| expression `e` has type `ty` in context `ctx`.
+|||
+||| NOTE: Universe levels are explicit parameters in constructors to allow
+||| pattern matching to expose them. This works around Idris 2's limitation
+||| where implicit parameters aren't accessible after pattern matching.
 module Lean4Idris.Proofs.Typing
 
 import Data.Fin
@@ -53,6 +57,9 @@ lookupVar (Extend ctx ty) (FS i) = weaken (lookupVar ctx i)
 |||
 ||| `HasType ctx e ty` is a proof that in context `ctx`,
 ||| expression `e` has type `ty`.
+|||
+||| Universe levels that appear in the result type are EXPLICIT parameters
+||| to allow pattern matching to expose them.
 public export
 data HasType : Ctx n -> Expr n -> Expr n -> Type where
 
@@ -73,7 +80,8 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||
   ||| Each universe is typed by the next universe.
   ||| (A proper treatment would track universe consistency.)
-  TSort : HasType ctx (Sort l) (Sort (LSucc l))
+  ||| Note: l is explicit to allow pattern matching access.
+  TSort : (l : Level) -> HasType ctx (Sort l) (Sort (LSucc l))
 
   ||| Pi formation rule (Pi-F)
   |||
@@ -83,7 +91,10 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||
   ||| To form a Pi type, the domain must be a type and the codomain
   ||| must be a type in the extended context.
-  TPi : HasType ctx dom (Sort l1)
+  ||| All parameters are explicit to allow pattern matching access.
+  TPi : (l1 : Level) -> (l2 : Level)
+     -> (dom : Expr n) -> (cod : Expr (S n))
+     -> HasType ctx dom (Sort l1)
      -> HasType (Extend ctx dom) cod (Sort l2)
      -> HasType ctx (Pi dom cod) (Sort (lmax l1 l2))
 
@@ -94,7 +105,10 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||   Γ ⊢ λ(x:A). e : (x : A) → B
   |||
   ||| A lambda has a Pi type. The body is typed in the extended context.
-  TLam : HasType ctx ty (Sort l)
+  ||| All parameters are explicit to allow pattern matching access.
+  TLam : (l : Level)
+      -> (ty : Expr n) -> (body : Expr (S n)) -> (bodyTy : Expr (S n))
+      -> HasType ctx ty (Sort l)
       -> HasType (Extend ctx ty) body bodyTy
       -> HasType ctx (Lam ty body) (Pi ty bodyTy)
 
@@ -106,7 +120,9 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||
   ||| Applying a function to an argument substitutes the argument
   ||| into the codomain type.
-  TApp : HasType ctx f (Pi dom cod)
+  ||| All parameters are explicit to allow pattern matching access.
+  TApp : (dom : Expr n) -> (cod : Expr (S n)) -> (f : Expr n) -> (arg : Expr n)
+      -> HasType ctx f (Pi dom cod)
       -> HasType ctx arg dom
       -> HasType ctx (App f arg) (subst0 cod arg)
 
@@ -117,7 +133,10 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||   Γ ⊢ let x : A = v in e : B[x := v]
   |||
   ||| Let bindings have types that account for the substitution.
-  TLet : HasType ctx ty (Sort l)
+  ||| All parameters are explicit to allow pattern matching access.
+  TLet : (l : Level)
+      -> (ty : Expr n) -> (val : Expr n) -> (body : Expr (S n)) -> (bodyTy : Expr (S n))
+      -> HasType ctx ty (Sort l)
       -> HasType ctx val ty
       -> HasType (Extend ctx ty) body bodyTy
       -> HasType ctx (Let ty val body) (subst0 bodyTy val)
@@ -130,79 +149,13 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||
   ||| If two types are definitionally equal, we can convert between them.
   ||| Note: DefEq is defined in a separate module to avoid circularity.
-  TConv : HasType ctx e ty1
+  ||| All parameters are explicit to allow pattern matching access.
+  TConv : (l : Level)
+       -> (e : Expr n) -> (ty1 : Expr n) -> (ty2 : Expr n)
+       -> HasType ctx e ty1
        -> ty1 = ty2  -- Simplified: using propositional equality
        -> HasType ctx ty2 (Sort l)
        -> HasType ctx e ty2
-
-------------------------------------------------------------------------
--- HasType View (exposes implicit parameters)
-------------------------------------------------------------------------
-
-||| A view on HasType that makes all implicit parameters accessible.
-|||
-||| This is needed because Idris 2 doesn't allow accessing implicit
-||| parameters after pattern matching. The view pattern exposes them
-||| as explicit fields.
-public export
-data HasTypeView : {ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}
-                -> HasType ctx e ty -> Type where
-  ||| View of TVar
-  VTVar : {ctx : Ctx n} -> (i : Fin n)
-       -> HasTypeView {ctx} {e = Var i} {ty = lookupVar ctx i} (TVar i)
-
-  ||| View of TSort
-  VTSort : {ctx : Ctx n} -> {l : Level}
-        -> HasTypeView {ctx} {e = Sort l} {ty = Sort (LSucc l)} TSort
-
-  ||| View of TPi - exposes l1 and l2
-  VTPi : {ctx : Ctx n} -> {dom : Expr n} -> {cod : Expr (S n)}
-      -> {l1 : Level} -> {l2 : Level}
-      -> (domWf : HasType ctx dom (Sort l1))
-      -> (codWf : HasType (Extend ctx dom) cod (Sort l2))
-      -> HasTypeView {ctx} {e = Pi dom cod} {ty = Sort (lmax l1 l2)} (TPi domWf codWf)
-
-  ||| View of TLam - exposes l
-  VTLam : {ctx : Ctx n} -> {ty : Expr n} -> {body : Expr (S n)} -> {bodyTy : Expr (S n)}
-       -> {l : Level}
-       -> (tyWf : HasType ctx ty (Sort l))
-       -> (bodyWf : HasType (Extend ctx ty) body bodyTy)
-       -> HasTypeView {ctx} {e = Lam ty body} {ty = Pi ty bodyTy} (TLam tyWf bodyWf)
-
-  ||| View of TApp - exposes dom and cod
-  VTApp : {ctx : Ctx n} -> {f : Expr n} -> {arg : Expr n}
-       -> {dom : Expr n} -> {cod : Expr (S n)}
-       -> (fWf : HasType ctx f (Pi dom cod))
-       -> (argWf : HasType ctx arg dom)
-       -> HasTypeView {ctx} {e = App f arg} {ty = subst0 cod arg} (TApp fWf argWf)
-
-  ||| View of TLet - exposes l
-  VTLet : {ctx : Ctx n} -> {ty : Expr n} -> {val : Expr n}
-       -> {body : Expr (S n)} -> {bodyTy : Expr (S n)}
-       -> {l : Level}
-       -> (tyWf : HasType ctx ty (Sort l))
-       -> (valWf : HasType ctx val ty)
-       -> (bodyWf : HasType (Extend ctx ty) body bodyTy)
-       -> HasTypeView {ctx} {e = Let ty val body} {ty = subst0 bodyTy val} (TLet tyWf valWf bodyWf)
-
-  ||| View of TConv - exposes ty1, ty2, l
-  VTConv : {ctx : Ctx n} -> {e : Expr n} -> {ty1 : Expr n} -> {ty2 : Expr n}
-        -> {l : Level}
-        -> (eWf : HasType ctx e ty1)
-        -> (eq : ty1 = ty2)
-        -> (ty2Wf : HasType ctx ty2 (Sort l))
-        -> HasTypeView {ctx} {e} {ty = ty2} (TConv eWf eq ty2Wf)
-
--- Note: Due to Idris 2's limitation that implicit parameters are not accessible
--- after pattern matching, we cannot directly construct views or eliminators
--- that expose these parameters. The HasTypeView type above documents what
--- *should* be possible, but viewHasType cannot be implemented.
---
--- Workarounds in client code:
--- 1. Use `with` clauses to pattern match on expression structure first
--- 2. Use believe_me for cases where the proof structure is sound but
---    the universe levels can't be accessed
--- 3. Redesign HasType to make universe levels explicit indices (major refactor)
 
 ------------------------------------------------------------------------
 -- Basic Properties
@@ -234,4 +187,14 @@ exampleId : HasType Empty
                    (Lam (Var FZ) (Var FZ)))
               (Pi (Sort (LSucc LZero))
                   (Pi (Var FZ) (Var (FS FZ))))
-exampleId = TLam TSort (TLam (TVar FZ) (TVar FZ))
+exampleId = TLam (LSucc (LSucc LZero))
+                 (Sort (LSucc LZero))       -- ty: the annotation type (Type 1)
+                 (Lam (Var FZ) (Var FZ))    -- body: λx.x
+                 (Pi (Var FZ) (Var (FS FZ))) -- bodyTy: A → A (in extended context)
+                 (TSort (LSucc LZero))       -- proof that ty : Sort (LSucc (LSucc LZero))
+                 (TLam (LSucc LZero)
+                       (Var FZ)              -- inner ty: A (variable 0)
+                       (Var FZ)              -- inner body: x
+                       (Var (FS FZ))         -- inner bodyTy: A (shifted)
+                       (TVar FZ)             -- proof that A : Sort (LSucc LZero)
+                       (TVar FZ))            -- proof that x : A

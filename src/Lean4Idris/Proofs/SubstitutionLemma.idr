@@ -77,34 +77,34 @@ substitutionGeneral : {s : Sub n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}
 substitutionGeneral sWf (TVar i) = ?substVar
 
 -- Sort case: sorts don't contain variables
-substitutionGeneral sWf TSort = TSort
+substitutionGeneral sWf (TSort l) = TSort l
 
 -- Pi case: substitute in domain and codomain
-substitutionGeneral sWf (TPi domWf codWf) =
+substitutionGeneral {s} sWf (TPi l1 l2 dom cod domWf codWf) =
   let domWf' = substitutionGeneral sWf domWf
       -- For codomain, we need to lift the substitution
       codWf' = ?substPiCod
-  in TPi domWf' codWf'
+  in TPi l1 l2 (subst s dom) (subst (liftSub s) cod) domWf' codWf'
 
 -- Lambda case: similar to Pi
-substitutionGeneral sWf (TLam tyWf bodyWf) =
+substitutionGeneral {s} sWf (TLam l ty body bodyTy tyWf bodyWf) =
   let tyWf' = substitutionGeneral sWf tyWf
       bodyWf' = ?substLamBody
-  in TLam tyWf' bodyWf'
+  in TLam l (subst s ty) (subst (liftSub s) body) (subst (liftSub s) bodyTy) tyWf' bodyWf'
 
 -- Application case: substitute in function and argument
 -- The key lemma (substSubst0) requires substitution composition which is complex.
 -- We use believe_me here since the full proof requires substantial infrastructure.
-substitutionGeneral sWf (TApp fWf argWf) = believe_me True
+substitutionGeneral sWf (TApp dom cod f arg fWf argWf) = believe_me True
 
 -- Let case: similar to App, requires complex substitution composition
-substitutionGeneral sWf (TLet tyWf valWf bodyWf) = believe_me True
+substitutionGeneral sWf (TLet l ty val body bodyTy tyWf valWf bodyWf) = believe_me True
 
 -- Conversion case
-substitutionGeneral sWf (TConv eWf eq tyWf) =
+substitutionGeneral {s} sWf (TConv l e ty1 ty2 eWf eq tyWf) =
   let eWf' = substitutionGeneral sWf eWf
       tyWf' = substitutionGeneral sWf tyWf
-  in TConv eWf' (cong (subst s) eq) tyWf'
+  in TConv l (subst s e) (subst s ty1) (subst s ty2) eWf' (cong (subst s) eq) tyWf'
 
 ------------------------------------------------------------------------
 -- The Substitution Lemma (Single Variable Version)

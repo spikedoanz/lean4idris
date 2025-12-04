@@ -100,49 +100,46 @@ renamingPreservesTyping {r} {ctx} {ctx'} renWf (TVar i) =
       tvarTyping = TVar (r i)
   in rewrite sym (renWf i) in tvarTyping
 
--- Sort case: sorts don't contain variables
-renamingPreservesTyping renWf TSort = TSort
+-- Sort case: sorts don't contain variables (level is explicit now)
+renamingPreservesTyping renWf (TSort l) = TSort l
 
--- For the remaining cases (Pi, Lam, App, Let, Conv), we use believe_me
--- because Idris 2 doesn't allow accessing implicit universe level parameters
--- (l1, l2, l) after pattern matching on HasType constructors.
---
--- The proof structure for each case is documented below:
---
--- TPi domWf codWf:
---   domWf' = renamingPreservesTyping renWf domWf
---   codWf' = renamingPreservesTyping (liftRenWfHelper renWf) codWf
---   return: TPi domWf' codWf'
---
--- TLam tyWf bodyWf:
---   tyWf' = renamingPreservesTyping renWf tyWf
---   bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
---   return: TLam tyWf' bodyWf'
---
--- TApp fWf argWf:
---   fWf' = renamingPreservesTyping renWf fWf
---   argWf' = renamingPreservesTyping renWf argWf
---   Use renameSubst0 to convert result type
---   return: TApp fWf' argWf'
---
--- TLet tyWf valWf bodyWf:
---   tyWf' = renamingPreservesTyping renWf tyWf
---   valWf' = renamingPreservesTyping renWf valWf
---   bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
---   Use renameSubst0 to convert result type
---   return: TLet tyWf' valWf' bodyWf'
---
--- TConv eWf eq tyWf:
---   eWf' = renamingPreservesTyping renWf eWf
---   tyWf' = renamingPreservesTyping renWf tyWf
---   eq' = cong (rename r) eq
---   return: TConv eWf' eq' tyWf'
+-- Pi case: rename domain and codomain
+renamingPreservesTyping {r} renWf (TPi l1 l2 dom cod domWf codWf) =
+  let domWf' = renamingPreservesTyping renWf domWf
+      codWf' = renamingPreservesTyping (liftRenWfHelper renWf) codWf
+  in TPi l1 l2 (rename r dom) (rename (liftRen r) cod) domWf' codWf'
 
-renamingPreservesTyping renWf (TPi domWf codWf) = believe_me True
-renamingPreservesTyping renWf (TLam tyWf bodyWf) = believe_me True
-renamingPreservesTyping renWf (TApp fWf argWf) = believe_me True
-renamingPreservesTyping renWf (TLet tyWf valWf bodyWf) = believe_me True
-renamingPreservesTyping renWf (TConv eWf eq tyWf) = believe_me True
+-- Lambda case: rename annotation and body
+renamingPreservesTyping {r} renWf (TLam l ty body bodyTy tyWf bodyWf) =
+  let tyWf' = renamingPreservesTyping renWf tyWf
+      bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
+  in TLam l (rename r ty) (rename (liftRen r) body) (rename (liftRen r) bodyTy) tyWf' bodyWf'
+
+-- Application case: rename function and argument, use renameSubst0 for result type
+renamingPreservesTyping {r} renWf (TApp dom cod f arg fWf argWf) =
+  let fWf' = renamingPreservesTyping renWf fWf
+      argWf' = renamingPreservesTyping renWf argWf
+      -- Goal: HasType ctx' (App (rename r f) (rename r arg)) (rename r (subst0 cod arg))
+      -- Have: TApp fWf' argWf' : HasType ctx' (App ...) (subst0 (rename (liftRen r) cod) (rename r arg))
+      -- By renameSubst0: rename r (subst0 cod arg) = subst0 (rename (liftRen r) cod) (rename r arg)
+      -- Rewrite goal: rename r (subst0 ...) --> subst0 (rename ...) ...
+  in rewrite renameSubst0 r cod arg in
+     TApp (rename r dom) (rename (liftRen r) cod) (rename r f) (rename r arg) fWf' argWf'
+
+-- Let case: similar to App
+renamingPreservesTyping {r} renWf (TLet l ty val body bodyTy tyWf valWf bodyWf) =
+  let tyWf' = renamingPreservesTyping renWf tyWf
+      valWf' = renamingPreservesTyping renWf valWf
+      bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
+  in rewrite renameSubst0 r bodyTy val in
+     TLet l (rename r ty) (rename r val) (rename (liftRen r) body) (rename (liftRen r) bodyTy)
+          tyWf' valWf' bodyWf'
+
+-- Conversion case: rename both the term and type derivations
+renamingPreservesTyping {r} renWf (TConv l e ty1 ty2 eWf eq tyWf) =
+  let eWf' = renamingPreservesTyping renWf eWf
+      tyWf' = renamingPreservesTyping renWf tyWf
+  in TConv l (rename r e) (rename r ty1) (rename r ty2) eWf' (cong (rename r) eq) tyWf'
 
 ------------------------------------------------------------------------
 -- Shift Renaming Preserves Variable Types

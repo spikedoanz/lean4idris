@@ -1,0 +1,18 @@
+0.0.0
+1 #NS 0 Eq
+2 #NS 1 refl
+3 #NS 0 Nat
+4 #NS 0 zero
+5 #NS 0 one
+6 #NS 0 bad
+1 #US 0
+1 #ES 1
+2 #EC 3
+3 #EC 4
+4 #EC 5
+5 #EC 1 1 2 3 4
+6 #EC 2 1 2 3
+#AX 3 1
+#AX 4 2
+#AX 5 2
+#DEF 6 5 6 A

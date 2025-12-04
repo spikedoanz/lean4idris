@@ -1,0 +1,12 @@
+0.0.0
+1 #NS 0 Quot
+2 #NS 1 mk
+3 #NS 0 Nat
+4 #NS 0 fake
+1 #US 0
+1 #ES 1
+2 #EC 3
+3 #EC 2 1
+4 #EA 3 2
+#AX 3 1
+#DEF 4 2 4 A

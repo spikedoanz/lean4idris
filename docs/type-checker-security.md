@@ -142,6 +142,8 @@ let x : Bool = Nat in ...   -- x declared as Bool, bound to type Nat
 
 **Defense**: Verify `value : declaredType` before extending context.
 
+**lean4idris fix**: Added value type check in `inferTypeOpen` for `Let`.
+
 ---
 
 ### 3. Definition Validation Attacks

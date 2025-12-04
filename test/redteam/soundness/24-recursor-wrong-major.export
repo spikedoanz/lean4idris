@@ -1,0 +1,13 @@
+0.0.0
+1 #NS 0 Nat
+2 #NS 1 rec
+3 #NS 0 Bool
+4 #NS 0 test
+1 #US 0
+1 #ES 1
+2 #EC 1
+3 #EC 3
+4 #EA 2 3
+#AX 1 1
+#AX 3 1
+#DEF 4 1 4 A

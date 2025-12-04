@@ -637,7 +637,7 @@ mutual
     -- Result universe is imax of domain and codomain, simplified
     Right (Sort (simplify (IMax domLevel codLevel)))
 
-  -- Let: extend context and infer body type
+  -- Let: check value type matches declared type, then extend context and infer body type
   inferTypeOpen env ctx (Let name tyExpr valExpr body) = do
     -- Check type is a type
     tyTy <- inferTypeOpen env ctx tyExpr
@@ -645,10 +645,17 @@ mutual
     -- Close type and value
     let tyClosed = closeWithPlaceholders ctx tyExpr
     let valClosed = closeWithPlaceholders ctx valExpr
-    -- Extend context with let binding
-    let ctx' = extendCtxLet name tyClosed valClosed ctx
-    -- Infer body type
-    inferTypeOpen env ctx' body
+    -- Check value has the declared type
+    valTy <- inferTypeOpen env ctx valExpr
+    tyClosed' <- whnf env tyClosed
+    valTy' <- whnf env valTy
+    if tyClosed' == valTy'
+      then do
+        -- Extend context with let binding
+        let ctx' = extendCtxLet name tyClosed valClosed ctx
+        -- Infer body type
+        inferTypeOpen env ctx' body
+      else Left (LetTypeMismatch tyClosed valTy)
 
   -- Proj: infer structure type and get field type
   inferTypeOpen env ctx (Proj structName idx structExpr) = do

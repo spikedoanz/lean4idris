@@ -4,18 +4,23 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Status
 
-**Milestone 4 in progress**: Inductive types & recursors.
+**Milestone 5 complete**: Local context & open terms.
 
-- [x] Parser for names, levels, expressions
+- [x] Parser for names, levels, expressions, declarations
 - [x] Well-scoped expressions (indexed by depth)
 - [x] Type inference (`inferType`) for closed terms
-- [x] Reduction (`whnf`) - beta, let, delta, and iota reduction
+- [x] Type inference (`inferTypeOpen`) for open terms with local context
+- [x] Reduction (`whnf`) - beta, let, delta, iota, and projection reduction
 - [x] Definitional equality (`isDefEq`) - structural + beta + delta + eta
 - [x] Delta reduction with reducibility hints (abbrev unfolds, opaque doesn't)
 - [x] Eta expansion (λx. f x = f)
 - [x] Iota reduction (recursor computation when major premise is a constructor)
-- [ ] Recursor type inference
-- [ ] Parser for inductive type declarations
+- [x] Projection reduction (struct.field when struct is a constructor)
+- [x] Universe level normalization (simplify imax, max)
+- [x] Local context for typing under binders
+- [ ] Proof irrelevance
+- [ ] Quotient type reduction
+- [ ] Declaration validation
 
 ## Build
 

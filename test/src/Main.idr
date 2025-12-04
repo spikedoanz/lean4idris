@@ -370,6 +370,51 @@ testIota = do
       putStrLn $ "  after:  " ++ ppClosedExpr result
       putStrLn $ "  correct: " ++ show (result == Sort (Succ Zero))
 
+||| Test open term type inference with local context
+testOpenInfer : IO ()
+testOpenInfer = do
+  putStrLn "\n=== Testing Open Term Type Inference ==="
+
+  -- Create an environment with Nat
+  let natName = Str "Nat" Anonymous
+  let nat : ClosedExpr = Const natName []
+  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+  let env = addDecl natDecl emptyEnv
+
+  -- Test 1: BVar in a context
+  -- With context [x : Nat], infer type of x (BVar FZ)
+  putStrLn "\nTest 1: With ctx [x : Nat], infer type of 'x'"
+  let ctx1 : LocalCtx 1 = extendCtx (Str "x" Anonymous) nat emptyCtx
+  let bvar0 : Expr 1 = BVar FZ
+  case inferTypeOpen env ctx1 bvar0 of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty ++ " (expected: Nat)"
+
+  -- Test 2: Lambda identity function
+  -- λ(x : Nat). x should have type Nat -> Nat
+  putStrLn "\nTest 2: infer type of λ(x : Nat). x"
+  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat (BVar FZ)
+  case inferTypeOpen env emptyCtx idLam of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
+
+  -- Test 3: Pi type
+  -- (x : Nat) -> Nat should have type Type 1
+  putStrLn "\nTest 3: infer type of (x : Nat) -> Nat"
+  let piTy : ClosedExpr = Pi (Str "x" Anonymous) Default nat (weaken1 nat)
+  case inferTypeOpen env emptyCtx piTy of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
+
+  -- Test 4: Nested binders
+  -- λ(x : Nat). λ(y : Nat). x
+  putStrLn "\nTest 4: infer type of λ(x : Nat). λ(y : Nat). x"
+  let constLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat
+                                (Lam (Str "y" Anonymous) Default (weaken1 nat) (BVar (FS FZ)))
+  case inferTypeOpen env emptyCtx constLam of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
+
 ||| Test parsing a real Lean export file
 testRealExport : IO ()
 testRealExport = do
@@ -415,6 +460,7 @@ main = do
   testDelta
   testEta
   testIota
+  testOpenInfer
   testRealExport
 
   putStrLn "\n\nAll tests completed!"

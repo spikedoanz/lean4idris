@@ -5,7 +5,7 @@
 ||| - whnf: reduce to weak head normal form (beta, let, delta)
 ||| - isDefEq: check definitional equality
 |||
-||| For now, we only handle closed expressions (no local context).
+||| Supports both closed expressions and open expressions with local context.
 module Lean4Idris.TypeChecker
 
 import Lean4Idris.Name
@@ -16,6 +16,7 @@ import Lean4Idris.Subst
 import Data.SortedMap
 import Data.Fin
 import Data.List
+import Data.Vect
 
 %default total
 
@@ -45,6 +46,49 @@ addDecl d env = case declName d of
 public export
 lookupDecl : Name -> TCEnv -> Maybe Declaration
 lookupDecl n env = lookup n env.decls
+
+------------------------------------------------------------------------
+-- Local Context
+------------------------------------------------------------------------
+
+||| Local context entry - information about a bound variable
+public export
+record LocalEntry where
+  constructor MkLocalEntry
+  name : Name
+  type : ClosedExpr      -- Type of this variable (as closed expr)
+  value : Maybe ClosedExpr  -- Value if this is a let-binding
+
+||| Local context for typing expressions with bound variables.
+||| Maps each bound variable index to its type.
+|||
+||| When we have `Expr n`, the context has `n` entries.
+||| Entry at index 0 corresponds to de Bruijn index 0 (most recent binder).
+public export
+LocalCtx : Nat -> Type
+LocalCtx n = Vect n LocalEntry
+
+||| Empty local context (for closed expressions)
+public export
+emptyCtx : LocalCtx 0
+emptyCtx = []
+
+||| Extend context with a new local declaration (going under a binder)
+||| The type is given as a closed expression (already substituted)
+public export
+extendCtx : Name -> ClosedExpr -> LocalCtx n -> LocalCtx (S n)
+extendCtx name ty ctx = MkLocalEntry name ty Nothing :: ctx
+
+||| Extend context with a let-binding (going under a let)
+public export
+extendCtxLet : Name -> ClosedExpr -> ClosedExpr -> LocalCtx n -> LocalCtx (S n)
+extendCtxLet name ty val ctx = MkLocalEntry name ty (Just val) :: ctx
+
+||| Look up a variable's type in the context
+public export
+lookupCtx : Fin n -> LocalCtx n -> LocalEntry
+lookupCtx FZ (entry :: _) = entry
+lookupCtx (FS k) (_ :: ctx) = lookupCtx k ctx
 
 ------------------------------------------------------------------------
 -- Errors
@@ -267,6 +311,26 @@ tryIotaReduction env e whnfStep = do
   pure (mkApp rhsWithFields remainingArgs)
 
 ------------------------------------------------------------------------
+-- Projection Reduction
+------------------------------------------------------------------------
+
+||| Try to reduce a projection.
+||| Proj structName idx struct reduces when struct is a constructor application.
+||| Result is the (numParams + idx)-th argument of the constructor.
+tryProjReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryProjReduction env (Proj structName idx struct) whnfStep = do
+  -- Reduce struct to WHNF
+  let struct' = iterWhnfStep whnfStep struct 100
+  -- Check if it's a constructor application
+  let (head, args) = getAppSpine struct'
+  (ctorName, _) <- getConstHead head
+  (_, _, numParams, numFields) <- getConstructorInfo env ctorName
+  -- Extract the field at idx (after params)
+  guard (idx < numFields)
+  listNth args (numParams + idx)
+tryProjReduction _ _ _ = Nothing
+
+------------------------------------------------------------------------
 -- WHNF (Weak Head Normal Form)
 ------------------------------------------------------------------------
 
@@ -277,6 +341,7 @@ tryIotaReduction env e whnfStep = do
 ||| - Let substitution: let x = v in body → body[0 := v]
 ||| - Delta reduction: unfold constant definitions
 ||| - Iota reduction: reduce recursor applications when major premise is a constructor
+||| - Projection reduction: Proj idx (Ctor args) → args[numParams + idx]
 |||
 ||| We use a fuel parameter to ensure termination.
 export
@@ -311,14 +376,18 @@ whnf env e = whnfFuel 1000 e
       case whnfStepCore e of
         Just e' => whnfFuel k e'
         Nothing =>
-          -- Then try iota reduction (recursors)
-          case tryIotaReduction env e whnfStepWithDelta of
+          -- Then try projection reduction
+          case tryProjReduction env e whnfStepWithDelta of
             Just e' => whnfFuel k e'
             Nothing =>
-              -- Then try delta reduction
-              case unfoldHead env e of
+              -- Then try iota reduction (recursors)
+              case tryIotaReduction env e whnfStepWithDelta of
                 Just e' => whnfFuel k e'
-                Nothing => Right e
+                Nothing =>
+                  -- Then try delta reduction
+                  case unfoldHead env e of
+                    Just e' => whnfFuel k e'
+                    Nothing => Right e
 
 ||| WHNF without delta reduction (for internal use)
 ||| Used when we want to reduce but not unfold definitions
@@ -434,6 +503,110 @@ inferType _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
 -- BVar: should not appear in closed expressions
 -- This case is actually impossible due to Expr 0 indexing, but we need it for coverage
 -- Actually Expr 0 cannot have BVar (since Fin 0 is empty), so this is dead code
+
+------------------------------------------------------------------------
+-- Open Term Type Inference
+------------------------------------------------------------------------
+
+||| Close an expression by substituting all bound variables with placeholders.
+||| This is used to convert Expr n to ClosedExpr for type checking purposes.
+|||
+||| We substitute each variable with a unique constant based on its name.
+||| This is safe for type inference since we only need the *structure* of the type.
+closeWithPlaceholders : LocalCtx n -> Expr n -> ClosedExpr
+closeWithPlaceholders [] e = e
+closeWithPlaceholders {n = S m} (entry :: ctx) e =
+  -- Substitute var 0 with a placeholder, then close the rest
+  let e' : Expr m = subst0 e (Const (Str "_local" entry.name) [])
+  in closeWithPlaceholders ctx e'
+
+||| Infer the type of an open expression with a local context.
+|||
+||| This is the general form that handles expressions with bound variables.
+||| The result is always a closed expression (type).
+|||
+||| Key idea: when we look up a bound variable, we return its type from context.
+||| When we go under a binder, we extend the context with the domain type.
+export
+covering
+inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+
+-- Sort: same as closed case
+inferTypeOpen _ _ (Sort l) = Right (Sort (Succ l))
+
+-- Const: same as closed case
+inferTypeOpen env _ (Const name levels) =
+  case lookupDecl name env of
+    Nothing => Left (UnknownConst name)
+    Just decl => case declType decl of
+      Nothing => Left (UnknownConst name)
+      Just ty =>
+        let params = declLevelParams decl in
+        if length params == length levels
+          then Right (instantiateLevelParams params levels ty)
+          else Left (WrongNumLevels (length params) (length levels) name)
+
+-- BVar: look up type in local context
+inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type
+
+-- App: infer function type, ensure it's Pi, instantiate codomain
+inferTypeOpen env ctx (App f arg) = do
+  fTy <- inferTypeOpen env ctx f
+  (_, _, dom, cod) <- ensurePi env fTy
+  -- Substitute the argument into the codomain
+  -- We close the argument to get a ClosedExpr for substitution
+  let argClosed = closeWithPlaceholders ctx arg
+  Right (subst0 cod argClosed)
+
+-- Lam: type is Pi type
+inferTypeOpen env ctx (Lam name bi domExpr body) = do
+  -- Check domain is a type
+  domTy <- inferTypeOpen env ctx domExpr
+  _ <- ensureSort env domTy
+  -- Close the domain to use in the context
+  let domClosed = closeWithPlaceholders ctx domExpr
+  -- Infer body type with extended context
+  let ctx' = extendCtx name domClosed ctx
+  bodyTy <- inferTypeOpen env ctx' body
+  -- Result is Pi type
+  Right (Pi name bi domClosed (weaken1 bodyTy))
+
+-- Pi: infer universe level of the result
+inferTypeOpen env ctx (Pi name bi domExpr codExpr) = do
+  -- Infer domain type and get its universe level
+  domTy <- inferTypeOpen env ctx domExpr
+  domLevel <- ensureSort env domTy
+  -- Close domain for context extension
+  let domClosed = closeWithPlaceholders ctx domExpr
+  let ctx' = extendCtx name domClosed ctx
+  -- Infer codomain type and get its universe level
+  codTy <- inferTypeOpen env ctx' codExpr
+  codLevel <- ensureSort env codTy
+  -- Result universe is imax of domain and codomain, simplified
+  Right (Sort (simplify (IMax domLevel codLevel)))
+
+-- Let: extend context and infer body type
+inferTypeOpen env ctx (Let name tyExpr valExpr body) = do
+  -- Check type is a type
+  tyTy <- inferTypeOpen env ctx tyExpr
+  _ <- ensureSort env tyTy
+  -- Close type and value
+  let tyClosed = closeWithPlaceholders ctx tyExpr
+  let valClosed = closeWithPlaceholders ctx valExpr
+  -- Extend context with let binding
+  let ctx' = extendCtxLet name tyClosed valClosed ctx
+  -- Infer body type
+  inferTypeOpen env ctx' body
+
+-- Proj: infer structure type and get field type
+inferTypeOpen env ctx (Proj structName idx structExpr) = do
+  structTy <- inferTypeOpen env ctx structExpr
+  -- For now, return an error - projection typing requires inductive type lookup
+  Left (OtherError $ "projection typing not yet fully supported for " ++ show structName)
+
+-- Literals
+inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
+inferTypeOpen _ _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
 
 ------------------------------------------------------------------------
 -- Definitional Equality

@@ -27,6 +27,7 @@ modules = Lean4Idris
         , Lean4Idris.Export.Lexer
         , Lean4Idris.Export.Parser
         , Lean4Idris.Pretty
+        , Lean4Idris.Proofs.Name
         , Lean4Idris.Proofs.Syntax
         , Lean4Idris.Proofs.Substitution
         , Lean4Idris.Proofs.Reduction

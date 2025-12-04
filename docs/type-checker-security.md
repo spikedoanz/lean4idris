@@ -451,6 +451,7 @@ Compare against a known-correct implementation:
 | Free bvars | BVar outside scope | Type confusion | Well-scoped types |
 | Lambda body | Wrong return type | False proofs | Check body in context |
 | App arg | Wrong arg type | Type confusion | Check arg type |
+| Let value | `let x:Bool := Nat` | Type confusion | Check value type |
 | Self-ref def | `x := x` | Inconsistency | Check before adding |
 | Non-termination | Infinite reduction | DoS | Fuel limits |
 | Positivity | Negative occurrence | False proofs | Strict positivity |
@@ -469,22 +470,83 @@ Compare against a known-correct implementation:
 
 ## Appendix: lean4idris Red Team Results
 
-The `test/redteam/` directory contains 13 attack test cases:
+The `test/redteam/` directory contains 26 attack test cases covering parser attacks, type inference bugs, and historical Lean kernel vulnerabilities.
+
+### Parser-Level Tests (1-4, 8, 15, 23)
 
 | # | Attack | Result |
 |---|--------|--------|
-| 01 | Circular references | REJECT (parser) |
-| 02 | Free bound variable | REJECT (parser) |
-| 03 | Bad projection index | REJECT (not implemented) |
-| 04 | Forward reference | REJECT (parser) |
-| 05 | Self-referential def | REJECT (unknown const) |
-| 06 | Deep nesting | REJECT (function expected) |
-| 07 | Type mismatch def | REJECT (type mismatch) |
-| 08 | Universe escape | REJECT (parser) |
-| 09 | Fake prop proof | REJECT (type mismatch) |
-| 10 | Lambda wrong body | REJECT (type mismatch) ✓ Fixed |
-| 11 | Valid identity fn | ACCEPT (correct) |
-| 12 | Pi universe wrong | REJECT (type mismatch) |
-| 13 | App wrong arg type | REJECT (app mismatch) ✓ Fixed |
+| 01 | Circular references | REJECT (Invalid expr index) |
+| 02 | Free bound variable | REJECT (Expression invalid at depth) |
+| 04 | Forward reference | REJECT (Invalid expr index) |
+| 08 | Universe escape | REJECT (Invalid level index) |
+| 15 | Nested let escape | REJECT (Expression invalid at depth) |
+| 23 | Large BVar index | REJECT (Expression invalid at depth) |
 
-All 13 tests pass, demonstrating defense against these attack vectors.
+### Type Inference Tests (10, 13, 14, 26)
+
+| # | Attack | Result | Notes |
+|---|--------|--------|-------|
+| 10 | Lambda wrong body type | REJECT ✓ | Fixed: delegate to inferTypeOpen |
+| 13 | App wrong arg type | REJECT ✓ | Fixed: check arg type matches domain |
+| 14 | Let type dependency | REJECT ✓ | Fixed: check value type |
+| 26 | Let value type mismatch | REJECT ✓ | Fixed: check value type |
+
+### Definition Validation Tests (5, 7, 9, 12, 19)
+
+| # | Attack | Result |
+|---|--------|--------|
+| 05 | Self-referential def | REJECT (unknown constant) |
+| 07 | Type mismatch def | REJECT (definition type mismatch) |
+| 09 | Fake prop proof | REJECT (definition type mismatch) |
+| 12 | Pi universe wrong | REJECT (definition type mismatch) |
+| 19 | Level param mismatch | REJECT (definition type mismatch) |
+
+### Historical Bug Tests (Based on lean4 issues)
+
+| # | Attack | Source | Result |
+|---|--------|--------|--------|
+| 14 | inferLet value type | lean4#10475 | REJECT ✓ |
+| 22 | imax(u,0) exploit | lean4lean paper | REJECT |
+| 18 | Wrong level count | - | REJECT |
+
+### Primitive & Quotient Tests
+
+| # | Attack | Result |
+|---|--------|--------|
+| 16 | Nat literal without Nat | REJECT (type expected) |
+| 17 | String literal without String | REJECT (type expected) |
+| 20 | Fake Quot.mk | REJECT (unknown constant) |
+| 21 | Fake Eq.refl | REJECT (unknown constant) |
+
+### Other Tests
+
+| # | Attack | Result |
+|---|--------|--------|
+| 03 | Bad projection | REJECT (not yet supported) |
+| 06 | Deep nesting | REJECT (function expected) |
+| 11 | Valid identity fn | ACCEPT (correct - not a bug) |
+| 24 | Recursor wrong major | REJECT (function expected) |
+| 25 | Proof irrel non-Prop | REJECT (function expected) |
+
+### Summary
+
+| Category | Tests | Pass |
+|----------|-------|------|
+| Parser attacks | 7 | 7 |
+| Type inference | 4 | 4 |
+| Definition validation | 5 | 5 |
+| Historical bugs | 3 | 3 |
+| Primitives/Quotients | 4 | 4 |
+| Other | 3 | 3 |
+| **Total** | **26** | **26** |
+
+All 26 tests pass, demonstrating defense against these attack vectors.
+
+### Bugs Fixed During Red Team
+
+1. **Lambda body type** (test 10): `inferType` for Lam now delegates to `inferTypeOpen` which properly extends local context and validates body type.
+
+2. **Application arg type** (test 13): `inferType` for App now checks argument type matches function domain after whnf reduction.
+
+3. **Let binding value type** (tests 14, 26): `inferTypeOpen` for Let now checks value type matches declared type before extending context.

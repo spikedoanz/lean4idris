@@ -81,6 +81,34 @@ isNonZero (Succ _) = True
 isNonZero (Max l1 l2) = isNonZero l1 || isNonZero l2
 isNonZero _ = False
 
+||| Get the offset (number of Succ wrappers) and base of a level
+||| e.g., Succ (Succ (Param u)) returns (2, Param u)
+||| e.g., Succ (Succ Zero) returns (2, Zero)
+getOffsetBase : Level -> (Nat, Level)
+getOffsetBase (Succ l) = let (n, base) = getOffsetBase l in (S n, base)
+getOffsetBase l = (0, l)
+
+||| Check if level a dominates level b (i.e., max a b = a for all parameter assignments)
+||| Conservative check - returns True only if we can definitely prove dominance
+||| Key rule: Succ^n (Param u) dominates Succ^m Zero when m <= n (since u >= 0)
+covering
+dominates : Level -> Level -> Bool
+dominates a b =
+  let (na, basea) = getOffsetBase a
+      (nb, baseb) = getOffsetBase b
+  in case (basea, baseb) of
+       -- Concrete levels: just compare
+       (Zero, Zero) => na >= nb
+       -- u+n dominates m when m <= n (since u >= 0, u+n >= n >= m)
+       (Param _, Zero) => na >= nb
+       -- Same param: compare offsets
+       (Param u1, Param u2) => u1 == u2 && na >= nb
+       -- Max: a dominates b if a dominates all parts of b
+       (_, Max b1 b2) => dominates a b1 && dominates a b2
+       -- a dominates b if any part of a dominates b
+       (Max a1 a2, _) => dominates a1 b || dominates a2 b
+       _ => False
+
 ||| Simplify a level expression
 ||| Applies basic normalization rules
 -- Compare levels for canonical ordering
@@ -122,6 +150,10 @@ simplify (Max l1 l2) =
        (Zero, _) => l2
        (_, Zero) => l1
        _ => if l1 == l2 then l1
+            -- Check if l2 dominates l1 (e.g., max 1 (u+1) = u+1)
+            else if dominates l2 l1 then l2
+            -- Check if l1 dominates l2
+            else if dominates l1 l2 then l1
             -- Check if l1 is contained in l2 (e.g., Max u (Max u v) = Max u v)
             else if containedIn l1 l2 then l2
             -- Check if l2 is contained in l1
@@ -144,6 +176,10 @@ simplify (IMax l1 l2) =
          if isNonZero a || isNonZero b
            then simplify (Max l1' l2')  -- Reduce to Max since l2' is non-zero
            else if l1' == l2' then l1' else IMax l1' l2'
+       -- When l2' is IMax v w: imax u (imax v w) = max (imax u w) (imax v w)
+       -- This distributes IMax over the inner IMax
+       (IMax v w) =>
+         simplify (Max (IMax l1' w) (IMax v w))
        -- When l2' is a Param, check if l1' is an IMax with l2' as second arg
        -- IMax (IMax x u) u = IMax x u when u is non-zero (and params are assumed positive)
        -- This handles cases like IMax (IMax 0 u) u = u

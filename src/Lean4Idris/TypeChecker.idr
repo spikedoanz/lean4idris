@@ -1554,16 +1554,25 @@ tryProofIrrelevance recurEq env t s = do
 -- Definitional Equality
 ------------------------------------------------------------------------
 
-||| Check syntactic equality of levels
+||| Normalize and compare levels for equality
+||| Uses simplification to bring levels to a canonical form before comparison
+covering
 levelEq : Level -> Level -> Bool
-levelEq Zero Zero = True
-levelEq (Succ l1) (Succ l2) = levelEq l1 l2
-levelEq (Max a1 b1) (Max a2 b2) = levelEq a1 a2 && levelEq b1 b2
-levelEq (IMax a1 b1) (IMax a2 b2) = levelEq a1 a2 && levelEq b1 b2
-levelEq (Param n1) (Param n2) = n1 == n2
-levelEq _ _ = False
+levelEq l1 l2 =
+  let l1' = simplify l1
+      l2' = simplify l2
+  in levelEqCore l1' l2'
+  where
+    levelEqCore : Level -> Level -> Bool
+    levelEqCore Zero Zero = True
+    levelEqCore (Succ l1) (Succ l2) = levelEqCore l1 l2
+    levelEqCore (Max a1 b1) (Max a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
+    levelEqCore (IMax a1 b1) (IMax a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
+    levelEqCore (Param n1) (Param n2) = n1 == n2
+    levelEqCore _ _ = False
 
 ||| Check syntactic equality of level lists
+covering
 levelListEq : List Level -> List Level -> Bool
 levelListEq [] [] = True
 levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2

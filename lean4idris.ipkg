@@ -17,6 +17,7 @@ depends = contrib
 
 -- modules to install
 modules = Lean4Idris
+        , Lean4Idris.Main
         , Lean4Idris.Name
         , Lean4Idris.Level
         , Lean4Idris.Expr
@@ -40,10 +41,10 @@ modules = Lean4Idris
         , Lean4Idris.Proofs.SubjectReduction
 
 -- main file (i.e. file to load at REPL)
--- main =
+main = Lean4Idris.Main
 
 -- name of executable
--- executable =
+executable = "lean4idris"
 -- opts =
 sourcedir = "src"
 -- builddir =

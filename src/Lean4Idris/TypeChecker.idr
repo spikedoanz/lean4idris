@@ -299,6 +299,27 @@ getConstHead : ClosedExpr -> Maybe (Name, List Level)
 getConstHead (Const n ls) = Just (n, ls)
 getConstHead _ = Nothing
 
+||| Substitute a list of arguments for leading Pi binders
+||| substArgs [a, b, c] (∀x y z, body) = body[x:=a, y:=b, z:=c]
+||| Note: Works with well-scoped expressions - each substitution reduces scope by 1
+substArgs : {n : Nat} -> List (Expr n) -> Expr n -> Expr n
+substArgs [] ty = ty
+substArgs {n} (arg :: args) (Pi _ _ _ cod) = substArgs args (subst0 cod arg)
+substArgs _ ty = ty  -- Ran out of Pis
+
+||| Get the idx-th Pi domain from a type, after substituting previous args
+||| For a type like (α : Type) → (β : Type) → α → β → Prod α β
+||| with args [Nat, Bool], getNthPiDomSubst 0 args ty = Nat, getNthPiDomSubst 1 = Bool
+getNthPiDomSubst : {n : Nat} -> Nat -> List (Expr n) -> Expr n -> Maybe (Expr n)
+getNthPiDomSubst Z _ (Pi _ _ dom _) = Just dom
+getNthPiDomSubst (S k) [] (Pi _ _ _ cod) =
+  -- No more args to substitute, but we still need to continue
+  -- Use believe_me for now since we're working with closed exprs
+  getNthPiDomSubst k [] (believe_me cod)
+getNthPiDomSubst (S k) (arg :: args) (Pi _ _ _ cod) =
+  getNthPiDomSubst k args (subst0 cod arg)
+getNthPiDomSubst _ _ _ = Nothing
+
 ||| Try iota reduction on a recursor application
 ||| If the expression is `Rec.rec params motives minors indices (Ctor args)`,
 ||| reduce it using the matching recursor rule.
@@ -542,6 +563,41 @@ closeWithPlaceholders {n = S m} (entry :: ctx) e =
   let e' : Expr m = subst0 e (Const (Str "_local" entry.name) [])
   in closeWithPlaceholders ctx e'
 
+------------------------------------------------------------------------
+-- Projection Type Inference Helpers
+------------------------------------------------------------------------
+
+||| Get the inductive info for a name (if it exists and is an inductive)
+getInductiveInfo : TCEnv -> Name -> Maybe InductiveInfo
+getInductiveInfo env name =
+  case lookupDecl name env of
+    Just (IndDecl info _) => Just info
+    _ => Nothing
+
+||| Get the single constructor of a structure (structures have exactly one constructor)
+getStructCtor : TCEnv -> Name -> Maybe ConstructorInfo
+getStructCtor env structName = do
+  indInfo <- getInductiveInfo env structName
+  case indInfo.constructors of
+    [ctor] => Just ctor
+    _ => Nothing  -- Not a structure (0 or multiple constructors)
+
+||| Get the type of a projection field from a structure
+||| Given struct name, field index, and struct params (extracted from struct type),
+||| returns the field type with parameters substituted
+|||
+||| For a structure like Prod with constructor:
+|||   Prod.mk : {α β : Type} → α → β → Prod α β
+||| and a value s : Prod Nat Bool, we have params = [Nat, Bool]
+||| So getProjType "Prod" 0 [Nat, Bool] = Nat
+|||    getProjType "Prod" 1 [Nat, Bool] = Bool
+getProjType : TCEnv -> Name -> Nat -> List ClosedExpr -> Maybe ClosedExpr
+getProjType env structName idx structParams = do
+  -- Get the single constructor (structures have exactly one)
+  ctor <- getStructCtor env structName
+  -- Get the idx-th field type after substituting params
+  getNthPiDomSubst idx structParams ctor.type
+
 mutual
   ||| Infer the type of a closed expression.
   ||| Delegates to inferTypeOpen with empty context for binder forms.
@@ -696,8 +752,19 @@ mutual
   -- Proj: infer structure type and get field type
   inferTypeOpen env ctx (Proj structName idx structExpr) = do
     structTy <- inferTypeOpen env ctx structExpr
-    -- For now, return an error - projection typing requires inductive type lookup
-    Left (OtherError $ "projection typing not yet fully supported for " ++ show structName)
+    -- Reduce struct type to WHNF to expose the structure application
+    structTy' <- whnf env structTy
+    -- Extract the head (should be the structure name) and args (params)
+    let (head, params) = getAppSpine structTy'
+    case getConstHead head of
+      Nothing => Left (OtherError $ "projection: expected structure type for " ++ show structName)
+      Just (tyName, _) =>
+        -- Verify the type matches the declared structure name
+        if tyName /= structName
+          then Left (OtherError $ "projection: type mismatch, expected " ++ show structName ++ " got " ++ show tyName)
+          else case getProjType env structName idx params of
+            Nothing => Left (OtherError $ "projection: could not compute field type for " ++ show structName ++ " at index " ++ show idx)
+            Just fieldTy => Right fieldTy
 
   -- Literals
   inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
@@ -1117,13 +1184,6 @@ checkCtorUniverseParams ctorName indParams ctorParams =
   if indParams == ctorParams
     then Right ()
     else Left (CtorUniverseMismatch ctorName indParams ctorParams)
-
-||| Get the inductive info for a name (if it exists and is an inductive)
-getInductiveInfo : TCEnv -> Name -> Maybe InductiveInfo
-getInductiveInfo env name =
-  case lookupDecl name env of
-    Just (IndDecl info _) => Just info
-    _ => Nothing
 
 ||| Get the level parameters for an inductive
 getInductiveLevelParams : TCEnv -> Name -> Maybe (List Name)

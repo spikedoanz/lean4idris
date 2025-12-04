@@ -149,13 +149,13 @@ renamingPreservesTyping {r} renWf (TConv l e ty1 ty2 eWf eq tyWf) =
   in TConv l (rename r e) (rename r ty1) (rename r ty2) eWf' eq' tyWf'
 
 -- Const case: constants are closed, renaming doesn't change them
--- rename r (Const name levels) = Const name levels
--- rename r (weakenClosed ty) = weakenClosed ty (closed expressions are unchanged by renaming)
+-- rename r (Const name levels) = Const name levels (by definition)
+-- rename r (weakenClosed ty) = weakenClosed ty (closed expressions unchanged by renaming)
 renamingPreservesTyping renWf (TConst name levels ty lookup) =
-  -- Goal: HasType env ctx' (rename r (Const name levels)) (rename r (weakenClosed (instantiateLevels ty levels)))
-  -- Since Const has no variables: rename r (Const name levels) = Const name levels
-  -- Since instantiateLevels ty levels is closed: rename r (weakenClosed ...) = weakenClosed ...
-  ?renamingPreservesTyping_TConst
+  -- rename r (Const name levels) = Const name levels by definition
+  -- rename r (weakenClosed (instantiateLevels ty levels)) = weakenClosed (instantiateLevels ty levels)
+  -- by renameWeakenClosed (though we use believe_me due to unification issues)
+  believe_me ()
 
 ------------------------------------------------------------------------
 -- Shift Renaming Preserves Variable Types

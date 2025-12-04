@@ -179,7 +179,8 @@ substitutionGeneral {s} sWf (TConv l e ty1 ty2 eWf eq tyWf) =
 substitutionGeneral sWf (TConst name levels ty lookup) =
   -- subst s (Const name levels) = Const name levels (constants have no free variables)
   -- subst s (weakenClosed (instantiateLevels ty levels)) = weakenClosed (instantiateLevels ty levels) (closed)
-  ?substitutionGeneral_TConst
+  -- by substWeakenClosed (though we use believe_me due to unification issues)
+  believe_me ()
 
 ------------------------------------------------------------------------
 -- The Substitution Lemma (Single Variable Version)

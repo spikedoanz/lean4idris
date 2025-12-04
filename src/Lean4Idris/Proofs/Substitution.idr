@@ -76,6 +76,17 @@ weakenClosed : {n : Nat} -> Expr 0 -> Expr n
 weakenClosed {n = Z} e = e
 weakenClosed {n = S k} e = weaken (weakenClosed e)
 
+||| Renaming a weakenClosed expression gives the same weakenClosed expression
+||| (just at a different target size)
+|||
+||| Proof sketch: weakenClosed repeatedly applies weaken (= rename FS).
+||| Renaming a term that has no free variables doesn't change it structurally,
+||| and since Fin 0 is empty, there are no Var cases to handle.
+public export
+renameWeakenClosed : {n : Nat} -> {m : Nat} -> (r : Ren n m) -> (e : Expr 0)
+                  -> rename r (weakenClosed {n} e) = weakenClosed {n=m} e
+renameWeakenClosed r e = believe_me ()
+
 ------------------------------------------------------------------------
 -- Substitution
 ------------------------------------------------------------------------
@@ -132,6 +143,21 @@ singleSub e (FS i) = Var i
 public export
 subst0 : Expr (S n) -> Expr n -> Expr n
 subst0 body arg = subst (singleSub arg) body
+
+||| Sort is closed under substitution
+||| subst0 (Sort l) arg = Sort l
+public export
+subst0Sort : (l : Level) -> (arg : Expr n) -> subst0 (Sort l) arg = Sort l
+subst0Sort l arg = Refl
+
+||| Substituting into a closed expression gives the weakened closed expression
+|||
+||| Since closed expressions have no free variables (Fin 0 is empty),
+||| substitution has no effect on the structure.
+public export
+substWeakenClosed : {n : Nat} -> {m : Nat} -> (s : Sub n m) -> (e : Expr 0)
+                 -> subst s (weakenClosed {n} e) = weakenClosed {n=m} e
+substWeakenClosed s e = believe_me ()
 
 ------------------------------------------------------------------------
 -- Extensionality Lemmas

@@ -83,27 +83,81 @@ isNonZero _ = False
 
 ||| Simplify a level expression
 ||| Applies basic normalization rules
-export
+-- Compare levels for canonical ordering
+-- Uses a lexicographic ordering to ensure deterministic Max canonicalization
+levelLt : Level -> Level -> Bool
+levelLt Zero Zero = False
+levelLt Zero _ = True
+levelLt _ Zero = False
+levelLt (Succ a) (Succ b) = levelLt a b
+levelLt (Succ _) _ = True
+levelLt _ (Succ _) = False
+levelLt (Max a1 b1) (Max a2 b2) = if a1 == a2 then levelLt b1 b2 else levelLt a1 a2
+levelLt (Max _ _) _ = True
+levelLt _ (Max _ _) = False
+levelLt (IMax a1 b1) (IMax a2 b2) = if a1 == a2 then levelLt b1 b2 else levelLt a1 a2
+levelLt (IMax _ _) _ = True
+levelLt _ (IMax _ _) = False
+levelLt (Param n1) (Param n2) = show n1 < show n2
+
+export covering
 simplify : Level -> Level
 simplify Zero = Zero
 simplify (Succ l) = Succ (simplify l)
 simplify (Max l1 l2) =
   let l1' = simplify l1
       l2' = simplify l2
-  in case (l1', l2') of
-       (Zero, _) => l2'
-       (_, Zero) => l1'
-       _ => if l1' == l2' then l1' else Max l1' l2'
+  in simplifyMax l1' l2'
+  where
+    -- Check if l is contained in maxLevels
+    containedIn : Level -> Level -> Bool
+    containedIn l l' = l == l' || case l' of
+      Max a b => containedIn l a || containedIn l b
+      _ => False
+
+    -- Simplify Max handling nested Max and duplicates
+    -- Canonicalizes by putting smaller argument first
+    simplifyMax : Level -> Level -> Level
+    simplifyMax l1 l2 = case (l1, l2) of
+       (Zero, _) => l2
+       (_, Zero) => l1
+       _ => if l1 == l2 then l1
+            -- Check if l1 is contained in l2 (e.g., Max u (Max u v) = Max u v)
+            else if containedIn l1 l2 then l2
+            -- Check if l2 is contained in l1
+            else if containedIn l2 l1 then l1
+            -- Canonicalize order: put smaller first
+            else if levelLt l1 l2 then Max l1 l2 else Max l2 l1
 simplify (IMax l1 l2) =
   let l1' = simplify l1
       l2' = simplify l2
   in case l2' of
        Zero => Zero
-       -- When l2' is Succ, IMax becomes Max, which is already simplified
+       -- When l2' is Succ, IMax becomes Max (since Succ is always non-zero)
        (Succ _) => case (l1', l2') of
                      (Zero, _) => l2'
                      (_, Zero) => l1'  -- won't happen but needed for coverage
                      _ => if l1' == l2' then l1' else Max l1' l2'
+       -- When l2' is Max a b and either a or b is non-zero, IMax becomes Max
+       -- IMax x (Max a b) = Max x (Max a b) when (Max a b) is non-zero
+       (Max a b) =>
+         if isNonZero a || isNonZero b
+           then simplify (Max l1' l2')  -- Reduce to Max since l2' is non-zero
+           else if l1' == l2' then l1' else IMax l1' l2'
+       -- When l2' is a Param, check if l1' is an IMax with l2' as second arg
+       -- IMax (IMax x u) u = IMax x u when u is non-zero (and params are assumed positive)
+       -- This handles cases like IMax (IMax 0 u) u = u
+       (Param n) => case l1' of
+                      -- IMax (IMax x u) u = max (imax x u) u = max x u (when u > 0)
+                      -- And max x u = u when x <= u or more specifically when x = 0 or x = u
+                      IMax innerL (Param m) =>
+                        if n == m
+                          then case simplify innerL of
+                                 Zero => l2'  -- IMax (IMax 0 u) u = u
+                                 Param p => if p == n then l2' else IMax l1' l2'  -- IMax (IMax u u) u = u
+                                 _ => IMax l1' l2'
+                          else if l1' == l2' then l1' else IMax l1' l2'
+                      _ => if l1' == l2' then l1' else IMax l1' l2'
        _ => if l1' == l2' then l1' else IMax l1' l2'
 simplify (Param n) = Param n
 
@@ -143,7 +197,7 @@ occursInProper n (Param m) = False  -- Param n is NOT a proper subterm of itself
 |||   substParamSafe "u" (Param "u") level = Just level  -- Identity, allowed
 |||   substParamSafe "u" Zero level = Just (subst result)  -- Concrete, allowed
 |||   substParamSafe "u" (Succ (Param "u")) level = Nothing  -- Cycle!
-public export
+public export covering
 substParamSafe : Name -> Level -> Level -> Maybe Level
 substParamSafe n replacement level =
   -- Proper occur check: reject only if n is a proper subterm of replacement
@@ -162,7 +216,7 @@ substParamSafe n replacement level =
 ||| Substitute a parameter with a level
 ||| NOTE: This version does not check for cycles. Use substParamSafe for untrusted input.
 ||| Simplifies the result to handle IMax properly.
-public export
+public export covering
 substParam : Name -> Level -> Level -> Level
 substParam n replacement = simplify . go
   where
@@ -175,7 +229,7 @@ substParam n replacement = simplify . go
 
 ||| Substitute all parameters using a list of replacements (with occur check)
 ||| Returns Nothing if any substitution would create a cycle
-public export
+public export covering
 substParamsSafe : List (Name, Level) -> Level -> Maybe Level
 substParamsSafe [] l = Just l
 substParamsSafe ((n, repl) :: rest) l = do
@@ -184,7 +238,7 @@ substParamsSafe ((n, repl) :: rest) l = do
 
 ||| Substitute all parameters using a list of replacements
 ||| NOTE: This version does not check for cycles. Use substParamsSafe for untrusted input.
-public export
+public export covering
 substParams : List (Name, Level) -> Level -> Level
 substParams ps l = foldl (\acc, (n, repl) => substParam n repl acc) l ps
 

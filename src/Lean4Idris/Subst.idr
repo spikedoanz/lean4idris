@@ -42,7 +42,7 @@ subst0 (NatLit k) _ = NatLit k
 subst0 (StringLit s) _ = StringLit s
 
 ||| Substitute universe level parameters in an expression
-public export
+public export covering
 substLevelParams : List (Name, Level) -> Expr n -> Expr n
 substLevelParams ps (BVar i) = BVar i
 substLevelParams ps (Sort l) = Sort (substParams ps l)
@@ -60,7 +60,7 @@ substLevelParams ps (StringLit s) = StringLit s
 
 ||| Safely substitute universe level parameters with occur check
 ||| Returns Nothing if any substitution would create a cycle
-public export
+public export covering
 substLevelParamsSafe : List (Name, Level) -> Expr n -> Maybe (Expr n)
 substLevelParamsSafe ps (BVar i) = Just (BVar i)
 substLevelParamsSafe ps (Sort l) = Sort <$> substParamsSafe ps l
@@ -79,14 +79,14 @@ substLevelParamsSafe ps (StringLit s) = Just (StringLit s)
 
 ||| Instantiate universe level parameters from a list
 ||| Given param names and corresponding level values, substitute them
-public export
+public export covering
 instantiateLevelParams : List Name -> List Level -> Expr n -> Expr n
 instantiateLevelParams names levels e =
   substLevelParams (zip names levels) e
 
 ||| Safely instantiate universe level parameters with occur check
 ||| Returns Nothing if any substitution would create a cycle
-public export
+public export covering
 instantiateLevelParamsSafe : List Name -> List Level -> Expr n -> Maybe (Expr n)
 instantiateLevelParamsSafe names levels e =
   substLevelParamsSafe (zip names levels) e
@@ -151,3 +151,13 @@ substAll args e = goSubstAll 0 (toList args) (believe_me e)
 covering export
 subst0Single : Expr 1 -> ClosedExpr -> ClosedExpr
 subst0Single e arg = goSubstAll 0 [arg] (believe_me e)
+
+||| Generalized version of subst0Single that works at any scope depth.
+||| Given (Expr (S n)) and (Expr n), substitutes the outermost bound variable.
+||| This is useful for beta reduction in open contexts.
+|||
+||| Uses believe_me internally since we just need to substitute BVar 0
+||| (at all depths) with the argument, treating all other vars as free.
+covering export
+subst0SingleN : {n : Nat} -> Expr (S n) -> Expr n -> Expr n
+subst0SingleN body arg = believe_me (goSubstAll 0 [believe_me arg] (believe_me body))

@@ -299,6 +299,7 @@ getDeclValue _ = Nothing  -- Axioms, inductives, etc. don't have values to unfol
 
 ||| Try to unfold a constant reference
 ||| Returns the unfolded value with universe levels instantiated
+covering
 unfoldConst : TCEnv -> Name -> List Level -> Maybe ClosedExpr
 unfoldConst env name levels = do
   decl <- lookupDecl name env
@@ -320,6 +321,7 @@ getAppConst e = go e []
     go _ _ = Nothing
 
 ||| Try to unfold the head of an expression (delta reduction)
+covering
 unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 unfoldHead env e =
   case getAppConst e of
@@ -407,6 +409,7 @@ getNthPiDomSubst _ _ _ = Nothing
 ||| Try iota reduction on a recursor application
 ||| If the expression is `Rec.rec params motives minors indices (Ctor args)`,
 ||| reduce it using the matching recursor rule.
+covering
 tryIotaReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryIotaReduction env e whnfStep = do
   -- Check if head is a recursor
@@ -998,6 +1001,92 @@ getProjType env structName idx structParams = do
   ctor <- getStructCtor env structName
   getNthPiDomSubst (numParams + idx) structParams ctor.type
 
+||| Deep normalization of types - normalizes under binders.
+||| Used for type comparison when types may have beta redexes in nested positions.
+|||
+||| For example, normalizes:
+|||   (val : Nat) -> (isLt : ...) -> ((fun (t : Fin n) => Sort u) (Fin.mk n val isLt))
+||| to:
+|||   (val : Nat) -> (isLt : ...) -> Sort u
+|||
+||| This is necessary for type comparison when one type has unreduced
+||| beta redexes nested inside Pi types.
+|||
+||| Uses a generic version that works on any expression with n free variables.
+-- Beta reduce an application if possible (works on any Expr n)
+covering
+betaReduceN : {n : Nat} -> Expr n -> Maybe (Expr n)
+betaReduceN (App (Lam _ _ _ body) arg) = Just (subst0SingleN body arg)
+betaReduceN _ = Nothing
+
+-- For open expressions (under binders), we can only do beta reduction
+-- since whnf requires closed expressions
+covering
+normalizeTypeOpen : {n : Nat} -> Expr n -> TC (Expr n)
+normalizeTypeOpen e = case betaReduceN e of
+  Just e' => normalizeTypeOpen e'
+  Nothing => case e of
+    Pi name bi dom cod => do
+      dom' <- normalizeTypeOpen dom
+      cod' <- normalizeTypeOpen cod
+      Right (Pi name bi dom' cod')
+    Lam name bi ty body => do
+      ty' <- normalizeTypeOpen ty
+      body' <- normalizeTypeOpen body
+      Right (Lam name bi ty' body')
+    App f arg => do
+      f' <- normalizeTypeOpen f
+      arg' <- normalizeTypeOpen arg
+      let app = App f' arg'
+      case betaReduceN app of
+        Just reduced => normalizeTypeOpen reduced
+        Nothing => Right app
+    Let name ty val body => normalizeTypeOpen (subst0SingleN body val)
+    Proj n i e => do
+      e' <- normalizeTypeOpen e
+      Right (Proj n i e')
+    Sort l => Right (Sort (simplify l))
+    e => Right e
+
+||| Deep normalization for closed expressions
+||| Recursively normalizes under binders using whnf at each level
+covering
+normalizeType : TCEnv -> ClosedExpr -> TC ClosedExpr
+normalizeType env e = do
+  -- First whnf at top level (handles delta, iota, beta)
+  e' <- whnf env e
+  -- Then recurse into subexpressions
+  normalizeDeep e'
+  where
+    covering
+    normalizeDeep : ClosedExpr -> TC ClosedExpr
+    normalizeDeep (Pi name bi dom cod) = do
+      dom' <- normalizeType env dom
+      -- For codomain, we need to handle it carefully since it has a bound var
+      -- We can still recursively normalize since normalizeType handles whnf
+      cod' <- normalizeTypeOpen cod
+      Right (Pi name bi dom' cod')
+    normalizeDeep (Lam name bi ty body) = do
+      ty' <- normalizeType env ty
+      body' <- normalizeTypeOpen body
+      Right (Lam name bi ty' body')
+    normalizeDeep (App f arg) = do
+      -- App after whnf means no beta/delta/iota at head, so just normalize subterms
+      f' <- normalizeType env f
+      arg' <- normalizeType env arg
+      Right (App f' arg')
+    normalizeDeep (Let name ty val body) = do
+      -- Let should have been reduced by whnf, but normalize subterms anyway
+      ty' <- normalizeType env ty
+      val' <- normalizeType env val
+      body' <- normalizeTypeOpen body
+      Right (Let name ty' val' body')
+    normalizeDeep (Proj n i e) = do
+      e' <- normalizeType env e
+      Right (Proj n i e')
+    normalizeDeep (Sort l) = Right (Sort (simplify l))
+    normalizeDeep e = Right e  -- Const, BVar, NatLit, StringLit
+
 mutual
   ||| Infer the type of a closed expression.
   ||| Returns the updated environment (with any new placeholders) and the type.
@@ -1040,19 +1129,22 @@ mutual
   inferTypeE env (App f arg) = do
     (env1, fTy) <- inferTypeE env f
     (_, _, dom, cod) <- ensurePi env1 fTy
-    -- Verify argument type matches domain (basic check - full isDefEq requires mutual recursion)
+    -- Verify argument type matches domain
     (env2, argTy) <- inferTypeE env1 arg
-    argTy' <- whnf env2 argTy
-    dom' <- whnf env2 dom
-    -- Simple structural equality after reduction
+    -- First whnf to unfold constants like outParam, then normalizeType for nested beta
+    argTy1 <- whnf env2 argTy
+    argTy' <- normalizeType env2 argTy1
+    dom1 <- whnf env2 dom
+    dom' <- normalizeType env2 dom1
     if argTy' == dom'
       then do
         let resultTy = subst0Single cod arg
         -- Reduce the result type to handle beta redexes like ((fun _ => C x) y)
         resultTy' <- whnf env2 resultTy
         Right (env2, resultTy')
-      else debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom=" ++ show dom ++ "\n  dom'=" ++ show dom' ++ "\n  argTy=" ++ show argTy ++ "\n  argTy'=" ++ show argTy') $
-           Left (AppTypeMismatch dom' argTy')
+      else do
+        debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom=" ++ show dom ++ "\n  dom'=" ++ show dom' ++ "\n  argTy=" ++ show argTy ++ "\n  argTy'=" ++ show argTy') $
+          Left (AppTypeMismatch dom' argTy')
 
   -- Lam: delegate to inferTypeOpenE which properly handles the body
   inferTypeE env (Lam name bi ty body) = do

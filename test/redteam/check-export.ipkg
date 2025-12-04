@@ -1,0 +1,8 @@
+package lean4idris-check-export
+version = 0.1.0
+
+depends = lean4idris
+
+main = CheckExport
+executable = "check-export"
+sourcedir = "."

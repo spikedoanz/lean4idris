@@ -13,6 +13,7 @@ import Data.Fin
 import Data.Vect
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.DefEq
 
 %default total
 
@@ -114,31 +115,35 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
 
   ||| Application rule (App)
   |||
-  |||   Γ ⊢ f : (x : A) → B    Γ ⊢ a : A
-  ||| ─────────────────────────────────────
+  |||   Γ ⊢ f : (x : A) → B    Γ ⊢ a : A    Γ, x:A ⊢ B : Type l
+  ||| ───────────────────────────────────────────────────────────
   |||   Γ ⊢ f a : B[x := a]
   |||
   ||| Applying a function to an argument substitutes the argument
-  ||| into the codomain type.
+  ||| into the codomain type. We require the codomain to be well-typed
+  ||| to enable the substitution lemma for typeOfType.
   ||| All parameters are explicit to allow pattern matching access.
-  TApp : (dom : Expr n) -> (cod : Expr (S n)) -> (f : Expr n) -> (arg : Expr n)
+  TApp : (l : Level) -> (dom : Expr n) -> (cod : Expr (S n)) -> (f : Expr n) -> (arg : Expr n)
       -> HasType ctx f (Pi dom cod)
       -> HasType ctx arg dom
+      -> HasType (Extend ctx dom) cod (Sort l)
       -> HasType ctx (App f arg) (subst0 cod arg)
 
   ||| Let rule (Let)
   |||
-  |||   Γ ⊢ A : Type l    Γ ⊢ v : A    Γ, x:A ⊢ e : B
-  ||| ──────────────────────────────────────────────────
+  |||   Γ ⊢ A : Type l₁    Γ ⊢ v : A    Γ, x:A ⊢ e : B    Γ, x:A ⊢ B : Type l₂
+  ||| ──────────────────────────────────────────────────────────────────────────
   |||   Γ ⊢ let x : A = v in e : B[x := v]
   |||
   ||| Let bindings have types that account for the substitution.
+  ||| We require bodyTy to be well-typed for the substitution lemma.
   ||| All parameters are explicit to allow pattern matching access.
-  TLet : (l : Level)
+  TLet : (l1 : Level) -> (l2 : Level)
       -> (ty : Expr n) -> (val : Expr n) -> (body : Expr (S n)) -> (bodyTy : Expr (S n))
-      -> HasType ctx ty (Sort l)
+      -> HasType ctx ty (Sort l1)
       -> HasType ctx val ty
       -> HasType (Extend ctx ty) body bodyTy
+      -> HasType (Extend ctx ty) bodyTy (Sort l2)
       -> HasType ctx (Let ty val body) (subst0 bodyTy val)
 
   ||| Conversion rule (Conv)
@@ -148,12 +153,11 @@ data HasType : Ctx n -> Expr n -> Expr n -> Type where
   |||   Γ ⊢ e : B
   |||
   ||| If two types are definitionally equal, we can convert between them.
-  ||| Note: DefEq is defined in a separate module to avoid circularity.
   ||| All parameters are explicit to allow pattern matching access.
   TConv : (l : Level)
        -> (e : Expr n) -> (ty1 : Expr n) -> (ty2 : Expr n)
        -> HasType ctx e ty1
-       -> ty1 = ty2  -- Simplified: using propositional equality
+       -> DefEq ty1 ty2
        -> HasType ctx ty2 (Sort l)
        -> HasType ctx e ty2
 
@@ -184,11 +188,19 @@ typeOfType (TLam l ty body bodyTy tyWf bodyWf) =
   let (l2 ** bodyTyWf) = typeOfType bodyWf
   in (lmax l l2 ** TPi l l2 ty bodyTy tyWf bodyTyWf)
 -- TApp: App f arg has type subst0 cod arg
--- Need: HasType ctx (subst0 cod arg) (Sort l)
--- This requires the substitution lemma applied to the well-typedness of cod
-typeOfType (TApp dom cod f arg fWf argWf) = ?typeOfType_TApp
+-- We have codWf : HasType (Extend ctx dom) cod (Sort l)
+-- By substitution lemma: HasType ctx (subst0 cod arg) (subst0 (Sort l) arg) = HasType ctx (subst0 cod arg) (Sort l)
+-- Note: substitutionLemma is defined in SubstitutionLemma.idr which imports Typing.idr,
+-- so we can't import it here. This case is filled in SubjectReduction where we have access.
+typeOfType (TApp l dom cod f arg fWf argWf codWf) =
+  -- subst0 (Sort l) arg = Sort l (Sort doesn't mention variables)
+  (l ** ?typeOfType_TApp_hole)
 -- TLet: Let ty val body has type subst0 bodyTy val
-typeOfType (TLet l ty val body bodyTy tyWf valWf bodyWf) = ?typeOfType_TLet
+-- We have bodyTyWf : HasType (Extend ctx ty) bodyTy (Sort l2)
+-- By substitution lemma: HasType ctx (subst0 bodyTy val) (Sort l2)
+-- Same circular dependency as TApp.
+typeOfType (TLet l1 l2 ty val body bodyTy tyWf valWf bodyWf bodyTyWf) =
+  (l2 ** ?typeOfType_TLet_hole)
 -- TConv: e has type ty2, which has type Sort l (given as tyWf)
 typeOfType (TConv l e ty1 ty2 eWf eq tyWf) = (l ** tyWf)
 

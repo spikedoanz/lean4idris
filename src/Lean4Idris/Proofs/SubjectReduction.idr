@@ -16,6 +16,7 @@ import Lean4Idris.Proofs.Reduction
 import Lean4Idris.Proofs.Weakening
 import Lean4Idris.Proofs.SubstitutionLemma
 import Lean4Idris.Proofs.DefEq
+import Lean4Idris.Proofs.CtxConversion
 
 %default total
 
@@ -29,7 +30,7 @@ import Lean4Idris.Proofs.DefEq
 |||
 ||| Proof by induction on the reduction step.
 public export
-subjectReduction : {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
+subjectReduction : {n : Nat} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
                 -> HasType ctx e ty
                 -> Step e e'
                 -> HasType ctx e' ty
@@ -56,8 +57,14 @@ subjectReduction : {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr 
 -- By the substitution lemma:
 --   ctx ⊢ b[x := a] : B[x := a]  ✓
 
-subjectReduction (TApp (TLam tyWf bodyTyping) argTyping) SBeta =
+-- Case when function is directly a TLam
+subjectReduction (TApp l ty cod (Lam ty body) arg (TLam _ _ _ _ tyWf bodyTyping) argTyping codWf) SBeta =
   substitutionLemma bodyTyping argTyping
+
+-- Case when function is typed via TConv (e.g., (Lam ..) : (converted Pi type))
+-- This requires inversion through the conversion, which is complex
+subjectReduction (TApp l dom cod (Lam ty body) arg (TConv _ _ _ _ fTyping eq tyWf2) argTyping codWf) SBeta =
+  ?subjectReduction_SBeta_TConv_hole
 
 ------------------------------------------------------------------------
 -- ζ-reduction: let x = v in e → e[x := v]
@@ -72,7 +79,7 @@ subjectReduction (TApp (TLam tyWf bodyTyping) argTyping) SBeta =
 -- By substitution lemma:
 --   ctx ⊢ e[x := v] : B[x := v]  ✓
 
-subjectReduction (TLet tyWf valTyping bodyTyping) SZeta =
+subjectReduction (TLet l1 l2 ty val body bodyTy tyWf valTyping bodyTyping bodyTyWf) SZeta =
   substitutionLemma bodyTyping valTyping
 
 ------------------------------------------------------------------------
@@ -94,9 +101,9 @@ subjectReduction (TLet tyWf valTyping bodyTyping) SZeta =
 -- Since f : (x:A) → B and f → f', by IH, f' : (x:A) → B.
 -- Then TApp gives us ctx ⊢ f' x : B[x := arg].
 
-subjectReduction (TApp fTyping argTyping) (SAppL fStep) =
+subjectReduction (TApp l dom cod f arg fTyping argTyping codWf) (SAppL fStep) =
   let fTyping' = subjectReduction fTyping fStep
-  in TApp fTyping' argTyping
+  in TApp l dom cod _ arg fTyping' argTyping codWf
 
 ------------------------------------------------------------------------
 -- Congruence: reduce argument in application
@@ -121,27 +128,32 @@ subjectReduction (TApp fTyping argTyping) (SAppL fStep) =
 --
 -- For now, we use a hole - a full proof requires defining ≡.
 
-subjectReduction (TApp {dom} {cod} fTyping argTyping) (SAppR argStep) =
+-- SAppR uses the step arg -> arg' which we bind via {x'=arg'}
+subjectReduction (TApp l dom cod f arg fTyping argTyping codWf) (SAppR {x'=arg'} argStep) =
   let argTyping' = subjectReduction argTyping argStep
-      -- TApp fTyping argTyping' : HasType ctx (App f arg') (subst0 cod arg')
+      -- TApp fTyping argTyping' codWf : HasType ctx (App f arg') (subst0 cod arg')
       -- We need: HasType ctx (App f arg') (subst0 cod arg)
       -- Since arg → arg', we have DefEq arg arg' by DEStep
-      -- Thus DefEq (subst0 cod arg) (subst0 cod arg') by defEqSubst0Arg
+      -- Thus DefEq (subst0 cod arg') (subst0 cod arg) by DESym (defEqSubst0Arg ...)
       tyEq : DefEq (subst0 cod arg') (subst0 cod arg)
       tyEq = DESym (defEqSubst0Arg cod (DEStep argStep))
       appTyping : HasType ctx (App f arg') (subst0 cod arg')
-      appTyping = TApp fTyping argTyping'
-  -- To use TConv, we need a proof that subst0 cod arg is well-typed.
-  -- This requires the "type of type" lemma. For now we use a hole.
-  in ?appR_needs_tyWf  -- TConv appTyping tyEq ?tyWf
+      appTyping = TApp l dom cod f arg' fTyping argTyping' codWf
+      -- Use typeOfType to get the well-typedness of subst0 cod arg
+      -- We have codWf : HasType (Extend ctx dom) cod (Sort l)
+      -- By substitution lemma with argTyping : HasType ctx arg dom
+      -- We get: HasType ctx (subst0 cod arg) (Sort l)
+      tyWf : HasType ctx (subst0 cod arg) (Sort l)
+      tyWf = substitutionLemma codWf argTyping
+  in TConv l (App f arg') (subst0 cod arg') (subst0 cod arg) appTyping tyEq tyWf
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in lambda body
 ------------------------------------------------------------------------
 
-subjectReduction (TLam tyWf bodyTyping) (SLamBody bodyStep) =
+subjectReduction (TLam l ty body bodyTy tyWf bodyTyping) (SLamBody bodyStep) =
   let bodyTyping' = subjectReduction bodyTyping bodyStep
-  in TLam tyWf bodyTyping'
+  in TLam l ty _ bodyTy tyWf bodyTyping'
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in lambda type annotation
@@ -152,83 +164,65 @@ subjectReduction (TLam tyWf bodyTyping) (SLamBody bodyStep) =
 --
 -- Hmm, this also needs conversion: (x:A) → B ≡ (x:A') → B when A ≡ A'.
 
-subjectReduction (TLam {ty} {ty'} {body} {bodyTy} tyWf bodyTyping) (SLamTy tyStep) =
-  -- ty → ty', so TLam gives us Lam ty' body : Pi ty' bodyTy
-  -- But we need: Lam ty' body : Pi ty bodyTy
-  -- The result types Pi ty bodyTy and Pi ty' bodyTy are DefEq
-  let tyWf' = subjectReduction tyWf tyStep
-      -- We need bodyTyping' : HasType (Extend ctx ty') body bodyTy
-      -- Currently we have bodyTyping : HasType (Extend ctx ty) body bodyTy
-      -- The contexts are CtxEq since ty ≡ ty'
-      ctxEq : CtxEq (Extend ctx ty) (Extend ctx ty')
-      ctxEq = CEExtend (ctxEqRefl ctx) (DEStep tyStep)
-      (bodyTy'' ** (bodyTyping', bodyTyEq)) = ctxConversion ctxEq bodyTyping
-      -- Now we can form TLam with ty' in the annotation
-      -- But the bodyTy might have changed... we need the original bodyTy
-      -- This is getting complicated. Let's use a hole for now.
-  in ?lamTy_hole
+-- SLamTy case requires ctxConversion which has holes
+-- Hole this out for now
+subjectReduction (TLam l ty body bodyTy tyWf bodyTyping) (SLamTy tyStep) =
+  ?subjectReduction_SLamTy_hole
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in Pi domain
 ------------------------------------------------------------------------
 
-subjectReduction (TPi {dom} {dom'} {cod} domWf codWf) (SPiDom domStep) =
-  let domWf' = subjectReduction domWf domStep
-      -- codWf : HasType (Extend ctx dom) cod (Sort l2)
-      -- We need: HasType (Extend ctx dom') cod (Sort l2)
-      ctxEq : CtxEq (Extend ctx dom) (Extend ctx dom')
-      ctxEq = CEExtend (ctxEqRefl ctx) (DEStep domStep)
-      (codTy' ** (codWf', codTyEq)) = ctxConversion ctxEq codWf
-      -- codTy' should be Sort l2 (up to DefEq)
-      -- But TPi requires exactly Sort l2
-      -- Result type Sort (lmax l1 l2) is unchanged
-  in ?piDom_hole
+-- SPiDom case requires ctxConversion which has holes
+-- Hole this out for now
+subjectReduction (TPi l1 l2 dom cod domWf codWf) (SPiDom domStep) =
+  ?subjectReduction_SPiDom_hole
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in Pi codomain
 ------------------------------------------------------------------------
 
-subjectReduction (TPi domWf codWf) (SPiCod codStep) =
+subjectReduction (TPi l1 l2 dom cod domWf codWf) (SPiCod codStep) =
   let codWf' = subjectReduction codWf codStep
-  in TPi domWf codWf'
+  in TPi l1 l2 dom _ domWf codWf'
 
 ------------------------------------------------------------------------
 -- Congruence: reduce in let
 ------------------------------------------------------------------------
 
-subjectReduction (TLet {ty} {ty'} tyWf valTyping bodyTyping) (SLetTy tyStep) =
-  let tyWf' = subjectReduction tyWf tyStep
-      -- valTyping : HasType ctx val ty, but now type annotation is ty'
-      -- bodyTyping : HasType (Extend ctx ty) body bodyTy
-      -- Need context conversion for body
-      ctxEq : CtxEq (Extend ctx ty) (Extend ctx ty')
-      ctxEq = CEExtend (ctxEqRefl ctx) (DEStep tyStep)
-      (bodyTy' ** (bodyTyping', bodyTyEq)) = ctxConversion ctxEq bodyTyping
-      -- Also need to convert valTyping to ty'
-      -- This requires TConv with ty ≡ ty'
-  in ?letTy_hole
+-- SLetTy case requires ctxConversion which has holes
+-- Hole this out for now
+subjectReduction (TLet l1 l2 ty val body bodyTy tyWf valTyping bodyTyping bodyTyWf) (SLetTy tyStep) =
+  ?subjectReduction_SLetTy_hole
 
-subjectReduction (TLet {val} {val'} {bodyTy} tyWf valTyping bodyTyping) (SLetVal valStep) =
+-- SLetVal uses the step val -> val' which we bind via {val'=val'}
+subjectReduction (TLet l1 l2 ty val body bodyTy tyWf valTyping bodyTyping bodyTyWf) (SLetVal {val'=val'} valStep) =
   let valTyping' = subjectReduction valTyping valStep
       -- Result type is subst0 bodyTy val, but we get subst0 bodyTy val'
       -- These are DefEq since val ≡ val'
       tyEq : DefEq (subst0 bodyTy val') (subst0 bodyTy val)
       tyEq = DESym (defEqSubst0Arg bodyTy (DEStep valStep))
       letTyping : HasType ctx (Let ty val' body) (subst0 bodyTy val')
-      letTyping = TLet tyWf valTyping' bodyTyping
-  in ?letVal_hole  -- Need TConv with tyEq
+      letTyping = TLet l1 l2 ty val' body bodyTy tyWf valTyping' bodyTyping bodyTyWf
+      -- Well-typedness of the result type
+      -- bodyTyWf : HasType (Extend ctx ty) bodyTy (Sort l2)
+      -- valTyping : HasType ctx val ty
+      -- By substitution lemma: HasType ctx (subst0 bodyTy val) (Sort l2)
+      resultTyWf : HasType ctx (subst0 bodyTy val) (Sort l2)
+      resultTyWf = substitutionLemma bodyTyWf valTyping
+  in TConv l2 (Let ty val' body) (subst0 bodyTy val') (subst0 bodyTy val) letTyping tyEq resultTyWf
 
-subjectReduction (TLet tyWf valTyping bodyTyping) (SLetBody bodyStep) =
+subjectReduction (TLet l1 l2 ty val body bodyTy tyWf valTyping bodyTyping bodyTyWf) (SLetBody bodyStep) =
   let bodyTyping' = subjectReduction bodyTyping bodyStep
-  in TLet tyWf valTyping bodyTyping'
+  in TLet l1 l2 ty val _ bodyTy tyWf valTyping bodyTyping' bodyTyWf
 
 ------------------------------------------------------------------------
 -- Conversion cases
 ------------------------------------------------------------------------
 
-subjectReduction (TConv eTyping eq tyWf) step =
+subjectReduction (TConv l e ty1 ty2 eTyping eq tyWf) step =
   let eTyping' = subjectReduction eTyping step
-  in TConv eTyping' eq tyWf
+  in TConv l _ ty1 ty2 eTyping' eq tyWf
 
 ------------------------------------------------------------------------
 -- Multi-Step Subject Reduction
@@ -237,14 +231,19 @@ subjectReduction (TConv eTyping eq tyWf) step =
 ||| Subject reduction extends to multiple steps.
 |||
 ||| If Γ ⊢ e : T and e →* e', then Γ ⊢ e' : T.
+|||
+||| Note: The intermediate expression in Trans is not accessible in Idris 2.
+||| We need a helper function that takes the intermediate expression explicitly.
 public export
-subjectReductionMulti : HasType ctx e ty
+subjectReductionMulti : {n : Nat} -> {ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> {ty : Expr n}
+                     -> HasType ctx e ty
                      -> Steps e e'
                      -> HasType ctx e' ty
 subjectReductionMulti eTyping Refl = eTyping
-subjectReductionMulti eTyping (Trans step rest) =
-  let eTyping' = subjectReduction eTyping step
-  in subjectReductionMulti eTyping' rest
+subjectReductionMulti {n} {ctx} {e} {ty} eTyping (Trans step rest) =
+  -- Idris 2 implicit accessibility issue: the intermediate expression from Trans
+  -- is not accessible. We hole this out for now.
+  ?subjectReductionMulti_Trans_hole
 
 ------------------------------------------------------------------------
 -- What's Missing for a Complete Proof

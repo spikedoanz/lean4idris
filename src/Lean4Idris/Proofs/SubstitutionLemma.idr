@@ -10,6 +10,7 @@ module Lean4Idris.Proofs.SubstitutionLemma
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.DefEq
 import Lean4Idris.Proofs.Typing
 import Lean4Idris.Proofs.Weakening
 
@@ -143,9 +144,10 @@ substitutionGeneral {s} sWf (TLam l ty body bodyTy tyWf bodyWf) =
   in TLam l (subst s ty) (subst (liftSub s) body) (subst (liftSub s) bodyTy) tyWf' bodyWf'
 
 -- Application case: substitute in function and argument
-substitutionGeneral {s} sWf (TApp dom cod f arg fWf argWf) =
+substitutionGeneral {s} sWf (TApp l dom cod f arg fWf argWf codWf) =
   let fWf' = substitutionGeneral sWf fWf
       argWf' = substitutionGeneral sWf argWf
+      codWf' = substitutionGeneral (liftSubWfHelper sWf) codWf
       -- fWf' : HasType ctx' (subst s f) (subst s (Pi dom cod)) = HasType ctx' (subst s f) (Pi (subst s dom) (subst (liftSub s) cod))
       -- argWf' : HasType ctx' (subst s arg) (subst s dom)
       -- TApp gives: HasType ctx' (App (subst s f) (subst s arg)) (subst0 (subst (liftSub s) cod) (subst s arg))
@@ -153,22 +155,24 @@ substitutionGeneral {s} sWf (TApp dom cod f arg fWf argWf) =
       --     = HasType ctx' (App (subst s f) (subst s arg)) (subst s (subst0 cod arg))
       -- By substSubst0: subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)
   in rewrite substSubst0 s cod arg in
-     TApp (subst s dom) (subst (liftSub s) cod) (subst s f) (subst s arg) fWf' argWf'
+     TApp l (subst s dom) (subst (liftSub s) cod) (subst s f) (subst s arg) fWf' argWf' codWf'
 
 -- Let case: similar to App
-substitutionGeneral {s} sWf (TLet l ty val body bodyTy tyWf valWf bodyWf) =
+substitutionGeneral {s} sWf (TLet l1 l2 ty val body bodyTy tyWf valWf bodyWf bodyTyWf) =
   let tyWf' = substitutionGeneral sWf tyWf
       valWf' = substitutionGeneral sWf valWf
       bodyWf' = substitutionGeneral (liftSubWfHelper sWf) bodyWf
+      bodyTyWf' = substitutionGeneral (liftSubWfHelper sWf) bodyTyWf
   in rewrite substSubst0 s bodyTy val in
-     TLet l (subst s ty) (subst s val) (subst (liftSub s) body) (subst (liftSub s) bodyTy)
-          tyWf' valWf' bodyWf'
+     TLet l1 l2 (subst s ty) (subst s val) (subst (liftSub s) body) (subst (liftSub s) bodyTy)
+          tyWf' valWf' bodyWf' bodyTyWf'
 
 -- Conversion case
 substitutionGeneral {s} sWf (TConv l e ty1 ty2 eWf eq tyWf) =
   let eWf' = substitutionGeneral sWf eWf
       tyWf' = substitutionGeneral sWf tyWf
-  in TConv l (subst s e) (subst s ty1) (subst s ty2) eWf' (cong (subst s) eq) tyWf'
+      eq' = defEqSubst s eq
+  in TConv l (subst s e) (subst s ty1) (subst s ty2) eWf' eq' tyWf'
 
 ------------------------------------------------------------------------
 -- The Substitution Lemma (Single Variable Version)

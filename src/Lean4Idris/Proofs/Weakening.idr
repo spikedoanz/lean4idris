@@ -13,6 +13,7 @@ module Lean4Idris.Proofs.Weakening
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.DefEq
 import Lean4Idris.Proofs.Typing
 
 %default total
@@ -116,30 +117,35 @@ renamingPreservesTyping {r} renWf (TLam l ty body bodyTy tyWf bodyWf) =
   in TLam l (rename r ty) (rename (liftRen r) body) (rename (liftRen r) bodyTy) tyWf' bodyWf'
 
 -- Application case: rename function and argument, use renameSubst0 for result type
-renamingPreservesTyping {r} renWf (TApp dom cod f arg fWf argWf) =
+renamingPreservesTyping {r} renWf (TApp l dom cod f arg fWf argWf codWf) =
   let fWf' = renamingPreservesTyping renWf fWf
       argWf' = renamingPreservesTyping renWf argWf
+      -- codWf : HasType (Extend ctx dom) cod (Sort l)
+      -- We need: HasType (Extend ctx' (rename r dom)) (rename (liftRen r) cod) (Sort l)
+      codWf' = renamingPreservesTyping (liftRenWfHelper renWf) codWf
       -- Goal: HasType ctx' (App (rename r f) (rename r arg)) (rename r (subst0 cod arg))
       -- Have: TApp fWf' argWf' : HasType ctx' (App ...) (subst0 (rename (liftRen r) cod) (rename r arg))
       -- By renameSubst0: rename r (subst0 cod arg) = subst0 (rename (liftRen r) cod) (rename r arg)
       -- Rewrite goal: rename r (subst0 ...) --> subst0 (rename ...) ...
   in rewrite renameSubst0 r cod arg in
-     TApp (rename r dom) (rename (liftRen r) cod) (rename r f) (rename r arg) fWf' argWf'
+     TApp l (rename r dom) (rename (liftRen r) cod) (rename r f) (rename r arg) fWf' argWf' codWf'
 
 -- Let case: similar to App
-renamingPreservesTyping {r} renWf (TLet l ty val body bodyTy tyWf valWf bodyWf) =
+renamingPreservesTyping {r} renWf (TLet l1 l2 ty val body bodyTy tyWf valWf bodyWf bodyTyWf) =
   let tyWf' = renamingPreservesTyping renWf tyWf
       valWf' = renamingPreservesTyping renWf valWf
       bodyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyWf
+      bodyTyWf' = renamingPreservesTyping (liftRenWfHelper renWf) bodyTyWf
   in rewrite renameSubst0 r bodyTy val in
-     TLet l (rename r ty) (rename r val) (rename (liftRen r) body) (rename (liftRen r) bodyTy)
-          tyWf' valWf' bodyWf'
+     TLet l1 l2 (rename r ty) (rename r val) (rename (liftRen r) body) (rename (liftRen r) bodyTy)
+          tyWf' valWf' bodyWf' bodyTyWf'
 
 -- Conversion case: rename both the term and type derivations
 renamingPreservesTyping {r} renWf (TConv l e ty1 ty2 eWf eq tyWf) =
   let eWf' = renamingPreservesTyping renWf eWf
       tyWf' = renamingPreservesTyping renWf tyWf
-  in TConv l (rename r e) (rename r ty1) (rename r ty2) eWf' (cong (rename r) eq) tyWf'
+      eq' = defEqRename r eq
+  in TConv l (rename r e) (rename r ty1) (rename r ty2) eWf' eq' tyWf'
 
 ------------------------------------------------------------------------
 -- Shift Renaming Preserves Variable Types

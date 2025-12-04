@@ -27,6 +27,15 @@ modules = Lean4Idris
         , Lean4Idris.Export.Lexer
         , Lean4Idris.Export.Parser
         , Lean4Idris.Pretty
+        , Lean4Idris.Proofs.Syntax
+        , Lean4Idris.Proofs.Substitution
+        , Lean4Idris.Proofs.Reduction
+        , Lean4Idris.Proofs.DefEq
+        , Lean4Idris.Proofs.Typing
+        , Lean4Idris.Proofs.Weakening
+        , Lean4Idris.Proofs.SubstitutionLemma
+        , Lean4Idris.Proofs.CtxConversion
+        , Lean4Idris.Proofs.SubjectReduction
 
 -- main file (i.e. file to load at REPL)
 -- main =

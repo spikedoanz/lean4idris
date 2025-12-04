@@ -480,6 +480,112 @@ testProofIrrelevance = do
     Left err => putStrLn $ "  error: " ++ show err
     Right b => putStrLn $ "  result: " ++ show b ++ " (expected: False)"
 
+||| Test quotient type reduction
+testQuotient : IO ()
+testQuotient = do
+  putStrLn "\n=== Testing Quotient Reduction ==="
+
+  -- Set up environment with quotient types enabled
+  -- We need:
+  -- - A type α (e.g., Nat)
+  -- - A relation r : α → α → Prop
+  -- - A type β (result type)
+  -- - A function f : α → β
+  -- - A proof h that f respects r
+
+  let natName = Str "Nat" Anonymous
+  let nat : ClosedExpr = Const natName []
+  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+
+  -- r : Nat → Nat → Prop (just an axiom for testing)
+  let rName = Str "r" Anonymous
+  let rType : ClosedExpr = Pi (Str "_" Anonymous) Default nat
+                             (Pi (Str "_" Anonymous) Default (weaken1 nat)
+                               (Sort Zero))
+  let r : ClosedExpr = Const rName []
+  let rDecl = AxiomDecl rName rType []
+
+  -- β : Type
+  let betaName = Str "β" Anonymous
+  let beta : ClosedExpr = Const betaName []
+  let betaDecl = AxiomDecl betaName (Sort (Succ Zero)) []
+
+  -- f : Nat → β
+  let fName = Str "f" Anonymous
+  let fType : ClosedExpr = Pi (Str "_" Anonymous) Default nat (weaken1 beta)
+  let f : ClosedExpr = Const fName []
+  let fDecl = AxiomDecl fName fType []
+
+  -- h : ∀ a b, r a b → f a = f b (proof that f respects r)
+  -- We don't need the actual type, just a proof term
+  let hName = Str "h" Anonymous
+  let h : ClosedExpr = Const hName []
+  let hDecl = AxiomDecl hName (Sort Zero) []  -- placeholder type
+
+  -- a : Nat (a value to quotient)
+  let aName = Str "a" Anonymous
+  let a : ClosedExpr = Const aName []
+  let aDecl = AxiomDecl aName nat []
+
+  -- Build the environment with quotient enabled
+  let env0 = enableQuot emptyEnv
+  let env = addDecl aDecl $ addDecl hDecl $ addDecl fDecl $
+            addDecl betaDecl $ addDecl rDecl $ addDecl natDecl env0
+
+  -- Test 1: Quot.lift f h (Quot.mk r a) should reduce to f a
+  --
+  -- Quot.lift has signature: {α} {r} {β} f h q
+  -- So: Quot.lift nat r beta f h (Quot.mk nat r a)
+  --                 0   1   2  3 4         5
+  let quotMk : ClosedExpr = mkApp (Const (Str "mk" (Str "Quot" Anonymous)) [Succ Zero])
+                                  [nat, r, a]
+  let quotLift : ClosedExpr = mkApp (Const (Str "lift" (Str "Quot" Anonymous)) [Succ Zero, Succ Zero])
+                                    [nat, r, beta, f, h, quotMk]
+
+  putStrLn "Test 1: Quot.lift f h (Quot.mk r a) => f a"
+  putStrLn $ "  before: " ++ ppClosedExpr quotLift
+  case whnf env quotLift of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right result => do
+      let expected = App f a
+      putStrLn $ "  after:  " ++ ppClosedExpr result
+      putStrLn $ "  expected: " ++ ppClosedExpr expected
+      putStrLn $ "  correct: " ++ show (result == expected)
+
+  -- Test 2: Without quotInit, reduction should NOT happen
+  let envNoQuot = addDecl aDecl $ addDecl hDecl $ addDecl fDecl $
+                  addDecl betaDecl $ addDecl rDecl $ addDecl natDecl emptyEnv
+
+  putStrLn "\nTest 2: Without quotInit, Quot.lift should NOT reduce"
+  case whnf envNoQuot quotLift of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right result => do
+      putStrLn $ "  result: " ++ ppClosedExpr result
+      -- Should be unchanged (not reduced)
+      putStrLn $ "  unchanged: " ++ show (result == quotLift)
+
+  -- Test 3: Quot.ind reduction
+  -- Quot.ind has signature: {α} {r} {β : Quot r → Prop} h q
+  -- So: Quot.ind nat r motive h (Quot.mk nat r a)
+  --                 0   1     2 3         4
+  let motiveType : ClosedExpr = Sort Zero  -- placeholder for β
+  let indH : ClosedExpr = Const (Str "indH" Anonymous) []
+  let indHDecl = AxiomDecl (Str "indH" Anonymous) (Sort Zero) []
+  let envWithIndH = addDecl indHDecl env
+
+  let quotInd : ClosedExpr = mkApp (Const (Str "ind" (Str "Quot" Anonymous)) [Succ Zero])
+                                   [nat, r, motiveType, indH, quotMk]
+
+  putStrLn "\nTest 3: Quot.ind h (Quot.mk r a) => h a"
+  putStrLn $ "  before: " ++ ppClosedExpr quotInd
+  case whnf envWithIndH quotInd of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right result => do
+      let expected = App indH a
+      putStrLn $ "  after:  " ++ ppClosedExpr result
+      putStrLn $ "  expected: " ++ ppClosedExpr expected
+      putStrLn $ "  correct: " ++ show (result == expected)
+
 ||| Test parsing a real Lean export file
 testRealExport : IO ()
 testRealExport = do
@@ -527,6 +633,7 @@ main = do
   testIota
   testOpenInfer
   testProofIrrelevance
+  testQuotient
   testRealExport
 
   putStrLn "\n\nAll tests completed!"

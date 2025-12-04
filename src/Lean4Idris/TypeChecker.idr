@@ -29,11 +29,17 @@ public export
 record TCEnv where
   constructor MkTCEnv
   decls : SortedMap Name Declaration
+  quotInit : Bool  -- True if quotient types are initialized
 
 ||| Empty environment
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty
+emptyEnv = MkTCEnv empty False
+
+||| Enable quotient types in the environment
+public export
+enableQuot : TCEnv -> TCEnv
+enableQuot env = { quotInit := True } env
 
 ||| Add a declaration to the environment
 public export
@@ -331,6 +337,62 @@ tryProjReduction env (Proj structName idx struct) whnfStep = do
 tryProjReduction _ _ _ = Nothing
 
 ------------------------------------------------------------------------
+-- Quotient Reduction
+------------------------------------------------------------------------
+
+||| Canonical names for quotient primitives
+quotName : Name
+quotName = Str "Quot" Anonymous
+
+quotMkName : Name
+quotMkName = Str "mk" (Str "Quot" Anonymous)
+
+quotLiftName : Name
+quotLiftName = Str "lift" (Str "Quot" Anonymous)
+
+quotIndName : Name
+quotIndName = Str "ind" (Str "Quot" Anonymous)
+
+||| Try quotient reduction.
+|||
+||| Quot.lift reduces when applied to Quot.mk:
+|||   Quot.lift {α} {r} {β} f h (Quot.mk r a) → f a
+|||
+||| Quot.ind reduces similarly:
+|||   Quot.ind {α} {r} {β} h (Quot.mk r a) → h a
+|||
+||| Based on lean4lean's quotReduceRec.
+tryQuotReduction : ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryQuotReduction e whnfStep = do
+  let (head, args) = getAppSpine e
+  (fnName, _) <- getConstHead head
+  -- Quot.lift has 6 args: {α} {r} {β} f h q
+  -- mkPos = 5 (q), argPos = 3 (f)
+  -- Quot.ind has 5 args: {α} {r} {β} h q
+  -- mkPos = 4 (q), argPos = 3 (h)
+  (mkPos, argPos) <- the (Maybe (Nat, Nat)) $
+    if fnName == quotLiftName then Just (5, 3)
+    else if fnName == quotIndName then Just (4, 3)
+    else Nothing
+  -- Check we have enough arguments
+  guard (List.length args > mkPos)
+  -- Get the argument at mkPos and reduce to WHNF
+  mkArg <- listNth args mkPos
+  let mkArg' = iterWhnfStep whnfStep mkArg 100
+  -- Check if it's Quot.mk with 3 args: {α} r a
+  let (mkHead, mkArgs) = getAppSpine mkArg'
+  (mkName, _) <- getConstHead mkHead
+  guard (mkName == quotMkName && List.length mkArgs == 3)
+  -- Get the value 'a' from Quot.mk (last argument)
+  a <- listNth mkArgs 2
+  -- Get f or h from the original args
+  fOrH <- listNth args argPos
+  -- Result: f a (or h a) plus any remaining args after mkPos
+  let result = App fOrH a
+  let remainingArgs = listDrop (mkPos + 1) args
+  pure (mkApp result remainingArgs)
+
+------------------------------------------------------------------------
 -- WHNF (Weak Head Normal Form)
 ------------------------------------------------------------------------
 
@@ -342,6 +404,7 @@ tryProjReduction _ _ _ = Nothing
 ||| - Delta reduction: unfold constant definitions
 ||| - Iota reduction: reduce recursor applications when major premise is a constructor
 ||| - Projection reduction: Proj idx (Ctor args) → args[numParams + idx]
+||| - Quotient reduction: Quot.lift f h (Quot.mk r a) → f a
 |||
 ||| We use a fuel parameter to ensure termination.
 export
@@ -380,14 +443,18 @@ whnf env e = whnfFuel 1000 e
           case tryProjReduction env e whnfStepWithDelta of
             Just e' => whnfFuel k e'
             Nothing =>
-              -- Then try iota reduction (recursors)
-              case tryIotaReduction env e whnfStepWithDelta of
+              -- Then try quotient reduction (if enabled)
+              case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
                 Just e' => whnfFuel k e'
                 Nothing =>
-                  -- Then try delta reduction
-                  case unfoldHead env e of
+                  -- Then try iota reduction (recursors)
+                  case tryIotaReduction env e whnfStepWithDelta of
                     Just e' => whnfFuel k e'
-                    Nothing => Right e
+                    Nothing =>
+                      -- Then try delta reduction
+                      case unfoldHead env e of
+                        Just e' => whnfFuel k e'
+                        Nothing => Right e
 
 ||| WHNF without delta reduction (for internal use)
 ||| Used when we want to reduce but not unfold definitions

@@ -1,0 +1,16 @@
+0.0.0
+1 #NS 0 True
+2 #NS 1 intro
+3 #NS 0 thm1
+4 #NS 0 thm2
+5 #NS 0 bad
+0 #ES 0
+1 #EC 1
+2 #EC 2
+3 #EC 3
+4 #EC 4
+#IND 1 0 0 0 0 0 0 1 1 1 2
+#CTOR 2 1 1 0 0 0
+#THM 3 1 2 0
+#THM 4 1 2 0
+#DEF 5 1 3 A 0

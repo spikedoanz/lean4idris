@@ -892,3 +892,151 @@ hasType : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
 hasType env e expectedTy = do
   actualTy <- inferType env e
   isDefEq env actualTy expectedTy
+
+------------------------------------------------------------------------
+-- Declaration Validation
+------------------------------------------------------------------------
+
+||| Check that a name is not already declared in the environment
+export
+checkNameNotDeclared : TCEnv -> Name -> TC ()
+checkNameNotDeclared env name =
+  case lookupDecl name env of
+    Just _ => Left (OtherError $ "already declared: " ++ show name)
+    Nothing => Right ()
+
+||| Check for duplicate universe parameters
+export
+checkNoDuplicateUnivParams : List Name -> TC ()
+checkNoDuplicateUnivParams [] = Right ()
+checkNoDuplicateUnivParams (p :: ps) =
+  if elem p ps
+    then Left (OtherError $ "duplicate universe parameter: " ++ show p)
+    else checkNoDuplicateUnivParams ps
+
+||| Check that the type of an expression is a Sort (i.e., the expression is a type)
+export
+covering
+checkIsType : TCEnv -> ClosedExpr -> TC Level
+checkIsType env e = do
+  ty <- inferType env e
+  ensureSort env ty
+
+||| Validate an axiom declaration.
+|||
+||| Checks:
+||| 1. Name is not already declared
+||| 2. No duplicate universe parameters
+||| 3. Type is well-formed and is a type (has type Sort l)
+export
+covering
+checkAxiomDecl : TCEnv -> Name -> ClosedExpr -> List Name -> TC ()
+checkAxiomDecl env name ty levelParams = do
+  checkNameNotDeclared env name
+  checkNoDuplicateUnivParams levelParams
+  _ <- checkIsType env ty
+  Right ()
+
+||| Validate a definition declaration.
+|||
+||| Checks:
+||| 1. Name is not already declared
+||| 2. No duplicate universe parameters
+||| 3. Type is well-formed and is a type
+||| 4. Value is well-formed
+||| 5. Value's type is definitionally equal to declared type
+export
+covering
+checkDefDecl : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC ()
+checkDefDecl env name ty value levelParams = do
+  checkNameNotDeclared env name
+  checkNoDuplicateUnivParams levelParams
+  _ <- checkIsType env ty
+  valueTy <- inferType env value
+  eq <- isDefEq env valueTy ty
+  if eq
+    then Right ()
+    else Left (OtherError $ "definition type mismatch for " ++ show name)
+
+||| Validate a theorem declaration.
+|||
+||| Checks:
+||| 1. Name is not already declared
+||| 2. No duplicate universe parameters
+||| 3. Type is well-formed and is a Prop (has type Sort 0)
+||| 4. Value is well-formed
+||| 5. Value's type is definitionally equal to declared type
+export
+covering
+checkThmDecl : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC ()
+checkThmDecl env name ty value levelParams = do
+  checkNameNotDeclared env name
+  checkNoDuplicateUnivParams levelParams
+  tyLevel <- checkIsType env ty
+  -- Theorem type must be a Prop (Sort 0)
+  if simplify tyLevel /= Zero
+    then Left (OtherError $ "theorem type must be a Prop: " ++ show name)
+    else do
+      valueTy <- inferType env value
+      eq <- isDefEq env valueTy ty
+      if eq
+        then Right ()
+        else Left (OtherError $ "theorem proof type mismatch for " ++ show name)
+
+||| Validate and add an axiom to the environment
+export
+covering
+addAxiomChecked : TCEnv -> Name -> ClosedExpr -> List Name -> TC TCEnv
+addAxiomChecked env name ty levelParams = do
+  checkAxiomDecl env name ty levelParams
+  Right (addDecl (AxiomDecl name ty levelParams) env)
+
+||| Validate and add a definition to the environment
+export
+covering
+addDefChecked : TCEnv -> Name -> ClosedExpr -> ClosedExpr ->
+                ReducibilityHint -> Safety -> List Name -> TC TCEnv
+addDefChecked env name ty value hint safety levelParams = do
+  checkDefDecl env name ty value levelParams
+  Right (addDecl (DefDecl name ty value hint safety levelParams) env)
+
+||| Validate and add a theorem to the environment
+export
+covering
+addThmChecked : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC TCEnv
+addThmChecked env name ty value levelParams = do
+  checkThmDecl env name ty value levelParams
+  Right (addDecl (ThmDecl name ty value levelParams) env)
+
+||| Validate a declaration and add it to the environment
+export
+covering
+addDeclChecked : TCEnv -> Declaration -> TC TCEnv
+addDeclChecked env (AxiomDecl name ty levelParams) =
+  addAxiomChecked env name ty levelParams
+addDeclChecked env (DefDecl name ty value hint safety levelParams) =
+  addDefChecked env name ty value hint safety levelParams
+addDeclChecked env (ThmDecl name ty value levelParams) =
+  addThmChecked env name ty value levelParams
+addDeclChecked env (OpaqueDecl name ty value levelParams) = do
+  -- Same checks as definition
+  checkDefDecl env name ty value levelParams
+  Right (addDecl (OpaqueDecl name ty value levelParams) env)
+addDeclChecked env QuotDecl =
+  Right (enableQuot env)
+addDeclChecked env decl@(IndDecl info levelParams) = do
+  -- Basic checks for inductive - full validation would be much more complex
+  checkNameNotDeclared env info.name
+  checkNoDuplicateUnivParams levelParams
+  _ <- checkIsType env info.type
+  Right (addDecl decl env)
+addDeclChecked env decl@(CtorDecl name ty _ _ _ _ levelParams) = do
+  checkNameNotDeclared env name
+  checkNoDuplicateUnivParams levelParams
+  _ <- checkIsType env ty
+  Right (addDecl decl env)
+addDeclChecked env decl@(RecDecl info levelParams) = do
+  checkNameNotDeclared env info.name
+  checkNoDuplicateUnivParams levelParams
+  _ <- checkIsType env info.type
+  Right (addDecl decl env)

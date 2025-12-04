@@ -586,6 +586,87 @@ testQuotient = do
       putStrLn $ "  expected: " ++ ppClosedExpr expected
       putStrLn $ "  correct: " ++ show (result == expected)
 
+||| Test declaration validation
+testDeclValidation : IO ()
+testDeclValidation = do
+  putStrLn "\n=== Testing Declaration Validation ==="
+
+  -- Set up a base environment with Nat and Prop
+  let natName = Str "Nat" Anonymous
+  let nat : ClosedExpr = Const natName []
+  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+
+  let propName = Str "Prop" Anonymous
+  let prop : ClosedExpr = Sort Zero
+
+  -- Test 1: Valid axiom declaration
+  putStrLn "\nTest 1: Valid axiom (Nat : Type)"
+  case addAxiomChecked emptyEnv natName (Sort (Succ Zero)) [] of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right env => putStrLn $ "  success: Nat added to environment"
+
+  -- Test 2: Duplicate declaration should fail
+  putStrLn "\nTest 2: Duplicate declaration should fail"
+  let env1 = addDecl natDecl emptyEnv
+  case addAxiomChecked env1 natName (Sort (Succ Zero)) [] of
+    Left err => putStrLn $ "  correctly rejected: " ++ show err
+    Right _ => putStrLn $ "  ERROR: should have failed!"
+
+  -- Test 3: Duplicate universe params should fail
+  putStrLn "\nTest 3: Duplicate universe params should fail"
+  let uName = Str "u" Anonymous
+  case checkNoDuplicateUnivParams [uName, uName] of
+    Left err => putStrLn $ "  correctly rejected: " ++ show err
+    Right _ => putStrLn $ "  ERROR: should have failed!"
+
+  -- Test 4: Valid definition (simpler: just check Sort types work)
+  putStrLn "\nTest 4: Valid definition (T : Type := Type)"
+  let env2 = addDecl natDecl emptyEnv
+  let tName = Str "T" Anonymous
+  let tType : ClosedExpr = Sort (Succ Zero)  -- Type 1
+  let tValue : ClosedExpr = Sort Zero  -- Type 0
+  case addDefChecked env2 tName tType tValue Abbrev Safe [] of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right env => putStrLn $ "  success: T added to environment"
+
+  -- Test 5: Definition with wrong type should fail
+  putStrLn "\nTest 5: Definition with wrong value type should fail"
+  let wrongName = Str "wrong" Anonymous
+  let wrongType : ClosedExpr = Sort (Succ (Succ Zero))  -- Type 2
+  let wrongValue : ClosedExpr = Sort Zero  -- Type 0, which has type Type 1 not Type 2
+  case addDefChecked env2 wrongName wrongType wrongValue Abbrev Safe [] of
+    Left err => putStrLn $ "  correctly rejected: " ++ show err
+    Right _ => putStrLn $ "  ERROR: should have failed!"
+
+  -- Test 6: Valid theorem (P : Prop axiom, p : P axiom used as "proof")
+  putStrLn "\nTest 6: Valid theorem"
+  let pName = Str "P" Anonymous
+  let p : ClosedExpr = Const pName []
+  let pDecl = AxiomDecl pName prop []  -- P : Prop
+  let env3 = addDecl pDecl emptyEnv
+
+  let proofName = Str "proofAxiom" Anonymous
+  let proofDecl = AxiomDecl proofName p []  -- proofAxiom : P
+  let env4 = addDecl proofDecl env3
+  let proofConst : ClosedExpr = Const proofName []
+
+  let thmName = Str "myThm" Anonymous
+  case addThmChecked env4 thmName p proofConst [] of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right env => putStrLn $ "  success: theorem added"
+
+  -- Test 7: Theorem with non-Prop type should fail
+  putStrLn "\nTest 7: Theorem with non-Prop type should fail"
+  case addThmChecked env2 (Str "badThm" Anonymous) nat (Const (Str "zero" Anonymous) []) [] of
+    Left err => putStrLn $ "  correctly rejected: " ++ show err
+    Right _ => putStrLn $ "  ERROR: should have failed!"
+
+  -- Test 8: addDeclChecked dispatches correctly
+  putStrLn "\nTest 8: addDeclChecked for axiom"
+  case addDeclChecked emptyEnv (AxiomDecl (Str "X" Anonymous) (Sort (Succ Zero)) []) of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right env => putStrLn $ "  success: X added via addDeclChecked"
+
 ||| Test parsing a real Lean export file
 testRealExport : IO ()
 testRealExport = do
@@ -634,6 +715,7 @@ main = do
   testOpenInfer
   testProofIrrelevance
   testQuotient
+  testDeclValidation
   testRealExport
 
   putStrLn "\n\nAll tests completed!"

@@ -4,7 +4,7 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Status
 
-**Milestone 7 complete**: Quotient type reduction.
+**Milestone 8 complete**: Declaration validation.
 
 - [x] Parser for names, levels, expressions, declarations
 - [x] Well-scoped expressions (indexed by depth)
@@ -20,7 +20,7 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 - [x] Universe level normalization (simplify imax, max)
 - [x] Local context for typing under binders
 - [x] Proof irrelevance (proofs of Prop are definitionally equal)
-- [ ] Declaration validation
+- [x] Declaration validation (axioms, definitions, theorems)
 
 ## Build
 

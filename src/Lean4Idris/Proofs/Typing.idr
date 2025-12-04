@@ -149,14 +149,9 @@ typeOfType hasType = ?typeOfType_hole
 -- Context Operations
 ------------------------------------------------------------------------
 
-||| Concatenate two contexts
-public export
-(++) : Ctx n -> Ctx m -> Ctx (m + n)
-(++) ctx1 Empty = ctx1
-(++) ctx1 (Extend ctx2 ty) = Extend (ctx1 ++ ctx2) (weakenN n ty)
-  where
-    n : Nat
-    n = ?ctxPlusN_hole
+-- Note: Context concatenation (++) is tricky with de Bruijn indices
+-- because types in ctx2 may reference variables in ctx1.
+-- For now we leave it unimplemented as it's not needed for core proofs.
 
 ------------------------------------------------------------------------
 -- Example Derivations

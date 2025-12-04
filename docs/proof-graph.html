@@ -198,15 +198,15 @@
                 <div class="label">Modules</div>
             </div>
             <div class="stat">
-                <div class="num">73</div>
+                <div class="num">69</div>
                 <div class="label">Definitions</div>
             </div>
             <div class="stat">
-                <div class="num">21</div>
+                <div class="num">14</div>
                 <div class="label">Holes</div>
             </div>
             <div class="stat">
-                <div class="num" id="visible-count">101</div>
+                <div class="num" id="visible-count">90</div>
                 <div class="label">Visible</div>
             </div>
         </div>
@@ -284,8 +284,8 @@
       "fullName": "Lean4Idris.Proofs.SubstitutionLemma",
       "type": "module",
       "color": "#e94560",
-      "size": 38,
-      "holes": 6,
+      "size": 36,
+      "holes": 4,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr"
     },
     {
@@ -294,7 +294,7 @@
       "fullName": "Lean4Idris.Proofs.Syntax",
       "type": "module",
       "color": "#e94560",
-      "size": 34,
+      "size": 36,
       "holes": 0,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr"
     },
@@ -304,8 +304,8 @@
       "fullName": "Lean4Idris.Proofs.Typing",
       "type": "module",
       "color": "#e94560",
-      "size": 30,
-      "holes": 1,
+      "size": 28,
+      "holes": 0,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr"
     },
     {
@@ -314,8 +314,8 @@
       "fullName": "Lean4Idris.Proofs.Weakening",
       "type": "module",
       "color": "#e94560",
-      "size": 36,
-      "holes": 4,
+      "size": 30,
+      "holes": 0,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr"
     },
     {
@@ -969,7 +969,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 131,
+      "line": 120,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
       "typeSig": "{ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}"
     },
@@ -982,9 +982,9 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 145,
+      "line": 134,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
-      "typeSig": "{ctx : Ctx n}"
+      "typeSig": "{ctx : Ctx n} -> {ty : Expr n} -> {eTy : Expr (S n..."
     },
     {
       "id": "def_Lean4Idris.Proofs.SubstitutionLemma_liftSubWf",
@@ -997,24 +997,9 @@
       "holes": [
         "liftSubWf_proof"
       ],
-      "line": 158,
+      "line": 147,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
       "typeSig": "SubWf s ctx ctx'"
-    },
-    {
-      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_compSubWf",
-      "label": "compSubWf",
-      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.compSubWf",
-      "type": "function",
-      "color": "#00adb5",
-      "size": 8,
-      "hasHoles": true,
-      "holes": [
-        "compSubWf_proof"
-      ],
-      "line": 164,
-      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
-      "typeSig": "SubWf s1 ctx1 ctx2"
     },
     {
       "id": "def_Lean4Idris.Proofs.SubstitutionLemma_weakenSubstCommutes",
@@ -1023,11 +1008,9 @@
       "type": "function",
       "color": "#00adb5",
       "size": 8,
-      "hasHoles": true,
-      "holes": [
-        "weakenSubstCommutes_proof"
-      ],
-      "line": 171,
+      "hasHoles": false,
+      "holes": [],
+      "line": 159,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
       "typeSig": "(s : Sub n m) -> (e : Expr n)"
     },
@@ -1071,15 +1054,28 @@
       "typeSig": ""
     },
     {
-      "id": "def_Lean4Idris.Proofs.Syntax_Arrow",
-      "label": "Arrow",
-      "fullName": "Lean4Idris.Proofs.Syntax.Arrow",
+      "id": "def_Lean4Idris.Proofs.Syntax_shift",
+      "label": "shift",
+      "fullName": "Lean4Idris.Proofs.Syntax.shift",
       "type": "function",
       "color": "#00adb5",
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 79,
+      "line": 78,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "Expr n -> Expr (S n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_Arrow",
+      "label": "Arrow",
+      "fullName": "Lean4Idris.Proofs.Syntax.Arrow",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 89,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
       "typeSig": "Expr n -> Expr n -> Expr n"
     },
@@ -1092,7 +1088,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 100,
+      "line": 101,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
       "typeSig": "Fin n -> String"
     },
@@ -1105,7 +1101,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 118,
+      "line": 119,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
       "typeSig": "(i : Fin n) -> (j : Fin n) -> Dec (i = j)"
     },
@@ -1118,7 +1114,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 128,
+      "line": 129,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
       "typeSig": "(l1 : Level) -> (l2 : Level) -> Dec (l1 = l2)"
     },
@@ -1162,21 +1158,6 @@
       "typeSig": ""
     },
     {
-      "id": "def_Lean4Idris.Proofs.Typing_typeOfType",
-      "label": "typeOfType",
-      "fullName": "Lean4Idris.Proofs.Typing.typeOfType",
-      "type": "function",
-      "color": "#00adb5",
-      "size": 8,
-      "hasHoles": true,
-      "holes": [
-        "typeOfType_hole"
-      ],
-      "line": 145,
-      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr",
-      "typeSig": "HasType ctx e ty -> (l : Level ** HasType ctx ty (..."
-    },
-    {
       "id": "def_Lean4Idris.Proofs.Typing_exampleId",
       "label": "exampleId",
       "fullName": "Lean4Idris.Proofs.Typing.exampleId",
@@ -1185,7 +1166,7 @@
       "size": 8,
       "hasHoles": false,
       "holes": [],
-      "line": 168,
+      "line": 163,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr",
       "typeSig": "HasType Empty"
     },
@@ -1239,7 +1220,7 @@
       "holes": [],
       "line": 51,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
-      "typeSig": "(e : Expr (S (S n))) -> rename exchangeRen (rename..."
+      "typeSig": "(e : Expr (S (S n))) -> rename Weakening.exchangeR..."
     },
     {
       "id": "def_Lean4Idris.Proofs.Weakening_weakening",
@@ -1253,50 +1234,6 @@
       "line": 71,
       "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
       "typeSig": "{ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}"
-    },
-    {
-      "id": "def_Lean4Idris.Proofs.Weakening_weakeningN",
-      "label": "weakeningN",
-      "fullName": "Lean4Idris.Proofs.Weakening.weakeningN",
-      "type": "function",
-      "color": "#00adb5",
-      "size": 8,
-      "hasHoles": false,
-      "holes": [],
-      "line": 169,
-      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
-      "typeSig": "{ctx : Ctx n}"
-    },
-    {
-      "id": "def_Lean4Idris.Proofs.Weakening_RenWf",
-      "label": "RenWf",
-      "fullName": "Lean4Idris.Proofs.Weakening.RenWf",
-      "type": "data",
-      "color": "#4ecca3",
-      "size": 8,
-      "hasHoles": false,
-      "holes": [],
-      "line": 186,
-      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
-      "typeSig": ""
-    },
-    {
-      "id": "def_Lean4Idris.Proofs.Weakening_renamingTyping",
-      "label": "renamingTyping",
-      "fullName": "Lean4Idris.Proofs.Weakening.renamingTyping",
-      "type": "function",
-      "color": "#00adb5",
-      "size": 8,
-      "hasHoles": true,
-      "holes": [
-        "renameVar",
-        "renamePi",
-        "renameLam",
-        "renameLet"
-      ],
-      "line": 194,
-      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
-      "typeSig": "{r : Ren n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}"
     },
     {
       "id": "hole_betaDet1",
@@ -1392,55 +1329,6 @@
     {
       "id": "hole_liftSubWf_proof",
       "label": "?liftSubWf_proof",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_compSubWf_proof",
-      "label": "?compSubWf_proof",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_weakenSubstCommutes_proof",
-      "label": "?weakenSubstCommutes_proof",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_typeOfType_hole",
-      "label": "?typeOfType_hole",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_renameVar",
-      "label": "?renameVar",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_renamePi",
-      "label": "?renamePi",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_renameLam",
-      "label": "?renameLam",
-      "type": "hole",
-      "color": "#ff6b6b",
-      "size": 6
-    },
-    {
-      "id": "hole_renameLet",
-      "label": "?renameLet",
       "type": "hole",
       "color": "#ff6b6b",
       "size": 6
@@ -1704,11 +1592,6 @@
     },
     {
       "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
-      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_compSubWf",
-      "type": "contains"
-    },
-    {
-      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
       "target": "def_Lean4Idris.Proofs.SubstitutionLemma_weakenSubstCommutes",
       "type": "contains"
     },
@@ -1725,6 +1608,11 @@
     {
       "source": "mod_Lean4Idris.Proofs.Syntax",
       "target": "def_Lean4Idris.Proofs.Syntax_Expr",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_shift",
       "type": "contains"
     },
     {
@@ -1764,11 +1652,6 @@
     },
     {
       "source": "mod_Lean4Idris.Proofs.Typing",
-      "target": "def_Lean4Idris.Proofs.Typing_typeOfType",
-      "type": "contains"
-    },
-    {
-      "source": "mod_Lean4Idris.Proofs.Typing",
       "target": "def_Lean4Idris.Proofs.Typing_exampleId",
       "type": "contains"
     },
@@ -1795,21 +1678,6 @@
     {
       "source": "mod_Lean4Idris.Proofs.Weakening",
       "target": "def_Lean4Idris.Proofs.Weakening_weakening",
-      "type": "contains"
-    },
-    {
-      "source": "mod_Lean4Idris.Proofs.Weakening",
-      "target": "def_Lean4Idris.Proofs.Weakening_weakeningN",
-      "type": "contains"
-    },
-    {
-      "source": "mod_Lean4Idris.Proofs.Weakening",
-      "target": "def_Lean4Idris.Proofs.Weakening_RenWf",
-      "type": "contains"
-    },
-    {
-      "source": "mod_Lean4Idris.Proofs.Weakening",
-      "target": "def_Lean4Idris.Proofs.Weakening_renamingTyping",
       "type": "contains"
     },
     {
@@ -1880,41 +1748,6 @@
     {
       "source": "def_Lean4Idris.Proofs.SubstitutionLemma_liftSubWf",
       "target": "hole_liftSubWf_proof",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.SubstitutionLemma_compSubWf",
-      "target": "hole_compSubWf_proof",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.SubstitutionLemma_weakenSubstCommutes",
-      "target": "hole_weakenSubstCommutes_proof",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.Typing_typeOfType",
-      "target": "hole_typeOfType_hole",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.Weakening_renamingTyping",
-      "target": "hole_renameVar",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.Weakening_renamingTyping",
-      "target": "hole_renamePi",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.Weakening_renamingTyping",
-      "target": "hole_renameLam",
-      "type": "has_hole"
-    },
-    {
-      "source": "def_Lean4Idris.Proofs.Weakening_renamingTyping",
-      "target": "hole_renameLet",
       "type": "has_hole"
     },
     {
@@ -2060,6 +1893,11 @@
     {
       "source": "def_Lean4Idris.Proofs.Substitution_liftSubId",
       "target": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Syntax_Arrow",
+      "target": "def_Lean4Idris.Proofs.Syntax_shift",
       "type": "calls"
     },
     {

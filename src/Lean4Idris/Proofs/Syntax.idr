@@ -73,20 +73,21 @@ data Expr : Nat -> Type where
 -- Derived Forms and Conveniences
 ------------------------------------------------------------------------
 
+||| Shift all variable indices up by 1 (simple renaming version)
+||| This duplicates Substitution.weaken but avoids circular imports
+shift : Expr n -> Expr (S n)
+shift (Var i) = Var (FS i)
+shift (Sort l) = Sort l
+shift (Pi d c) = Pi (shift d) (shift c)
+shift (Lam t b) = Lam (shift t) (shift b)
+shift (App f x) = App (shift f) (shift x)
+shift (Let t v b) = Let (shift t) (shift v) (shift b)
+
 ||| Non-dependent function type: A -> B
 ||| Encoded as Pi where the codomain doesn't use the variable
 public export
 Arrow : Expr n -> Expr n -> Expr n
-Arrow a b = Pi a (weaken b)
-  where
-    -- Forward declaration - defined properly in Substitution.idr
-    weaken : Expr n -> Expr (S n)
-    weaken (Var i) = Var (FS i)
-    weaken (Sort l) = Sort l
-    weaken (Pi d c) = Pi (weaken d) (weaken c)
-    weaken (Lam t b) = Lam (weaken t) (weaken b)
-    weaken (App f x) = App (weaken f) (weaken x)
-    weaken (Let t v b) = Let (weaken t) (weaken v) (weaken b)
+Arrow a b = Pi a (shift b)
 
 ------------------------------------------------------------------------
 -- Show instance for debugging

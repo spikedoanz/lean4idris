@@ -217,7 +217,7 @@ renameId (Let t v b) =
 ||| Lifting distributes over renaming composition
 public export
 liftRenComp : (r1 : Ren n m) -> (r2 : Ren m k)
-           -> (i : Fin (S n)) -> liftRen (r2 . r1) i = (liftRen r2 . liftRen r1) i
+           -> (i : Fin (S n)) -> (liftRen r2 . liftRen r1) i = liftRen (r2 . r1) i
 liftRenComp r1 r2 FZ = Refl
 liftRenComp r1 r2 (FS i) = Refl
 

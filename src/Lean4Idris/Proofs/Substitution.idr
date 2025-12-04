@@ -397,3 +397,49 @@ weakenSubst s e =
   rewrite renameSubst s FS e in
   rewrite sym (substRename FS (liftSub s) e) in
   Refl
+
+------------------------------------------------------------------------
+-- Renaming and Weakening Interaction
+------------------------------------------------------------------------
+
+||| Renaming with lifted renaming commutes with weakening
+||| rename (liftRen r) (weaken e) = weaken (rename r e)
+|||
+||| Both sides equal rename (FS . r) e.
+public export
+renameLiftWeaken : (r : Ren n m) -> (e : Expr n)
+                -> rename (liftRen r) (weaken e) = weaken (rename r e)
+renameLiftWeaken r e =
+  -- LHS: rename (liftRen r) (rename FS e) = rename (liftRen r . FS) e
+  -- RHS: rename FS (rename r e) = rename (FS . r) e
+  -- Need: liftRen r . FS = FS . r (pointwise)
+  rewrite renameComp FS (liftRen r) e in
+  rewrite renameComp r FS e in
+  -- Now both are rename (liftRen r . FS) e and rename (FS . r) e
+  -- liftRen r (FS i) = FS (r i) by definition, so liftRen r . FS = FS . r
+  Refl
+
+||| singleSub after liftRen equals rename then singleSub (pointwise)
+||| (rename r . singleSub arg) i = (singleSub (rename r arg) . liftRen r) i
+public export
+renameSingleSub : (r : Ren n m) -> (arg : Expr n) -> (i : Fin (S n))
+               -> rename r (singleSub arg i) = singleSub (rename r arg) (liftRen r i)
+renameSingleSub r arg FZ = Refl  -- rename r arg = rename r arg
+renameSingleSub r arg (FS i) = Refl  -- Var (r i) = Var (r i)
+
+||| Renaming commutes with single-variable substitution
+||| rename r (subst0 cod arg) = subst0 (rename (liftRen r) cod) (rename r arg)
+public export
+renameSubst0 : (r : Ren n m) -> (cod : Expr (S n)) -> (arg : Expr n)
+            -> rename r (subst0 cod arg) = subst0 (rename (liftRen r) cod) (rename r arg)
+renameSubst0 r cod arg =
+  -- rename r (subst (singleSub arg) cod)
+  --   = subst (rename r . singleSub arg) cod              by renameSubst
+  --   = subst (singleSub (rename r arg) . liftRen r) cod  by renameSingleSub (pointwise)
+  --   = subst (singleSub (rename r arg)) (rename (liftRen r) cod)  by substRename (backwards)
+  --   = subst0 (rename (liftRen r) cod) (rename r arg)
+  rewrite renameSubst (singleSub arg) r cod in
+  rewrite substExt (rename r . singleSub arg) (singleSub (rename r arg) . liftRen r)
+                   (renameSingleSub r arg) cod in
+  rewrite sym (substRename (liftRen r) (singleSub (rename r arg)) cod) in
+  Refl

@@ -307,7 +307,6 @@ unfoldConst env name levels = do
   let params = declLevelParams decl
   -- Check level count matches
   guard (length params == length levels)
-  -- Use safe instantiation to prevent cyclic params
   instantiateLevelParamsSafe params levels value
 
 ||| Get the head constant of an application spine
@@ -344,6 +343,13 @@ getRecursorInfo : TCEnv -> Name -> Maybe RecursorInfo
 getRecursorInfo env name =
   case lookupDecl name env of
     Just (RecDecl info _) => Just info
+    _ => Nothing
+
+||| Get the recursor info and level params for a name
+getRecursorInfoWithLevels : TCEnv -> Name -> Maybe (RecursorInfo, List Name)
+getRecursorInfoWithLevels env name =
+  case lookupDecl name env of
+    Just (RecDecl info params) => Just (info, params)
     _ => Nothing
 
 ||| Get the constructor info for a name
@@ -415,7 +421,7 @@ tryIotaReduction env e whnfStep = do
   -- Check if head is a recursor
   let (head, args) = getAppSpine e
   (recName, recLevels) <- getConstHead head
-  recInfo <- getRecursorInfo env recName
+  (recInfo, recLevelParams) <- getRecursorInfoWithLevels env recName
 
   -- Get the major premise
   let majorIdx = getMajorIdx recInfo
@@ -442,8 +448,8 @@ tryIotaReduction env e whnfStep = do
   --   3. remaining args after major
 
   let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
-  -- Use safe instantiation; if cyclic params detected, fail iota reduction
-  rhs <- instantiateLevelParamsSafe (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
+  -- Use safe instantiation with actual level params; if cyclic params detected, fail iota reduction
+  rhs <- instantiateLevelParamsSafe recLevelParams recLevels rule.rhs
 
   -- Apply: rhs params motives minors
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
@@ -1246,7 +1252,7 @@ mutual
         resultTy' <- whnf env2 resultTy
         Right (env2, resultTy')
       else do
-        debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom=" ++ show dom ++ "\n  dom'=" ++ show dom' ++ "\n  argTy=" ++ show argTy ++ "\n  argTy'=" ++ show argTy') $
+        debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  dom1 (after whnf)=" ++ show dom1 ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTy1 (after whnf)=" ++ show argTy1 ++ "\n  argTy' (after normalize)=" ++ show argTy') $
           Left (AppTypeMismatch dom' argTy')
 
   -- Lam: delegate to inferTypeOpenE which properly handles the body

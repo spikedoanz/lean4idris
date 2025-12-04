@@ -498,83 +498,6 @@ ensurePi env e = do
 -- Type Inference
 ------------------------------------------------------------------------
 
-||| Infer the type of an expression.
-|||
-||| For now, this only handles closed expressions.
-||| Environment lookup for constants is minimal (we don't fully check yet).
-export
-covering
-inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
-
--- Sort : Sort (succ level)
-inferType _ (Sort l) = Right (Sort (Succ l))
-
--- Const: look up type in environment and instantiate levels
-inferType env (Const name levels) =
-  case lookupDecl name env of
-    Nothing => Left (UnknownConst name)
-    Just decl => case declType decl of
-      Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
-      Just ty =>
-        let params = declLevelParams decl in
-        if length params == length levels
-          then Right (instantiateLevelParams params levels ty)
-          else Left (WrongNumLevels (length params) (length levels) name)
-
--- App: infer function type, check it's Pi, instantiate with arg
-inferType env (App f arg) = do
-  fTy <- inferType env f
-  (_, _, dom, cod) <- ensurePi env fTy
-  -- In a full checker we'd verify: argTy <- inferType env arg; isDefEq dom argTy
-  Right (subst0 cod arg)
-
--- Lam: type is Pi
--- We need the type annotation on the lambda to be able to infer its type
-inferType env (Lam name bi ty body) = do
-  -- Check that ty is a type
-  _ <- inferType env ty >>= ensureSort env
-  -- For the body, we need to add a local variable - but we're working with closed exprs
-  -- In Milestone 2 we handle only closed terms so we return an error for now if body needs context
-  -- Actually, for lambdas we can still type them: the body has access to var 0
-  -- We'd need a local context for proper typing, but for demos let's approximate
-  Right (Pi name bi ty body)  -- Not fully correct but works for simple cases
-
--- Pi: infer universe
-inferType env (Pi name bi dom cod) = do
-  domLevel <- inferType env dom >>= ensureSort env
-  -- For cod, we need to infer with extended context
-  -- For now, simplify: if cod doesn't use var 0, we can type it directly
-  -- Full implementation requires local context
-  Right (Sort (mkLevelMax domLevel Zero))  -- Approximation
-  where
-    mkLevelMax : Level -> Level -> Level
-    mkLevelMax Zero l2 = l2
-    mkLevelMax l1 Zero = l1
-    mkLevelMax l1 l2 = Max l1 l2
-
--- Let: infer body type with substituted value
-inferType env (Let name ty val body) = do
-  _ <- inferType env ty >>= ensureSort env
-  -- In full checker: valTy <- inferType env val; check isDefEq valTy ty
-  Right (subst0 body val) >>= inferType env
-
--- Proj: for now unsupported (requires inductive types)
-inferType _ (Proj _ _ _) = Left (OtherError "projection not yet supported")
-
--- NatLit: type is Nat
-inferType _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
-
--- StringLit: type is String
-inferType _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
-
--- BVar: should not appear in closed expressions
--- This case is actually impossible due to Expr 0 indexing, but we need it for coverage
--- Actually Expr 0 cannot have BVar (since Fin 0 is empty), so this is dead code
-
-------------------------------------------------------------------------
--- Open Term Type Inference
-------------------------------------------------------------------------
-
 ||| Close an expression by substituting all bound variables with placeholders.
 ||| This is used to convert Expr n to ClosedExpr for type checking purposes.
 |||
@@ -587,93 +510,155 @@ closeWithPlaceholders {n = S m} (entry :: ctx) e =
   let e' : Expr m = subst0 e (Const (Str "_local" entry.name) [])
   in closeWithPlaceholders ctx e'
 
-||| Infer the type of an open expression with a local context.
-|||
-||| This is the general form that handles expressions with bound variables.
-||| The result is always a closed expression (type).
-|||
-||| Key idea: when we look up a bound variable, we return its type from context.
-||| When we go under a binder, we extend the context with the domain type.
-export
-covering
-inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+mutual
+  ||| Infer the type of a closed expression.
+  ||| Delegates to inferTypeOpen with empty context for binder forms.
+  export
+  covering
+  inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
 
--- Sort: same as closed case
-inferTypeOpen _ _ (Sort l) = Right (Sort (Succ l))
+  -- Sort : Sort (succ level)
+  inferType _ (Sort l) = Right (Sort (Succ l))
 
--- Const: same as closed case
-inferTypeOpen env _ (Const name levels) =
-  case lookupDecl name env of
-    Nothing => Left (UnknownConst name)
-    Just decl => case declType decl of
+  -- Const: look up type in environment and instantiate levels
+  inferType env (Const name levels) =
+    case lookupDecl name env of
       Nothing => Left (UnknownConst name)
-      Just ty =>
-        let params = declLevelParams decl in
-        if length params == length levels
-          then Right (instantiateLevelParams params levels ty)
-          else Left (WrongNumLevels (length params) (length levels) name)
+      Just decl => case declType decl of
+        Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
+        Just ty =>
+          let params = declLevelParams decl in
+          if length params == length levels
+            then Right (instantiateLevelParams params levels ty)
+            else Left (WrongNumLevels (length params) (length levels) name)
 
--- BVar: look up type in local context
-inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type
+  -- App: infer function type, check it's Pi, verify arg type, instantiate with arg
+  inferType env (App f arg) = do
+    fTy <- inferType env f
+    (_, _, dom, cod) <- ensurePi env fTy
+    -- Verify argument type matches domain (basic check - full isDefEq requires mutual recursion)
+    argTy <- inferType env arg
+    argTy' <- whnf env argTy
+    dom' <- whnf env dom
+    -- Simple structural equality after reduction
+    if argTy' == dom'
+      then Right (subst0 cod arg)
+      else Left (AppTypeMismatch dom argTy)
 
--- App: infer function type, ensure it's Pi, instantiate codomain
-inferTypeOpen env ctx (App f arg) = do
-  fTy <- inferTypeOpen env ctx f
-  (_, _, dom, cod) <- ensurePi env fTy
-  -- Substitute the argument into the codomain
-  -- We close the argument to get a ClosedExpr for substitution
-  let argClosed = closeWithPlaceholders ctx arg
-  Right (subst0 cod argClosed)
+  -- Lam: delegate to inferTypeOpen which properly handles the body
+  inferType env (Lam name bi ty body) =
+    inferTypeOpen env emptyCtx (Lam name bi ty body)
 
--- Lam: type is Pi type
-inferTypeOpen env ctx (Lam name bi domExpr body) = do
-  -- Check domain is a type
-  domTy <- inferTypeOpen env ctx domExpr
-  _ <- ensureSort env domTy
-  -- Close the domain to use in the context
-  let domClosed = closeWithPlaceholders ctx domExpr
-  -- Infer body type with extended context
-  let ctx' = extendCtx name domClosed ctx
-  bodyTy <- inferTypeOpen env ctx' body
-  -- Result is Pi type
-  Right (Pi name bi domClosed (weaken1 bodyTy))
+  -- Pi: delegate to inferTypeOpen which properly handles the codomain
+  inferType env (Pi name bi dom cod) =
+    inferTypeOpen env emptyCtx (Pi name bi dom cod)
 
--- Pi: infer universe level of the result
-inferTypeOpen env ctx (Pi name bi domExpr codExpr) = do
-  -- Infer domain type and get its universe level
-  domTy <- inferTypeOpen env ctx domExpr
-  domLevel <- ensureSort env domTy
-  -- Close domain for context extension
-  let domClosed = closeWithPlaceholders ctx domExpr
-  let ctx' = extendCtx name domClosed ctx
-  -- Infer codomain type and get its universe level
-  codTy <- inferTypeOpen env ctx' codExpr
-  codLevel <- ensureSort env codTy
-  -- Result universe is imax of domain and codomain, simplified
-  Right (Sort (simplify (IMax domLevel codLevel)))
+  -- Let: delegate to inferTypeOpen which properly handles the body
+  inferType env (Let name ty val body) =
+    inferTypeOpen env emptyCtx (Let name ty val body)
 
--- Let: extend context and infer body type
-inferTypeOpen env ctx (Let name tyExpr valExpr body) = do
-  -- Check type is a type
-  tyTy <- inferTypeOpen env ctx tyExpr
-  _ <- ensureSort env tyTy
-  -- Close type and value
-  let tyClosed = closeWithPlaceholders ctx tyExpr
-  let valClosed = closeWithPlaceholders ctx valExpr
-  -- Extend context with let binding
-  let ctx' = extendCtxLet name tyClosed valClosed ctx
-  -- Infer body type
-  inferTypeOpen env ctx' body
+  -- Proj: for now unsupported (requires inductive types)
+  inferType _ (Proj _ _ _) = Left (OtherError "projection not yet supported")
 
--- Proj: infer structure type and get field type
-inferTypeOpen env ctx (Proj structName idx structExpr) = do
-  structTy <- inferTypeOpen env ctx structExpr
-  -- For now, return an error - projection typing requires inductive type lookup
-  Left (OtherError $ "projection typing not yet fully supported for " ++ show structName)
+  -- NatLit: type is Nat
+  inferType _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
 
--- Literals
-inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
-inferTypeOpen _ _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
+  -- StringLit: type is String
+  inferType _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
+
+  -- BVar: should not appear in closed expressions (Fin 0 is empty)
+
+  ------------------------------------------------------------------------
+  -- Open Term Type Inference
+  ------------------------------------------------------------------------
+
+  ||| Infer the type of an open expression with a local context.
+  |||
+  ||| This is the general form that handles expressions with bound variables.
+  ||| The result is always a closed expression (type).
+  |||
+  ||| Key idea: when we look up a bound variable, we return its type from context.
+  ||| When we go under a binder, we extend the context with the domain type.
+  export
+  covering
+  inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+
+  -- Sort: same as closed case
+  inferTypeOpen _ _ (Sort l) = Right (Sort (Succ l))
+
+  -- Const: same as closed case
+  inferTypeOpen env _ (Const name levels) =
+    case lookupDecl name env of
+      Nothing => Left (UnknownConst name)
+      Just decl => case declType decl of
+        Nothing => Left (UnknownConst name)
+        Just ty =>
+          let params = declLevelParams decl in
+          if length params == length levels
+            then Right (instantiateLevelParams params levels ty)
+            else Left (WrongNumLevels (length params) (length levels) name)
+
+  -- BVar: look up type in local context
+  inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type
+
+  -- App: infer function type, ensure it's Pi, instantiate codomain
+  inferTypeOpen env ctx (App f arg) = do
+    fTy <- inferTypeOpen env ctx f
+    (_, _, dom, cod) <- ensurePi env fTy
+    -- Substitute the argument into the codomain
+    -- We close the argument to get a ClosedExpr for substitution
+    let argClosed = closeWithPlaceholders ctx arg
+    Right (subst0 cod argClosed)
+
+  -- Lam: type is Pi type
+  inferTypeOpen env ctx (Lam name bi domExpr body) = do
+    -- Check domain is a type
+    domTy <- inferTypeOpen env ctx domExpr
+    _ <- ensureSort env domTy
+    -- Close the domain to use in the context
+    let domClosed = closeWithPlaceholders ctx domExpr
+    -- Infer body type with extended context
+    let ctx' = extendCtx name domClosed ctx
+    bodyTy <- inferTypeOpen env ctx' body
+    -- Result is Pi type
+    Right (Pi name bi domClosed (weaken1 bodyTy))
+
+  -- Pi: infer universe level of the result
+  inferTypeOpen env ctx (Pi name bi domExpr codExpr) = do
+    -- Infer domain type and get its universe level
+    domTy <- inferTypeOpen env ctx domExpr
+    domLevel <- ensureSort env domTy
+    -- Close domain for context extension
+    let domClosed = closeWithPlaceholders ctx domExpr
+    let ctx' = extendCtx name domClosed ctx
+    -- Infer codomain type and get its universe level
+    codTy <- inferTypeOpen env ctx' codExpr
+    codLevel <- ensureSort env codTy
+    -- Result universe is imax of domain and codomain, simplified
+    Right (Sort (simplify (IMax domLevel codLevel)))
+
+  -- Let: extend context and infer body type
+  inferTypeOpen env ctx (Let name tyExpr valExpr body) = do
+    -- Check type is a type
+    tyTy <- inferTypeOpen env ctx tyExpr
+    _ <- ensureSort env tyTy
+    -- Close type and value
+    let tyClosed = closeWithPlaceholders ctx tyExpr
+    let valClosed = closeWithPlaceholders ctx valExpr
+    -- Extend context with let binding
+    let ctx' = extendCtxLet name tyClosed valClosed ctx
+    -- Infer body type
+    inferTypeOpen env ctx' body
+
+  -- Proj: infer structure type and get field type
+  inferTypeOpen env ctx (Proj structName idx structExpr) = do
+    structTy <- inferTypeOpen env ctx structExpr
+    -- For now, return an error - projection typing requires inductive type lookup
+    Left (OtherError $ "projection typing not yet fully supported for " ++ show structName)
+
+  -- Literals
+  inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
+  inferTypeOpen _ _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
 
 ------------------------------------------------------------------------
 -- Proof Irrelevance

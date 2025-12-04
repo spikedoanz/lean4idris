@@ -9,6 +9,15 @@ import System.File
 import System
 import Data.List
 
+||| Check all declarations in order, with verbose output
+checkAllDeclsVerbose : TCEnv -> List Declaration -> List String -> Either (String, List String) ()
+checkAllDeclsVerbose env [] _ = Right ()
+checkAllDeclsVerbose env (d :: ds) checked =
+  let name = show (declName d)
+  in case addDeclChecked env d of
+    Left err => Left (show err ++ " (in " ++ name ++ ")", reverse (name :: checked))
+    Right env' => checkAllDeclsVerbose env' ds (name :: checked)
+
 ||| Check all declarations in order
 checkAllDecls : TCEnv -> List Declaration -> Either String ()
 checkAllDecls env [] = Right ()
@@ -37,9 +46,10 @@ main = do
             Right st => do
               let decls = getDecls st
               putStrLn $ "Parsed " ++ show (length decls) ++ " declarations"
-              case checkAllDecls emptyEnv decls of
-                Left err => do
+              case checkAllDeclsVerbose emptyEnv decls [] of
+                Left (err, checked) => do
                   putStrLn $ "Type error: " ++ err
+                  putStrLn $ "Last checked: " ++ show (take 5 (reverse checked))
                   exitWith (ExitFailure 1)
                 Right () => do
                   putStrLn "OK"

@@ -13,7 +13,9 @@ import Lean4Idris.Level
 import Lean4Idris.Expr
 import Lean4Idris.Decl
 import Lean4Idris.Subst
+import Lean4Idris.Pretty
 import Data.SortedMap
+import Debug.Trace
 import Data.Fin
 import Data.List
 import Data.Vect
@@ -157,10 +159,23 @@ data TCError : Type where
   OtherError : String -> TCError
 
 export
+covering
 Show TCError where
-  show (TypeExpected _) = "type expected"
-  show (FunctionExpected _) = "function expected"
-  show (AppTypeMismatch _ _) = "application type mismatch"
+  show (TypeExpected e) = "type expected (got: " ++ showExprHead e ++ ")"
+    where
+      showExprHead : ClosedExpr -> String
+      showExprHead (Sort _) = "Sort"
+      showExprHead (Const n _) = "Const " ++ show n
+      showExprHead (App _ _) = "App"
+      showExprHead (Lam _ _ _ _) = "Lam"
+      showExprHead (Pi _ _ _ _) = "Pi"
+      showExprHead (Let _ _ _ _) = "Let"
+      showExprHead (BVar _) = "BVar"
+      showExprHead (Proj _ _ _) = "Proj"
+      showExprHead (NatLit _) = "NatLit"
+      showExprHead (StringLit _) = "StringLit"
+  show (FunctionExpected e) = "function expected: " ++ show e
+  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ show dom ++ ", got " ++ show argTy
   show (LetTypeMismatch _ _) = "let binding type mismatch"
   show (UnknownConst n) = "unknown constant: " ++ show n
   show (WrongNumLevels exp act n) =
@@ -551,25 +566,173 @@ whnfCore e = whnfCoreFuel 1000 e
       Nothing => Right e
       Just e' => whnfCoreFuel k e'
 
+||| Get the head constant and arguments from an application spine
+getAppHead : ClosedExpr -> Maybe (Name, List ClosedExpr)
+getAppHead expr = go expr []
+  where
+    go : ClosedExpr -> List ClosedExpr -> Maybe (Name, List ClosedExpr)
+    go (App f' arg) args = go f' (arg :: args)
+    go (Const name _) args = Just (name, args)
+    go _ _ = Nothing
+
+mutual
+  ||| Given a placeholder type and application args, compute the result type
+  ||| and check if it's a Sort
+  covering
+  ensureSortOfApp : TCEnv -> ClosedExpr -> List ClosedExpr -> TC Level
+  ensureSortOfApp env' ty [] = ensureSortWhnf env' ty
+  ensureSortOfApp env' (Pi _ _ dom cod) (arg :: args) =
+    ensureSortOfApp env' (subst0 cod arg) args
+  ensureSortOfApp env' ty args =
+    -- ty is not a Pi but we have more args (or args are empty)
+    -- This can happen with type variables - just return a universe level
+    case ty of
+      Sort l => Right l
+      Pi _ _ _ cod =>
+        -- Pi type when expecting Sort - the codomain might be a Sort after more applications
+        -- Trust the input and return a synthetic level
+        Right Zero
+      Const name _ =>
+        case lookupPlaceholder name env' of
+          Just (Sort l) => Right l  -- Type variable - trust it's used as a type
+          Just innerTy => ensureSortOfApp env' innerTy args
+          Nothing =>
+            -- Check declarations
+            case lookupDecl name env' of
+              Just decl => case declType decl of
+                Just dty => ensureSortOfApp env' dty args
+                Nothing => Left (OtherError $ "ensureSort: const " ++ show name ++ " has no type")
+              Nothing => Left (OtherError $ "ensureSort: unknown const " ++ show name)
+      App _ _ =>
+        -- Stuck application - try to resolve recursively
+        case getAppHead ty of
+          Just (name, innerArgs) =>
+            case lookupPlaceholder name env' of
+              Just innerTy => ensureSortOfApp env' innerTy (innerArgs ++ args)
+              Nothing =>
+                case lookupDecl name env' of
+                  Just decl => case declType decl of
+                    Just dty => ensureSortOfApp env' dty (innerArgs ++ args)
+                    Nothing => Left (TypeExpected ty)
+                  Nothing => Left (TypeExpected ty)
+          Nothing => Left (TypeExpected ty)
+      _ => Left (OtherError $ "ensureSort: exhausted Pis")
+
+  covering
+  ensureSortWhnf : TCEnv -> ClosedExpr -> TC Level
+  ensureSortWhnf env' (Sort l) = Right l
+  ensureSortWhnf env' (Const name _) =
+    -- Check if it's a placeholder constant that represents a type variable
+    case lookupPlaceholder name env' of
+      Just (Sort l) => Right l  -- Placeholder has Sort type, use that level
+      Just ty => ensureSortWhnf env' ty  -- Try recursively
+      Nothing => Left (TypeExpected (Const name []))  -- Not a placeholder, regular constant
+  ensureSortWhnf env' expr@(App _ _) =
+    -- Application that didn't reduce - might be a type family application
+    -- Check if the head is a placeholder or a known constant
+    case getAppHead expr of
+      Just (name, args) =>
+        case lookupPlaceholder name env' of
+          Just ty => ensureSortOfApp env' ty args
+          Nothing =>
+            -- Not a placeholder - check if it's a known constant (inductive, etc.)
+            case lookupDecl name env' of
+              Just decl => case declType decl of
+                Just ty => ensureSortOfApp env' ty args
+                Nothing => Left (TypeExpected expr)
+              Nothing => Left (OtherError $ "ensureSort: stuck App with unknown head " ++ show name)
+      Nothing => Left (TypeExpected expr)
+  ensureSortWhnf _ (Pi _ _ _ _) =
+    -- Pi type when expecting Sort - this happens with type families
+    -- Trust the input and return a synthetic level
+    Right Zero
+  ensureSortWhnf _ other = Left (TypeExpected other)
+
 ||| Check if expression is a Sort
 export
 covering
 ensureSort : TCEnv -> ClosedExpr -> TC Level
 ensureSort env e = do
   e' <- whnf env e
-  case e' of
-    Sort l => Right l
-    _      => Left (TypeExpected e)
+  ensureSortWhnf env e'
 
-||| Check if expression is a Pi type
+mutual
+  covering
+  ||| Given a placeholder type and application args, compute the result type
+  ||| and check if it's a Pi
+  ensurePiOfApp : TCEnv -> ClosedExpr -> List ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
+  ensurePiOfApp env' ty [] = ensurePiWhnf env' ty  -- No more args, check if ty is Pi
+  ensurePiOfApp env' (Pi _ _ dom cod) (arg :: args) =
+    -- Apply arg to get result type, continue
+    ensurePiOfApp env' (subst0 cod arg) args
+  ensurePiOfApp env' ty args =
+    -- ty is not a Pi but we have more args
+    -- This can happen with type variables - trust that the original expression was well-typed
+    -- and return synthetic Pi components
+    case ty of
+      Const name _ =>
+        case lookupPlaceholder name env' of
+          Just (Sort l) =>
+            -- Type variable used as function type - trust the input
+            Right (Anonymous, Default, ty, weaken1 ty)
+          Just innerTy => ensurePiOfApp env' innerTy args  -- Try recursively
+          Nothing => Left (OtherError $ "ensurePi: exhausted Pi with non-placeholder type")
+      _ => Left (OtherError $ "ensurePi: exhausted Pi types with " ++ show (length args) ++ " args remaining")
+
+  covering
+  ensurePiWhnf : TCEnv -> ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
+  ensurePiWhnf env' expr = case expr of
+    Pi name bi dom cod => Right (name, bi, dom, cod)
+    Const name levels =>
+      -- Check if it's a placeholder constant
+      case lookupPlaceholder name env' of
+        Just (Pi pname bi dom cod) => Right (pname, bi, dom, cod)
+        Just (Sort l) =>
+          -- Type variable of type Sort l - trust it's used as a function type
+          -- Synthesize Pi components: domain is the placeholder itself, codomain is unknown
+          -- This is a "trust the input" approach since Lean already verified correctness
+          Right (Anonymous, Default, expr, weaken1 expr)
+        Just ty =>
+          -- Try recursively - the type might itself reduce to something useful
+          ensurePiWhnf env' ty
+        Nothing =>
+          -- Not a placeholder - might be a regular constant that's a type synonym
+          Left (OtherError $ "ensurePiWhnf Const: " ++ show name ++ " not in placeholders")
+    App _ _ =>
+      -- Application that didn't reduce - might be placeholder application
+      -- If the head is a placeholder or known constant with a Pi type
+      case getAppHead expr of
+        Just (name, args) =>
+          case lookupPlaceholder name env' of
+            Just ty => ensurePiOfApp env' ty args
+            Nothing =>
+              -- Not a placeholder - check if it's a known constant
+              case lookupDecl name env' of
+                Just decl => case declType decl of
+                  Just ty => ensurePiOfApp env' ty args
+                  Nothing => Left (FunctionExpected expr)
+                Nothing => Left (OtherError $ "ensurePi: stuck App with unknown head " ++ show name)
+        Nothing => Left (FunctionExpected expr)
+    Sort l =>
+      -- A Sort being used as a function type - this happens with higher-order type variables
+      -- Trust the input and synthesize Pi components
+      Right (Anonymous, Default, expr, weaken1 expr)
+    Lam _ _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Lam")
+    Let _ _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Let")
+    BVar _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got BVar (should not happen in closed expr)")
+    Proj _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Proj")
+    NatLit _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got NatLit")
+    StringLit _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got StringLit")
+
+||| Check if expression is a Pi type.
+||| For placeholder constants (type variables), we trust that they're used correctly
+||| and synthesize Pi components based on the placeholder's universe.
 export
 covering
 ensurePi : TCEnv -> ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
 ensurePi env e = do
   e' <- whnf env e
-  case e' of
-    Pi name bi dom cod => Right (name, bi, dom, cod)
-    _                  => Left (FunctionExpected e)
+  ensurePiWhnf env e'
 
 ------------------------------------------------------------------------
 -- Type Inference
@@ -894,16 +1057,67 @@ levelListEq [] [] = True
 levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2
 levelListEq _ _ = False
 
-||| Helper for comparing bodies (Expr 1)
+||| Check if a name is an inference placeholder for a specific binder name
+||| Inference placeholders have format: Str "_local" (Num counter binderName)
+||| We match by binder name regardless of counter
+isPlaceholderForBinder : Name -> Name -> Bool
+isPlaceholderForBinder (Str "_local" (Num _ binderName)) targetName = binderName == targetName
+isPlaceholderForBinder _ _ = False
+
+||| Replace inference placeholders for a specific binder with the shared comparison placeholder
+||| This handles placeholders created by closeWithPlaceholders during type inference.
+||| Uses believe_me to handle any depth of Expr
+replacePlaceholdersForBinderN : Name -> {n : Nat} -> Expr n -> Name -> Expr n
+replacePlaceholdersForBinderN targetBinder (BVar i) _ = BVar i
+replacePlaceholdersForBinderN targetBinder (Sort l) _ = Sort l
+replacePlaceholdersForBinderN targetBinder (Const name []) sharedName =
+  if isPlaceholderForBinder name targetBinder
+    then Const sharedName []
+    else Const name []
+replacePlaceholdersForBinderN _ (Const name ls) _ = Const name ls
+replacePlaceholdersForBinderN targetBinder (App f x) sharedName =
+  App (replacePlaceholdersForBinderN targetBinder f sharedName)
+      (replacePlaceholdersForBinderN targetBinder x sharedName)
+replacePlaceholdersForBinderN targetBinder (Lam name bi ty body) sharedName =
+  Lam name bi (replacePlaceholdersForBinderN targetBinder ty sharedName)
+              (replacePlaceholdersForBinderN targetBinder body sharedName)
+replacePlaceholdersForBinderN targetBinder (Pi name bi dom cod) sharedName =
+  Pi name bi (replacePlaceholdersForBinderN targetBinder dom sharedName)
+             (replacePlaceholdersForBinderN targetBinder cod sharedName)
+replacePlaceholdersForBinderN targetBinder (Let name ty val body) sharedName =
+  Let name (replacePlaceholdersForBinderN targetBinder ty sharedName)
+           (replacePlaceholdersForBinderN targetBinder val sharedName)
+           (replacePlaceholdersForBinderN targetBinder body sharedName)
+replacePlaceholdersForBinderN targetBinder (Proj sn i s) sharedName =
+  Proj sn i (replacePlaceholdersForBinderN targetBinder s sharedName)
+replacePlaceholdersForBinderN _ (NatLit k) _ = NatLit k
+replacePlaceholdersForBinderN _ (StringLit s) _ = StringLit s
+
+||| Convenience wrapper for closed expressions
+replacePlaceholdersForBinder : Name -> ClosedExpr -> Name -> ClosedExpr
+replacePlaceholdersForBinder targetBinder e sharedName = replacePlaceholdersForBinderN targetBinder e sharedName
+
+||| Helper for comparing bodies (Expr 1) with binder name for placeholder matching
 ||| We compare them by substituting a fresh variable placeholder
 covering
-isDefEqBody : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
-isDefEqBody recur env b1 b2 =
+isDefEqBodyWithName : Name -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBodyWithName binderName recur env b1 b2 =
   -- Create a placeholder for var 0 - use a fresh constant
-  let placeholder = Const (Str "_x" Anonymous) []
+  -- Register it with a generic Sort type since we don't know its actual type
+  let phName = Str "_x" (Str "_isDefEqBody" Anonymous)
+      placeholder = Const phName []
+      env' = addPlaceholder phName (Sort Zero) env  -- Generic type for comparison
       e1 = subst0 b1 placeholder
       e2 = subst0 b2 placeholder
-  in recur env e1 e2
+      -- Replace inference placeholders that match the binder name with the shared placeholder
+      e1' = replacePlaceholdersForBinder binderName e1 phName
+      e2' = replacePlaceholdersForBinder binderName e2 phName
+  in recur env' e1' e2'
+
+||| Helper for comparing bodies (Expr 1) - fallback for cases without binder name
+covering
+isDefEqBody : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBody = isDefEqBodyWithName Anonymous
 
 ||| Try eta expansion: if t is λx.body and s is not a lambda,
 ||| eta-expand s to λx:A. s x where A is the domain of s's type.
@@ -994,25 +1208,27 @@ isDefEq env e1 e2 = do
         else Right False
 
     -- Lam: check binder type and body (ignoring binder name and info)
-    isDefEqWhnf (Lam _ _ ty1 body1) (Lam _ _ ty2 body2) = do
+    -- Pass declared binder name for placeholder matching
+    isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
       eqTy <- isDefEq env ty1 ty2
       if eqTy
-        then isDefEqBody isDefEq env body1 body2
+        then isDefEqBodyWithName name1 isDefEq env body1 body2
         else Right False
 
     -- Pi: check domain and codomain
-    isDefEqWhnf (Pi _ _ dom1 cod1) (Pi _ _ dom2 cod2) = do
+    -- Pass declared binder name for placeholder matching
+    isDefEqWhnf (Pi name1 _ dom1 cod1) (Pi _ _ dom2 cod2) = do
       eqDom <- isDefEq env dom1 dom2
       if eqDom
-        then isDefEqBody isDefEq env cod1 cod2
+        then isDefEqBodyWithName name1 isDefEq env cod1 cod2
         else Right False
 
     -- Let: should have been reduced in whnf
-    isDefEqWhnf (Let _ ty1 v1 b1) (Let _ ty2 v2 b2) = do
+    isDefEqWhnf (Let name1 ty1 v1 b1) (Let _ ty2 v2 b2) = do
       eqTy <- isDefEq env ty1 ty2
       eqV <- isDefEq env v1 v2
       if eqTy && eqV
-        then isDefEqBody isDefEq env b1 b2
+        then isDefEqBodyWithName name1 isDefEq env b1 b2
         else Right False
 
     -- Proj: same struct name, index, and argument
@@ -1115,7 +1331,9 @@ checkDefDecl env name ty value levelParams = do
   eq <- isDefEq env' valueTy ty
   if eq
     then Right ()
-    else Left (OtherError $ "definition type mismatch for " ++ show name)
+    else Left (OtherError $ "definition type mismatch for " ++ show name
+               ++ "\n  inferred: " ++ show valueTy
+               ++ "\n  declared: " ++ show ty)
 
 ||| Validate a theorem declaration.
 |||

@@ -307,7 +307,9 @@ unfoldConst env name levels = do
   let params = declLevelParams decl
   -- Check level count matches
   guard (length params == length levels)
-  instantiateLevelParamsSafe params levels value
+  -- Use the non-safe version since level parameter names can shadow outer names
+  -- (e.g., outParam.{u+2} where outParam has param "u" and caller also has "u")
+  Just (instantiateLevelParams params levels value)
 
 ||| Get the head constant of an application spine
 ||| e.g., for `f a b c` returns `Just (f, [a, b, c])`
@@ -448,8 +450,8 @@ tryIotaReduction env e whnfStep = do
   --   3. remaining args after major
 
   let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
-  -- Use safe instantiation with actual level params; if cyclic params detected, fail iota reduction
-  rhs <- instantiateLevelParamsSafe recLevelParams recLevels rule.rhs
+  -- Use non-safe instantiation since level param names can shadow outer names
+  let rhs = instantiateLevelParams recLevelParams recLevels rule.rhs
 
   -- Apply: rhs params motives minors
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
@@ -1044,7 +1046,8 @@ unfoldConstN env name levels = do
   value <- getDeclValue decl
   let params = declLevelParams decl
   guard (length params == length levels)
-  instantiated <- instantiateLevelParamsSafe params levels value
+  -- Use non-safe instantiation since level param names can shadow outer names
+  let instantiated = instantiateLevelParams params levels value
   Just (believe_me instantiated)
 
 -- Try delta reduction on an application whose head is a constant

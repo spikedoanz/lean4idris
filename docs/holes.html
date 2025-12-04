@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Idris Proof Holes Report</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --bg-light: #16213e;
+            --bg-code: #0f0f1a;
+            --text: #eee;
+            --text-dim: #888;
+            --accent: #e94560;
+            --accent2: #0f3460;
+            --green: #4ecca3;
+            --yellow: #ffd369;
+            --blue: #00adb5;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
+            padding-bottom: 10px;
+        }
+
+        h2 {
+            color: var(--blue);
+            margin-top: 40px;
+        }
+
+        h3 {
+            color: var(--green);
+            margin-top: 30px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background: var(--bg-light);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-card .number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        .stat-card .label {
+            color: var(--text-dim);
+            font-size: 0.9em;
+        }
+
+        .stat-card.complete .number {
+            color: var(--green);
+        }
+
+        .progress-bar {
+            background: var(--bg-light);
+            height: 30px;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--green), var(--blue));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transition: width 0.5s;
+        }
+
+        .file-section {
+            background: var(--bg-light);
+            border-radius: 8px;
+            margin: 20px 0;
+            overflow: hidden;
+        }
+
+        .file-header {
+            background: var(--accent2);
+            padding: 15px 20px;
+            font-family: monospace;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-header .count {
+            background: var(--accent);
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 0.9em;
+        }
+
+        .hole-card {
+            border-top: 1px solid var(--bg);
+            padding: 15px 20px;
+        }
+
+        .hole-name {
+            font-family: monospace;
+            font-size: 1.1em;
+            color: var(--yellow);
+        }
+
+        .hole-meta {
+            color: var(--text-dim);
+            font-size: 0.85em;
+            margin: 5px 0;
+        }
+
+        .code-context {
+            background: var(--bg-code);
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            overflow-x: auto;
+        }
+
+        .code-line {
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.85em;
+            white-space: pre;
+            display: block;
+            padding: 2px 0;
+        }
+
+        .code-line.highlight {
+            background: rgba(233, 69, 96, 0.2);
+            margin: 0 -10px;
+            padding: 2px 10px;
+        }
+
+        .line-number {
+            color: var(--text-dim);
+            user-select: none;
+            display: inline-block;
+            width: 40px;
+            text-align: right;
+            margin-right: 15px;
+        }
+
+        .hole-marker {
+            color: var(--accent);
+            font-weight: bold;
+        }
+
+        .category-section {
+            margin: 30px 0;
+        }
+
+        .category-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .category-count {
+            background: var(--accent2);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+        }
+
+        .toc {
+            background: var(--bg-light);
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .toc h3 {
+            margin-top: 0;
+        }
+
+        .toc ul {
+            columns: 2;
+            list-style: none;
+            padding: 0;
+        }
+
+        .toc li {
+            padding: 3px 0;
+        }
+
+        .toc a {
+            color: var(--blue);
+            text-decoration: none;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 600px) {
+            .toc ul {
+                columns: 1;
+            }
+            .summary {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Idris Proof Holes Report</h1>
+
+        <div class="summary">
+            <div class="stat-card">
+                <div class="number">49</div>
+                <div class="label">Total Holes</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">6</div>
+                <div class="label">Files</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">14</div>
+                <div class="label">Substitution</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">3</div>
+                <div class="label">Weakening</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">4</div>
+                <div class="label">Conversion</div>
+            </div>
+        </div>
+
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: 0%">
+                0% Complete
+            </div>
+        </div>
+
+        <div class="toc">
+            <h3>📂 Files</h3>
+            <ul>
+                <li><a href="#file-src-Lean4Idris-Proofs-Reduction.idr">src/Lean4Idris/Proofs/Reduction.idr</a> (10)</li>
+                <li><a href="#file-src-Lean4Idris-Proofs-SubjectReduction.idr">src/Lean4Idris/Proofs/SubjectReduction.idr</a> (7)</li>
+                <li><a href="#file-src-Lean4Idris-Proofs-Substitution.idr">src/Lean4Idris/Proofs/Substitution.idr</a> (9)</li>
+                <li><a href="#file-src-Lean4Idris-Proofs-SubstitutionLemma.idr">src/Lean4Idris/Proofs/SubstitutionLemma.idr</a> (11)</li>
+                <li><a href="#file-src-Lean4Idris-Proofs-Typing.idr">src/Lean4Idris/Proofs/Typing.idr</a> (2)</li>
+                <li><a href="#file-src-Lean4Idris-Proofs-Weakening.idr">src/Lean4Idris/Proofs/Weakening.idr</a> (10)</li>
+            </ul>
+        </div>
+
+        <h2>📁 Holes by File</h2>
+
+        <div class="file-section" id="file-src-Lean4Idris-Proofs-Reduction.idr">
+            <div class="file-header">
+                <span>src/Lean4Idris/Proofs/Reduction.idr</span>
+                <span class="count">10 holes</span>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet1</div>
+                <div class="hole-meta">
+                    Line 146
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">143</span>                 -&gt; Step (App (Lam ty body) arg) e2</span>
+                    <span class="code-line"><span class="line-number">144</span>                 -&gt; (e1 = e2) `Either` (Step e1 e2, Step e2 e1)</span>
+                    <span class="code-line"><span class="line-number">145</span>betaDeterministic SBeta SBeta = Left Refl</span>
+                    <span class="code-line highlight"><span class="line-number">146</span>betaDeterministic SBeta (SAppL (SLamBody _)) = <span class="hole-marker">?betaDet1</span></span>
+                    <span class="code-line"><span class="line-number">147</span>betaDeterministic SBeta (SAppL (SLamTy _)) = <span class="hole-marker">?betaDet2</span></span>
+                    <span class="code-line"><span class="line-number">148</span>betaDeterministic SBeta (SAppR _) = <span class="hole-marker">?betaDet3</span></span>
+                    <span class="code-line"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet2</div>
+                <div class="hole-meta">
+                    Line 147
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">144</span>                 -&gt; (e1 = e2) `Either` (Step e1 e2, Step e2 e1)</span>
+                    <span class="code-line"><span class="line-number">145</span>betaDeterministic SBeta SBeta = Left Refl</span>
+                    <span class="code-line"><span class="line-number">146</span>betaDeterministic SBeta (SAppL (SLamBody _)) = <span class="hole-marker">?betaDet1</span></span>
+                    <span class="code-line highlight"><span class="line-number">147</span>betaDeterministic SBeta (SAppL (SLamTy _)) = <span class="hole-marker">?betaDet2</span></span>
+                    <span class="code-line"><span class="line-number">148</span>betaDeterministic SBeta (SAppR _) = <span class="hole-marker">?betaDet3</span></span>
+                    <span class="code-line"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                    <span class="code-line"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet3</div>
+                <div class="hole-meta">
+                    Line 148
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">145</span>betaDeterministic SBeta SBeta = Left Refl</span>
+                    <span class="code-line"><span class="line-number">146</span>betaDeterministic SBeta (SAppL (SLamBody _)) = <span class="hole-marker">?betaDet1</span></span>
+                    <span class="code-line"><span class="line-number">147</span>betaDeterministic SBeta (SAppL (SLamTy _)) = <span class="hole-marker">?betaDet2</span></span>
+                    <span class="code-line highlight"><span class="line-number">148</span>betaDeterministic SBeta (SAppR _) = <span class="hole-marker">?betaDet3</span></span>
+                    <span class="code-line"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                    <span class="code-line"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                    <span class="code-line"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet4</div>
+                <div class="hole-meta">
+                    Line 149
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">146</span>betaDeterministic SBeta (SAppL (SLamBody _)) = <span class="hole-marker">?betaDet1</span></span>
+                    <span class="code-line"><span class="line-number">147</span>betaDeterministic SBeta (SAppL (SLamTy _)) = <span class="hole-marker">?betaDet2</span></span>
+                    <span class="code-line"><span class="line-number">148</span>betaDeterministic SBeta (SAppR _) = <span class="hole-marker">?betaDet3</span></span>
+                    <span class="code-line highlight"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                    <span class="code-line"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                    <span class="code-line"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                    <span class="code-line"><span class="line-number">152</span>betaDeterministic (SAppR s) SBeta = <span class="hole-marker">?betaDet7</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet5</div>
+                <div class="hole-meta">
+                    Line 150
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">147</span>betaDeterministic SBeta (SAppL (SLamTy _)) = <span class="hole-marker">?betaDet2</span></span>
+                    <span class="code-line"><span class="line-number">148</span>betaDeterministic SBeta (SAppR _) = <span class="hole-marker">?betaDet3</span></span>
+                    <span class="code-line"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                    <span class="code-line highlight"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                    <span class="code-line"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                    <span class="code-line"><span class="line-number">152</span>betaDeterministic (SAppR s) SBeta = <span class="hole-marker">?betaDet7</span></span>
+                    <span class="code-line"><span class="line-number">153</span>betaDeterministic (SAppR s1) (SAppL s2) = <span class="hole-marker">?betaDet8</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet6</div>
+                <div class="hole-meta">
+                    Line 151
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">148</span>betaDeterministic SBeta (SAppR _) = <span class="hole-marker">?betaDet3</span></span>
+                    <span class="code-line"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                    <span class="code-line"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                    <span class="code-line highlight"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                    <span class="code-line"><span class="line-number">152</span>betaDeterministic (SAppR s) SBeta = <span class="hole-marker">?betaDet7</span></span>
+                    <span class="code-line"><span class="line-number">153</span>betaDeterministic (SAppR s1) (SAppL s2) = <span class="hole-marker">?betaDet8</span></span>
+                    <span class="code-line"><span class="line-number">154</span>betaDeterministic (SAppR s1) (SAppR s2) = <span class="hole-marker">?betaDet9</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet7</div>
+                <div class="hole-meta">
+                    Line 152
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">149</span>betaDeterministic (SAppL s) SBeta = <span class="hole-marker">?betaDet4</span></span>
+                    <span class="code-line"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                    <span class="code-line"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                    <span class="code-line highlight"><span class="line-number">152</span>betaDeterministic (SAppR s) SBeta = <span class="hole-marker">?betaDet7</span></span>
+                    <span class="code-line"><span class="line-number">153</span>betaDeterministic (SAppR s1) (SAppL s2) = <span class="hole-marker">?betaDet8</span></span>
+                    <span class="code-line"><span class="line-number">154</span>betaDeterministic (SAppR s1) (SAppR s2) = <span class="hole-marker">?betaDet9</span></span>
+                    <span class="code-line"><span class="line-number">155</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet8</div>
+                <div class="hole-meta">
+                    Line 153
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">150</span>betaDeterministic (SAppL s1) (SAppL s2) = <span class="hole-marker">?betaDet5</span></span>
+                    <span class="code-line"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                    <span class="code-line"><span class="line-number">152</span>betaDeterministic (SAppR s) SBeta = <span class="hole-marker">?betaDet7</span></span>
+                    <span class="code-line highlight"><span class="line-number">153</span>betaDeterministic (SAppR s1) (SAppL s2) = <span class="hole-marker">?betaDet8</span></span>
+                    <span class="code-line"><span class="line-number">154</span>betaDeterministic (SAppR s1) (SAppR s2) = <span class="hole-marker">?betaDet9</span></span>
+                    <span class="code-line"><span class="line-number">155</span></span>
+                    <span class="code-line"><span class="line-number">156</span>------------------------------------------------------------------------</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?betaDet9</div>
+                <div class="hole-meta">
+                    Line 154
+                     • in <code>NormalForm</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">151</span>betaDeterministic (SAppL s1) (SAppR s2) = <span class="hole-marker">?betaDet6</span></span>
+                    <span class="code-line"><span class="line-number">152</span>betaDeterministic (SAppR s) SBeta = <span class="hole-marker">?betaDet7</span></span>
+                    <span class="code-line"><span class="line-number">153</span>betaDeterministic (SAppR s1) (SAppL s2) = <span class="hole-marker">?betaDet8</span></span>
+                    <span class="code-line highlight"><span class="line-number">154</span>betaDeterministic (SAppR s1) (SAppR s2) = <span class="hole-marker">?betaDet9</span></span>
+                    <span class="code-line"><span class="line-number">155</span></span>
+                    <span class="code-line"><span class="line-number">156</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">157</span>-- Congruence Lemmas</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?whnfApp1</div>
+                <div class="hole-meta">
+                    Line 210
+                     • in <code>whnfNoHead</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">207</span>    varNoStep : Step (Var i) e -&gt; Void</span>
+                    <span class="code-line"><span class="line-number">208</span>    varNoStep s impossible</span>
+                    <span class="code-line"><span class="line-number">209</span>whnfNoHead (WApp wf notLam) SBeta = absurd (notLam _ _ Refl)</span>
+                    <span class="code-line highlight"><span class="line-number">210</span>whnfNoHead (WApp wf notLam) (SAppL s) = <span class="hole-marker">?whnfApp1</span></span>
+                    <span class="code-line"><span class="line-number">211</span>whnfNoHead (WApp wf notLam) (SAppR s) = Left (WApp wf notLam)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="file-section" id="file-src-Lean4Idris-Proofs-SubjectReduction.idr">
+            <div class="file-header">
+                <span>src/Lean4Idris/Proofs/SubjectReduction.idr</span>
+                <span class="count">7 holes</span>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?appR_needs_conversion</div>
+                <div class="hole-meta">
+                    Line 125
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">122</span></span>
+                    <span class="code-line"><span class="line-number">123</span>subjectReduction (TApp fTyping argTyping) (SAppR argStep) =</span>
+                    <span class="code-line"><span class="line-number">124</span>  let argTyping' = subjectReduction argTyping argStep</span>
+                    <span class="code-line highlight"><span class="line-number">125</span>  in <span class="hole-marker">?appR_needs_conversion</span></span>
+                    <span class="code-line"><span class="line-number">126</span>  -- In a full proof: TConv (TApp fTyping argTyping') <span class="hole-marker">?eq</span> <span class="hole-marker">?tyWf</span></span>
+                    <span class="code-line"><span class="line-number">127</span></span>
+                    <span class="code-line"><span class="line-number">128</span>------------------------------------------------------------------------</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?eq</div>
+                <div class="hole-meta">
+                    Line 126
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">123</span>subjectReduction (TApp fTyping argTyping) (SAppR argStep) =</span>
+                    <span class="code-line"><span class="line-number">124</span>  let argTyping' = subjectReduction argTyping argStep</span>
+                    <span class="code-line"><span class="line-number">125</span>  in <span class="hole-marker">?appR_needs_conversion</span></span>
+                    <span class="code-line highlight"><span class="line-number">126</span>  -- In a full proof: TConv (TApp fTyping argTyping') <span class="hole-marker">?eq</span> <span class="hole-marker">?tyWf</span></span>
+                    <span class="code-line"><span class="line-number">127</span></span>
+                    <span class="code-line"><span class="line-number">128</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">129</span>-- Congruence: reduce in lambda body</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?tyWf</div>
+                <div class="hole-meta">
+                    Line 126
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">123</span>subjectReduction (TApp fTyping argTyping) (SAppR argStep) =</span>
+                    <span class="code-line"><span class="line-number">124</span>  let argTyping' = subjectReduction argTyping argStep</span>
+                    <span class="code-line"><span class="line-number">125</span>  in <span class="hole-marker">?appR_needs_conversion</span></span>
+                    <span class="code-line highlight"><span class="line-number">126</span>  -- In a full proof: TConv (TApp fTyping argTyping') <span class="hole-marker">?eq</span> <span class="hole-marker">?tyWf</span></span>
+                    <span class="code-line"><span class="line-number">127</span></span>
+                    <span class="code-line"><span class="line-number">128</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">129</span>-- Congruence: reduce in lambda body</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?lamTy_needs_conversion</div>
+                <div class="hole-meta">
+                    Line 146
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">143</span>-- Hmm, this also needs conversion: (x:A) → B ≡ (x:A') → B when A ≡ A'.</span>
+                    <span class="code-line"><span class="line-number">144</span></span>
+                    <span class="code-line"><span class="line-number">145</span>subjectReduction (TLam tyWf bodyTyping) (SLamTy tyStep) =</span>
+                    <span class="code-line highlight"><span class="line-number">146</span>  <span class="hole-marker">?lamTy_needs_conversion</span></span>
+                    <span class="code-line"><span class="line-number">147</span></span>
+                    <span class="code-line"><span class="line-number">148</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">149</span>-- Congruence: reduce in Pi domain</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?piDom_needs_context_conv</div>
+                <div class="hole-meta">
+                    Line 157
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">154</span>  -- codWf is in extended context with the OLD domain</span>
+                    <span class="code-line"><span class="line-number">155</span>  -- We need it in context with the NEW domain</span>
+                    <span class="code-line"><span class="line-number">156</span>  -- This requires showing the contexts are equivalent when A ≡ A'</span>
+                    <span class="code-line highlight"><span class="line-number">157</span>  in <span class="hole-marker">?piDom_needs_context_conv</span></span>
+                    <span class="code-line"><span class="line-number">158</span></span>
+                    <span class="code-line"><span class="line-number">159</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">160</span>-- Congruence: reduce in Pi codomain</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?letTy_hole</div>
+                <div class="hole-meta">
+                    Line 172
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">169</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">170</span></span>
+                    <span class="code-line"><span class="line-number">171</span>subjectReduction (TLet tyWf valTyping bodyTyping) (SLetTy tyStep) =</span>
+                    <span class="code-line highlight"><span class="line-number">172</span>  <span class="hole-marker">?letTy_hole</span></span>
+                    <span class="code-line"><span class="line-number">173</span></span>
+                    <span class="code-line"><span class="line-number">174</span>subjectReduction (TLet tyWf valTyping bodyTyping) (SLetVal valStep) =</span>
+                    <span class="code-line"><span class="line-number">175</span>  let valTyping' = subjectReduction valTyping valStep</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?letVal_hole</div>
+                <div class="hole-meta">
+                    Line 176
+                     • in <code>subjectReduction</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">173</span></span>
+                    <span class="code-line"><span class="line-number">174</span>subjectReduction (TLet tyWf valTyping bodyTyping) (SLetVal valStep) =</span>
+                    <span class="code-line"><span class="line-number">175</span>  let valTyping' = subjectReduction valTyping valStep</span>
+                    <span class="code-line highlight"><span class="line-number">176</span>  in <span class="hole-marker">?letVal_hole</span>  -- Similar issue: result type depends on val</span>
+                    <span class="code-line"><span class="line-number">177</span></span>
+                    <span class="code-line"><span class="line-number">178</span>subjectReduction (TLet tyWf valTyping bodyTyping) (SLetBody bodyStep) =</span>
+                    <span class="code-line"><span class="line-number">179</span>  let bodyTyping' = subjectReduction bodyTyping bodyStep</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="file-section" id="file-src-Lean4Idris-Proofs-Substitution.idr">
+            <div class="file-header">
+                <span>src/Lean4Idris/Proofs/Substitution.idr</span>
+                <span class="count">9 holes</span>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?liftRenId_hole</div>
+                <div class="hole-meta">
+                    Line 138
+                     • in <code>renameId</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">135</span>renameId (Pi d c) = rewrite renameId d in rewrite liftRenId c in Refl</span>
+                    <span class="code-line"><span class="line-number">136</span>  where</span>
+                    <span class="code-line"><span class="line-number">137</span>    liftRenId : (e : Expr (S n)) -&gt; rename (liftRen Substitution.idRen) e = e</span>
+                    <span class="code-line highlight"><span class="line-number">138</span>    liftRenId e = <span class="hole-marker">?liftRenId_hole</span></span>
+                    <span class="code-line"><span class="line-number">139</span>renameId (Lam t b) = <span class="hole-marker">?renameLam_hole</span></span>
+                    <span class="code-line"><span class="line-number">140</span>renameId (App f x) = rewrite renameId f in rewrite renameId x in Refl</span>
+                    <span class="code-line"><span class="line-number">141</span>renameId (Let t v b) = <span class="hole-marker">?renameLet_hole</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameLam_hole</div>
+                <div class="hole-meta">
+                    Line 139
+                     • in <code>renameId</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">136</span>  where</span>
+                    <span class="code-line"><span class="line-number">137</span>    liftRenId : (e : Expr (S n)) -&gt; rename (liftRen Substitution.idRen) e = e</span>
+                    <span class="code-line"><span class="line-number">138</span>    liftRenId e = <span class="hole-marker">?liftRenId_hole</span></span>
+                    <span class="code-line highlight"><span class="line-number">139</span>renameId (Lam t b) = <span class="hole-marker">?renameLam_hole</span></span>
+                    <span class="code-line"><span class="line-number">140</span>renameId (App f x) = rewrite renameId f in rewrite renameId x in Refl</span>
+                    <span class="code-line"><span class="line-number">141</span>renameId (Let t v b) = <span class="hole-marker">?renameLet_hole</span></span>
+                    <span class="code-line"><span class="line-number">142</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameLet_hole</div>
+                <div class="hole-meta">
+                    Line 141
+                     • in <code>renameId</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">138</span>    liftRenId e = <span class="hole-marker">?liftRenId_hole</span></span>
+                    <span class="code-line"><span class="line-number">139</span>renameId (Lam t b) = <span class="hole-marker">?renameLam_hole</span></span>
+                    <span class="code-line"><span class="line-number">140</span>renameId (App f x) = rewrite renameId f in rewrite renameId x in Refl</span>
+                    <span class="code-line highlight"><span class="line-number">141</span>renameId (Let t v b) = <span class="hole-marker">?renameLet_hole</span></span>
+                    <span class="code-line"><span class="line-number">142</span></span>
+                    <span class="code-line"><span class="line-number">143</span>||| Substitution by identity is identity</span>
+                    <span class="code-line"><span class="line-number">144</span>||| subst idSub e = e</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substPi_hole</div>
+                <div class="hole-meta">
+                    Line 149
+                     • in <code>substId</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">146</span>substId : (e : Expr n) -&gt; subst Substitution.idSub e = e</span>
+                    <span class="code-line"><span class="line-number">147</span>substId (Var i) = Refl</span>
+                    <span class="code-line"><span class="line-number">148</span>substId (Sort l) = Refl</span>
+                    <span class="code-line highlight"><span class="line-number">149</span>substId (Pi d c) = <span class="hole-marker">?substPi_hole</span></span>
+                    <span class="code-line"><span class="line-number">150</span>substId (Lam t b) = <span class="hole-marker">?substLam_hole</span></span>
+                    <span class="code-line"><span class="line-number">151</span>substId (App f x) = rewrite substId f in rewrite substId x in Refl</span>
+                    <span class="code-line"><span class="line-number">152</span>substId (Let t v b) = <span class="hole-marker">?substLet_hole</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substLam_hole</div>
+                <div class="hole-meta">
+                    Line 150
+                     • in <code>substId</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">147</span>substId (Var i) = Refl</span>
+                    <span class="code-line"><span class="line-number">148</span>substId (Sort l) = Refl</span>
+                    <span class="code-line"><span class="line-number">149</span>substId (Pi d c) = <span class="hole-marker">?substPi_hole</span></span>
+                    <span class="code-line highlight"><span class="line-number">150</span>substId (Lam t b) = <span class="hole-marker">?substLam_hole</span></span>
+                    <span class="code-line"><span class="line-number">151</span>substId (App f x) = rewrite substId f in rewrite substId x in Refl</span>
+                    <span class="code-line"><span class="line-number">152</span>substId (Let t v b) = <span class="hole-marker">?substLet_hole</span></span>
+                    <span class="code-line"><span class="line-number">153</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substLet_hole</div>
+                <div class="hole-meta">
+                    Line 152
+                     • in <code>substId</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">149</span>substId (Pi d c) = <span class="hole-marker">?substPi_hole</span></span>
+                    <span class="code-line"><span class="line-number">150</span>substId (Lam t b) = <span class="hole-marker">?substLam_hole</span></span>
+                    <span class="code-line"><span class="line-number">151</span>substId (App f x) = rewrite substId f in rewrite substId x in Refl</span>
+                    <span class="code-line highlight"><span class="line-number">152</span>substId (Let t v b) = <span class="hole-marker">?substLet_hole</span></span>
+                    <span class="code-line"><span class="line-number">153</span></span>
+                    <span class="code-line"><span class="line-number">154</span>||| Weaken then substitute at 0 is identity</span>
+                    <span class="code-line"><span class="line-number">155</span>||| subst0 (weaken e) x = e</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenSubst0_hole</div>
+                <div class="hole-meta">
+                    Line 158
+                     • in <code>weakenSubst0</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">155</span>||| subst0 (weaken e) x = e</span>
+                    <span class="code-line"><span class="line-number">156</span>public export</span>
+                    <span class="code-line"><span class="line-number">157</span>weakenSubst0 : (e : Expr n) -&gt; (x : Expr n) -&gt; subst0 (weaken e) x = e</span>
+                    <span class="code-line highlight"><span class="line-number">158</span>weakenSubst0 e x = <span class="hole-marker">?weakenSubst0_hole</span></span>
+                    <span class="code-line"><span class="line-number">159</span></span>
+                    <span class="code-line"><span class="line-number">160</span>||| Composition of renamings</span>
+                    <span class="code-line"><span class="line-number">161</span>||| rename r2 (rename r1 e) = rename (r2 . r1) e</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameComp_hole</div>
+                <div class="hole-meta">
+                    Line 165
+                     • in <code>renameComp</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">162</span>public export</span>
+                    <span class="code-line"><span class="line-number">163</span>renameComp : (r1 : Ren n m) -&gt; (r2 : Ren m k) -&gt; (e : Expr n)</span>
+                    <span class="code-line"><span class="line-number">164</span>          -&gt; rename r2 (rename r1 e) = rename (r2 . r1) e</span>
+                    <span class="code-line highlight"><span class="line-number">165</span>renameComp r1 r2 e = <span class="hole-marker">?renameComp_hole</span></span>
+                    <span class="code-line"><span class="line-number">166</span></span>
+                    <span class="code-line"><span class="line-number">167</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">168</span>-- Key Lemma: Substitution Commutes with Weakening (stated)</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenSubst_hole</div>
+                <div class="hole-meta">
+                    Line 178
+                     • in <code>weakenSubst</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">175</span>public export</span>
+                    <span class="code-line"><span class="line-number">176</span>weakenSubst : (s : Sub n m) -&gt; (e : Expr n)</span>
+                    <span class="code-line"><span class="line-number">177</span>           -&gt; weaken (subst s e) = subst (liftSub s) (weaken e)</span>
+                    <span class="code-line highlight"><span class="line-number">178</span>weakenSubst s e = <span class="hole-marker">?weakenSubst_hole</span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="file-section" id="file-src-Lean4Idris-Proofs-SubstitutionLemma.idr">
+            <div class="file-header">
+                <span>src/Lean4Idris/Proofs/SubstitutionLemma.idr</span>
+                <span class="count">11 holes</span>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?idSubWfExt</div>
+                <div class="hole-meta">
+                    Line 47
+                     • in <code>idSubWf</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">44</span>public export</span>
+                    <span class="code-line"><span class="line-number">45</span>idSubWf : (ctx : Ctx n) -&gt; SubWf Substitution.idSub ctx ctx</span>
+                    <span class="code-line"><span class="line-number">46</span>idSubWf Empty = SubEmpty</span>
+                    <span class="code-line highlight"><span class="line-number">47</span>idSubWf (Extend ctx ty) = <span class="hole-marker">?idSubWfExt</span></span>
+                    <span class="code-line"><span class="line-number">48</span></span>
+                    <span class="code-line"><span class="line-number">49</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">50</span>-- Single Substitution is Well-Formed</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?singleSubWf_proof</div>
+                <div class="hole-meta">
+                    Line 58
+                     • in <code>singleSubWf</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">55</span>singleSubWf : {ctx : Ctx n} -&gt; {ty : Expr n} -&gt; {s : Expr n}</span>
+                    <span class="code-line"><span class="line-number">56</span>           -&gt; HasType ctx s ty</span>
+                    <span class="code-line"><span class="line-number">57</span>           -&gt; SubWf (singleSub s) (Extend ctx ty) ctx</span>
+                    <span class="code-line highlight"><span class="line-number">58</span>singleSubWf sTyping = <span class="hole-marker">?singleSubWf_proof</span></span>
+                    <span class="code-line"><span class="line-number">59</span></span>
+                    <span class="code-line"><span class="line-number">60</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">61</span>-- The Substitution Lemma (Core Version)</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substVar</div>
+                <div class="hole-meta">
+                    Line 77
+                     • in <code>substitutionGeneral</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">74</span>                   -&gt; HasType ctx' (subst s e) (subst s ty)</span>
+                    <span class="code-line"><span class="line-number">75</span></span>
+                    <span class="code-line"><span class="line-number">76</span>-- Variable case: look up in the substitution</span>
+                    <span class="code-line highlight"><span class="line-number">77</span>substitutionGeneral sWf (TVar i) = <span class="hole-marker">?substVar</span></span>
+                    <span class="code-line"><span class="line-number">78</span></span>
+                    <span class="code-line"><span class="line-number">79</span>-- Sort case: sorts don't contain variables</span>
+                    <span class="code-line"><span class="line-number">80</span>substitutionGeneral sWf TSort = TSort</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substPiCod</div>
+                <div class="hole-meta">
+                    Line 86
+                     • in <code>substitutionGeneral</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">83</span>substitutionGeneral sWf (TPi domWf codWf) =</span>
+                    <span class="code-line"><span class="line-number">84</span>  let domWf' = substitutionGeneral sWf domWf</span>
+                    <span class="code-line"><span class="line-number">85</span>      -- For codomain, we need to lift the substitution</span>
+                    <span class="code-line highlight"><span class="line-number">86</span>      codWf' = <span class="hole-marker">?substPiCod</span></span>
+                    <span class="code-line"><span class="line-number">87</span>  in TPi domWf' codWf'</span>
+                    <span class="code-line"><span class="line-number">88</span></span>
+                    <span class="code-line"><span class="line-number">89</span>-- Lambda case: similar to Pi</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substLamBody</div>
+                <div class="hole-meta">
+                    Line 92
+                     • in <code>substitutionGeneral</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">89</span>-- Lambda case: similar to Pi</span>
+                    <span class="code-line"><span class="line-number">90</span>substitutionGeneral sWf (TLam tyWf bodyWf) =</span>
+                    <span class="code-line"><span class="line-number">91</span>  let tyWf' = substitutionGeneral sWf tyWf</span>
+                    <span class="code-line highlight"><span class="line-number">92</span>      bodyWf' = <span class="hole-marker">?substLamBody</span></span>
+                    <span class="code-line"><span class="line-number">93</span>  in TLam tyWf' bodyWf'</span>
+                    <span class="code-line"><span class="line-number">94</span></span>
+                    <span class="code-line"><span class="line-number">95</span>-- Application case: substitute in function and argument</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substSubst0_proof</div>
+                <div class="hole-meta">
+                    Line 105
+                     • in <code>substitutionGeneral</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">102</span>    -- Substitution distributes over subst0</span>
+                    <span class="code-line"><span class="line-number">103</span>    substSubst0 : (s : Sub n m) -&gt; (cod : Expr (S n)) -&gt; (arg : Expr n)</span>
+                    <span class="code-line"><span class="line-number">104</span>               -&gt; subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)</span>
+                    <span class="code-line highlight"><span class="line-number">105</span>    substSubst0 s cod arg = <span class="hole-marker">?substSubst0_proof</span></span>
+                    <span class="code-line"><span class="line-number">106</span></span>
+                    <span class="code-line"><span class="line-number">107</span>-- Let case</span>
+                    <span class="code-line"><span class="line-number">108</span>substitutionGeneral sWf (TLet tyWf valWf bodyWf) =</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substLetBody</div>
+                <div class="hole-meta">
+                    Line 111
+                     • in <code>substitutionGeneral</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">108</span>substitutionGeneral sWf (TLet tyWf valWf bodyWf) =</span>
+                    <span class="code-line"><span class="line-number">109</span>  let tyWf' = substitutionGeneral sWf tyWf</span>
+                    <span class="code-line"><span class="line-number">110</span>      valWf' = substitutionGeneral sWf valWf</span>
+                    <span class="code-line highlight"><span class="line-number">111</span>      bodyWf' = <span class="hole-marker">?substLetBody</span></span>
+                    <span class="code-line"><span class="line-number">112</span>  in rewrite <span class="hole-marker">?substLetSubst</span> in TLet tyWf' valWf' bodyWf'</span>
+                    <span class="code-line"><span class="line-number">113</span></span>
+                    <span class="code-line"><span class="line-number">114</span>-- Conversion case</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?substLetSubst</div>
+                <div class="hole-meta">
+                    Line 112
+                     • in <code>substitutionGeneral</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">109</span>  let tyWf' = substitutionGeneral sWf tyWf</span>
+                    <span class="code-line"><span class="line-number">110</span>      valWf' = substitutionGeneral sWf valWf</span>
+                    <span class="code-line"><span class="line-number">111</span>      bodyWf' = <span class="hole-marker">?substLetBody</span></span>
+                    <span class="code-line highlight"><span class="line-number">112</span>  in rewrite <span class="hole-marker">?substLetSubst</span> in TLet tyWf' valWf' bodyWf'</span>
+                    <span class="code-line"><span class="line-number">113</span></span>
+                    <span class="code-line"><span class="line-number">114</span>-- Conversion case</span>
+                    <span class="code-line"><span class="line-number">115</span>substitutionGeneral sWf (TConv eWf eq tyWf) =</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?liftSubWf_proof</div>
+                <div class="hole-meta">
+                    Line 160
+                     • in <code>substitutionLemma</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">157</span>public export</span>
+                    <span class="code-line"><span class="line-number">158</span>liftSubWf : SubWf s ctx ctx'</span>
+                    <span class="code-line"><span class="line-number">159</span>         -&gt; SubWf (liftSub s) (Extend ctx ty) (Extend ctx' (subst s ty))</span>
+                    <span class="code-line highlight"><span class="line-number">160</span>liftSubWf sWf = <span class="hole-marker">?liftSubWf_proof</span></span>
+                    <span class="code-line"><span class="line-number">161</span></span>
+                    <span class="code-line"><span class="line-number">162</span>||| Composition of substitutions is well-formed</span>
+                    <span class="code-line"><span class="line-number">163</span>public export</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?compSubWf_proof</div>
+                <div class="hole-meta">
+                    Line 167
+                     • in <code>substitutionLemma</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">164</span>compSubWf : SubWf s1 ctx1 ctx2</span>
+                    <span class="code-line"><span class="line-number">165</span>         -&gt; SubWf s2 ctx2 ctx3</span>
+                    <span class="code-line"><span class="line-number">166</span>         -&gt; SubWf (s2 . s1) ctx1 ctx3</span>
+                    <span class="code-line highlight"><span class="line-number">167</span>compSubWf sWf1 sWf2 = <span class="hole-marker">?compSubWf_proof</span></span>
+                    <span class="code-line"><span class="line-number">168</span></span>
+                    <span class="code-line"><span class="line-number">169</span>||| Weakening and substitution commute</span>
+                    <span class="code-line"><span class="line-number">170</span>public export</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenSubstCommutes_proof</div>
+                <div class="hole-meta">
+                    Line 173
+                     • in <code>weakenSubstCommutes</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">170</span>public export</span>
+                    <span class="code-line"><span class="line-number">171</span>weakenSubstCommutes : (s : Sub n m) -&gt; (e : Expr n)</span>
+                    <span class="code-line"><span class="line-number">172</span>                   -&gt; weaken (subst s e) = subst (liftSub s) (weaken e)</span>
+                    <span class="code-line highlight"><span class="line-number">173</span>weakenSubstCommutes s e = <span class="hole-marker">?weakenSubstCommutes_proof</span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="file-section" id="file-src-Lean4Idris-Proofs-Typing.idr">
+            <div class="file-header">
+                <span>src/Lean4Idris/Proofs/Typing.idr</span>
+                <span class="count">2 holes</span>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?typeOfType_hole</div>
+                <div class="hole-meta">
+                    Line 146
+                     • in <code>typeOfType</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">143</span>||| (This would require an inversion lemma on the typing judgment)</span>
+                    <span class="code-line"><span class="line-number">144</span>public export</span>
+                    <span class="code-line"><span class="line-number">145</span>typeOfType : HasType ctx e ty -&gt; (l : Level ** HasType ctx ty (Sort l))</span>
+                    <span class="code-line highlight"><span class="line-number">146</span>typeOfType hasType = <span class="hole-marker">?typeOfType_hole</span></span>
+                    <span class="code-line"><span class="line-number">147</span></span>
+                    <span class="code-line"><span class="line-number">148</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">149</span>-- Context Operations</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?ctxPlusN_hole</div>
+                <div class="hole-meta">
+                    Line 159
+                     • in <code>typeOfType</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">156</span>(++) ctx1 (Extend ctx2 ty) = Extend (ctx1 ++ ctx2) (weakenN n ty)</span>
+                    <span class="code-line"><span class="line-number">157</span>  where</span>
+                    <span class="code-line"><span class="line-number">158</span>    n : Nat</span>
+                    <span class="code-line highlight"><span class="line-number">159</span>    n = <span class="hole-marker">?ctxPlusN_hole</span></span>
+                    <span class="code-line"><span class="line-number">160</span></span>
+                    <span class="code-line"><span class="line-number">161</span>------------------------------------------------------------------------</span>
+                    <span class="code-line"><span class="line-number">162</span>-- Example Derivations</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="file-section" id="file-src-Lean4Idris-Proofs-Weakening.idr">
+            <div class="file-header">
+                <span>src/Lean4Idris/Proofs/Weakening.idr</span>
+                <span class="count">10 holes</span>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenPiCod</div>
+                <div class="hole-meta">
+                    Line 65
+                     • in <code>weakening</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">62</span>      -- becomes</span>
+                    <span class="code-line"><span class="line-number">63</span>      -- ctx, a, weaken(dom) ⊢ weaken(cod) : Sort l2</span>
+                    <span class="code-line"><span class="line-number">64</span>      -- This requires a context swap lemma</span>
+                    <span class="code-line highlight"><span class="line-number">65</span>      codWf' = <span class="hole-marker">?weakenPiCod</span></span>
+                    <span class="code-line"><span class="line-number">66</span>  in TPi domWf' codWf'</span>
+                    <span class="code-line"><span class="line-number">67</span></span>
+                    <span class="code-line"><span class="line-number">68</span>-- Lambda case: similar to Pi</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenLamBody</div>
+                <div class="hole-meta">
+                    Line 71
+                     • in <code>weakening</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">68</span>-- Lambda case: similar to Pi</span>
+                    <span class="code-line"><span class="line-number">69</span>weakening a (TLam tyWf bodyWf) =</span>
+                    <span class="code-line"><span class="line-number">70</span>  let tyWf' = weakening a tyWf</span>
+                    <span class="code-line highlight"><span class="line-number">71</span>      bodyWf' = <span class="hole-marker">?weakenLamBody</span></span>
+                    <span class="code-line"><span class="line-number">72</span>  in TLam tyWf' bodyWf'</span>
+                    <span class="code-line"><span class="line-number">73</span></span>
+                    <span class="code-line"><span class="line-number">74</span>-- Application case: straightforward recursion</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenSubst0Comm_proof</div>
+                <div class="hole-meta">
+                    Line 84
+                     • in <code>weakening</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">81</span>    -- Weakening commutes with substitution</span>
+                    <span class="code-line"><span class="line-number">82</span>    weakenSubst0Comm : (cod : Expr (S n)) -&gt; (arg : Expr n) -&gt; (a : Expr n)</span>
+                    <span class="code-line"><span class="line-number">83</span>                    -&gt; weaken (subst0 cod arg) = subst0 (weaken cod) (weaken arg)</span>
+                    <span class="code-line highlight"><span class="line-number">84</span>    weakenSubst0Comm cod arg a = <span class="hole-marker">?weakenSubst0Comm_proof</span></span>
+                    <span class="code-line"><span class="line-number">85</span></span>
+                    <span class="code-line"><span class="line-number">86</span>-- Let case</span>
+                    <span class="code-line"><span class="line-number">87</span>weakening a (TLet tyWf valWf bodyWf) =</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenLetBody</div>
+                <div class="hole-meta">
+                    Line 90
+                     • in <code>weakening</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">87</span>weakening a (TLet tyWf valWf bodyWf) =</span>
+                    <span class="code-line"><span class="line-number">88</span>  let tyWf' = weakening a tyWf</span>
+                    <span class="code-line"><span class="line-number">89</span>      valWf' = weakening a valWf</span>
+                    <span class="code-line highlight"><span class="line-number">90</span>      bodyWf' = <span class="hole-marker">?weakenLetBody</span></span>
+                    <span class="code-line"><span class="line-number">91</span>  in rewrite <span class="hole-marker">?weakenLetSubst</span> in TLet tyWf' valWf' bodyWf'</span>
+                    <span class="code-line"><span class="line-number">92</span></span>
+                    <span class="code-line"><span class="line-number">93</span>-- Conversion case</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?weakenLetSubst</div>
+                <div class="hole-meta">
+                    Line 91
+                     • in <code>weakening</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">88</span>  let tyWf' = weakening a tyWf</span>
+                    <span class="code-line"><span class="line-number">89</span>      valWf' = weakening a valWf</span>
+                    <span class="code-line"><span class="line-number">90</span>      bodyWf' = <span class="hole-marker">?weakenLetBody</span></span>
+                    <span class="code-line highlight"><span class="line-number">91</span>  in rewrite <span class="hole-marker">?weakenLetSubst</span> in TLet tyWf' valWf' bodyWf'</span>
+                    <span class="code-line"><span class="line-number">92</span></span>
+                    <span class="code-line"><span class="line-number">93</span>-- Conversion case</span>
+                    <span class="code-line"><span class="line-number">94</span>weakening a (TConv eWf eq tyWf) =</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameVar</div>
+                <div class="hole-meta">
+                    Line 134
+                     • in <code>renamingTyping</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">131</span>              -&gt; RenWf r ctx ctx'</span>
+                    <span class="code-line"><span class="line-number">132</span>              -&gt; HasType ctx e ty</span>
+                    <span class="code-line"><span class="line-number">133</span>              -&gt; HasType ctx' (rename r e) (rename r ty)</span>
+                    <span class="code-line highlight"><span class="line-number">134</span>renamingTyping rWf (TVar i) = <span class="hole-marker">?renameVar</span></span>
+                    <span class="code-line"><span class="line-number">135</span>renamingTyping rWf TSort = TSort</span>
+                    <span class="code-line"><span class="line-number">136</span>renamingTyping rWf (TPi domWf codWf) = <span class="hole-marker">?renamePi</span></span>
+                    <span class="code-line"><span class="line-number">137</span>renamingTyping rWf (TLam tyWf bodyWf) = <span class="hole-marker">?renameLam</span></span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renamePi</div>
+                <div class="hole-meta">
+                    Line 136
+                     • in <code>renamingTyping</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">133</span>              -&gt; HasType ctx' (rename r e) (rename r ty)</span>
+                    <span class="code-line"><span class="line-number">134</span>renamingTyping rWf (TVar i) = <span class="hole-marker">?renameVar</span></span>
+                    <span class="code-line"><span class="line-number">135</span>renamingTyping rWf TSort = TSort</span>
+                    <span class="code-line highlight"><span class="line-number">136</span>renamingTyping rWf (TPi domWf codWf) = <span class="hole-marker">?renamePi</span></span>
+                    <span class="code-line"><span class="line-number">137</span>renamingTyping rWf (TLam tyWf bodyWf) = <span class="hole-marker">?renameLam</span></span>
+                    <span class="code-line"><span class="line-number">138</span>renamingTyping rWf (TApp fWf argWf) =</span>
+                    <span class="code-line"><span class="line-number">139</span>  let fWf' = renamingTyping rWf fWf</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameLam</div>
+                <div class="hole-meta">
+                    Line 137
+                     • in <code>renamingTyping</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">134</span>renamingTyping rWf (TVar i) = <span class="hole-marker">?renameVar</span></span>
+                    <span class="code-line"><span class="line-number">135</span>renamingTyping rWf TSort = TSort</span>
+                    <span class="code-line"><span class="line-number">136</span>renamingTyping rWf (TPi domWf codWf) = <span class="hole-marker">?renamePi</span></span>
+                    <span class="code-line highlight"><span class="line-number">137</span>renamingTyping rWf (TLam tyWf bodyWf) = <span class="hole-marker">?renameLam</span></span>
+                    <span class="code-line"><span class="line-number">138</span>renamingTyping rWf (TApp fWf argWf) =</span>
+                    <span class="code-line"><span class="line-number">139</span>  let fWf' = renamingTyping rWf fWf</span>
+                    <span class="code-line"><span class="line-number">140</span>      argWf' = renamingTyping rWf argWf</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameApp</div>
+                <div class="hole-meta">
+                    Line 141
+                     • in <code>renamingTyping</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">138</span>renamingTyping rWf (TApp fWf argWf) =</span>
+                    <span class="code-line"><span class="line-number">139</span>  let fWf' = renamingTyping rWf fWf</span>
+                    <span class="code-line"><span class="line-number">140</span>      argWf' = renamingTyping rWf argWf</span>
+                    <span class="code-line highlight"><span class="line-number">141</span>  in <span class="hole-marker">?renameApp</span></span>
+                    <span class="code-line"><span class="line-number">142</span>renamingTyping rWf (TLet tyWf valWf bodyWf) = <span class="hole-marker">?renameLet</span></span>
+                    <span class="code-line"><span class="line-number">143</span>renamingTyping rWf (TConv eWf eq tyWf) =</span>
+                    <span class="code-line"><span class="line-number">144</span>  TConv (renamingTyping rWf eWf) (cong (rename r) eq) (renamingTyping rWf tyWf)</span>
+                </div>
+            </div>
+
+            <div class="hole-card">
+                <div class="hole-name">?renameLet</div>
+                <div class="hole-meta">
+                    Line 142
+                     • in <code>renamingTyping</code>
+                </div>
+                <div class="code-context">
+                    <span class="code-line"><span class="line-number">139</span>  let fWf' = renamingTyping rWf fWf</span>
+                    <span class="code-line"><span class="line-number">140</span>      argWf' = renamingTyping rWf argWf</span>
+                    <span class="code-line"><span class="line-number">141</span>  in <span class="hole-marker">?renameApp</span></span>
+                    <span class="code-line highlight"><span class="line-number">142</span>renamingTyping rWf (TLet tyWf valWf bodyWf) = <span class="hole-marker">?renameLet</span></span>
+                    <span class="code-line"><span class="line-number">143</span>renamingTyping rWf (TConv eWf eq tyWf) =</span>
+                    <span class="code-line"><span class="line-number">144</span>  TConv (renamingTyping rWf eWf) (cong (rename r) eq) (renamingTyping rWf tyWf)</span>
+                </div>
+            </div>
+        </div>
+
+        <h2>📊 Holes by Category</h2>
+
+        <div class="category-section">
+            <div class="category-header">
+                <h3>🔄 Substitution Lemmas</h3>
+                <span class="category-count">14</span>
+            </div>
+            <ul>
+                <li><code>?substVar</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:77</li>
+                <li><code>?substPiCod</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:86</li>
+                <li><code>?substLamBody</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:92</li>
+                <li><code>?substSubst0_proof</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:105</li>
+                <li><code>?substLetBody</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:111</li>
+                <li><code>?substLetSubst</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:112</li>
+                <li><code>?weakenSubstCommutes_proof</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:173</li>
+                <li><code>?substPi_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:149</li>
+                <li><code>?substLam_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:150</li>
+                <li><code>?substLet_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:152</li>
+                <li><code>?weakenSubst0_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:158</li>
+                <li><code>?weakenSubst_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:178</li>
+                <li><code>?weakenSubst0Comm_proof</code> — src/Lean4Idris/Proofs/Weakening.idr:84</li>
+                <li><code>?weakenLetSubst</code> — src/Lean4Idris/Proofs/Weakening.idr:91</li>
+            </ul>
+        </div>
+
+        <div class="category-section">
+            <div class="category-header">
+                <h3>📈 Weakening Lemmas</h3>
+                <span class="category-count">3</span>
+            </div>
+            <ul>
+                <li><code>?weakenPiCod</code> — src/Lean4Idris/Proofs/Weakening.idr:65</li>
+                <li><code>?weakenLamBody</code> — src/Lean4Idris/Proofs/Weakening.idr:71</li>
+                <li><code>?weakenLetBody</code> — src/Lean4Idris/Proofs/Weakening.idr:90</li>
+            </ul>
+        </div>
+
+        <div class="category-section">
+            <div class="category-header">
+                <h3>⚡ Reduction Properties</h3>
+                <span class="category-count">9</span>
+            </div>
+            <ul>
+                <li><code>?betaDet1</code> — src/Lean4Idris/Proofs/Reduction.idr:146</li>
+                <li><code>?betaDet2</code> — src/Lean4Idris/Proofs/Reduction.idr:147</li>
+                <li><code>?betaDet3</code> — src/Lean4Idris/Proofs/Reduction.idr:148</li>
+                <li><code>?betaDet4</code> — src/Lean4Idris/Proofs/Reduction.idr:149</li>
+                <li><code>?betaDet5</code> — src/Lean4Idris/Proofs/Reduction.idr:150</li>
+                <li><code>?betaDet6</code> — src/Lean4Idris/Proofs/Reduction.idr:151</li>
+                <li><code>?betaDet7</code> — src/Lean4Idris/Proofs/Reduction.idr:152</li>
+                <li><code>?betaDet8</code> — src/Lean4Idris/Proofs/Reduction.idr:153</li>
+                <li><code>?betaDet9</code> — src/Lean4Idris/Proofs/Reduction.idr:154</li>
+            </ul>
+        </div>
+
+        <div class="category-section">
+            <div class="category-header">
+                <h3>🏷️ Typing Lemmas</h3>
+                <span class="category-count">2</span>
+            </div>
+            <ul>
+                <li><code>?typeOfType_hole</code> — src/Lean4Idris/Proofs/Typing.idr:146</li>
+                <li><code>?renameVar</code> — src/Lean4Idris/Proofs/Weakening.idr:134</li>
+            </ul>
+        </div>
+
+        <div class="category-section">
+            <div class="category-header">
+                <h3>🔀 Conversion/Equality</h3>
+                <span class="category-count">4</span>
+            </div>
+            <ul>
+                <li><code>?appR_needs_conversion</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:125</li>
+                <li><code>?eq</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:126</li>
+                <li><code>?lamTy_needs_conversion</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:146</li>
+                <li><code>?piDom_needs_context_conv</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:157</li>
+            </ul>
+        </div>
+
+        <div class="category-section">
+            <div class="category-header">
+                <h3>📦 Other</h3>
+                <span class="category-count">17</span>
+            </div>
+            <ul>
+                <li><code>?whnfApp1</code> — src/Lean4Idris/Proofs/Reduction.idr:210</li>
+                <li><code>?idSubWfExt</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:47</li>
+                <li><code>?singleSubWf_proof</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:58</li>
+                <li><code>?liftSubWf_proof</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:160</li>
+                <li><code>?compSubWf_proof</code> — src/Lean4Idris/Proofs/SubstitutionLemma.idr:167</li>
+                <li><code>?liftRenId_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:138</li>
+                <li><code>?renameLam_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:139</li>
+                <li><code>?renameLet_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:141</li>
+                <li><code>?renameComp_hole</code> — src/Lean4Idris/Proofs/Substitution.idr:165</li>
+                <li><code>?tyWf</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:126</li>
+                <li><code>?letTy_hole</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:172</li>
+                <li><code>?letVal_hole</code> — src/Lean4Idris/Proofs/SubjectReduction.idr:176</li>
+                <li><code>?ctxPlusN_hole</code> — src/Lean4Idris/Proofs/Typing.idr:159</li>
+                <li><code>?renamePi</code> — src/Lean4Idris/Proofs/Weakening.idr:136</li>
+                <li><code>?renameLam</code> — src/Lean4Idris/Proofs/Weakening.idr:137</li>
+                <li><code>?renameApp</code> — src/Lean4Idris/Proofs/Weakening.idr:141</li>
+                <li><code>?renameLet</code> — src/Lean4Idris/Proofs/Weakening.idr:142</li>
+            </ul>
+        </div>
+
+        <footer style="margin-top: 50px; padding-top: 20px; border-top: 1px solid var(--accent2); color: var(--text-dim); text-align: center;">
+            Generated by hole-report.py • lean4idris
+        </footer>
+    </div>
+</body>
+</html>

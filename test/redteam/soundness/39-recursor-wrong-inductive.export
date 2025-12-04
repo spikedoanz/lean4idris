@@ -1,0 +1,33 @@
+0.0.0
+1 #NS 0 Unit
+2 #NS 1 unit
+3 #NS 1 rec
+4 #NS 0 Bool
+5 #NS 4 true
+6 #NS 4 false
+7 #NS 0 motive
+1 #US 0
+0 #ES 1
+1 #EC 1
+2 #EC 4
+3 #EC 2
+4 #EC 5
+5 #EC 6
+6 #EP #BD 7 1 0
+7 #EV 0
+8 #EV 1
+9 #EA 8 7
+10 #EP #BD 7 1 9
+11 #EV 0
+12 #EA 11 3
+13 #EP #BD 7 12 10
+14 #EP #BD 7 6 13
+#IND 1 0 0 0 0 0 0 1 1 1 2
+#CTOR 2 1 1 0 0 0
+#IND 4 0 0 0 0 0 0 1 4 2 5 6
+#CTOR 5 2 4 0 0 0
+#CTOR 6 2 4 1 0 0
+15 #EV 1
+0 #RR 5 0 15
+1 #RR 6 0 15
+#REC 3 14 1 1 0 0 1 1 2 0 1 0

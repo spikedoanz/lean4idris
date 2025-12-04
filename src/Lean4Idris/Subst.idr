@@ -57,9 +57,35 @@ substLevelParams ps (Proj sname idx s) = Proj sname idx (substLevelParams ps s)
 substLevelParams ps (NatLit k) = NatLit k
 substLevelParams ps (StringLit s) = StringLit s
 
+||| Safely substitute universe level parameters with occur check
+||| Returns Nothing if any substitution would create a cycle
+public export
+substLevelParamsSafe : List (Name, Level) -> Expr n -> Maybe (Expr n)
+substLevelParamsSafe ps (BVar i) = Just (BVar i)
+substLevelParamsSafe ps (Sort l) = Sort <$> substParamsSafe ps l
+substLevelParamsSafe ps (Const name lvls) = Const name <$> traverse (substParamsSafe ps) lvls
+substLevelParamsSafe ps (App f x) =
+  [| App (substLevelParamsSafe ps f) (substLevelParamsSafe ps x) |]
+substLevelParamsSafe ps (Lam name bi ty body) =
+  [| Lam (pure name) (pure bi) (substLevelParamsSafe ps ty) (substLevelParamsSafe ps body) |]
+substLevelParamsSafe ps (Pi name bi ty body) =
+  [| Pi (pure name) (pure bi) (substLevelParamsSafe ps ty) (substLevelParamsSafe ps body) |]
+substLevelParamsSafe ps (Let name ty val body) =
+  [| Let (pure name) (substLevelParamsSafe ps ty) (substLevelParamsSafe ps val) (substLevelParamsSafe ps body) |]
+substLevelParamsSafe ps (Proj sname idx s) = Proj sname idx <$> substLevelParamsSafe ps s
+substLevelParamsSafe ps (NatLit k) = Just (NatLit k)
+substLevelParamsSafe ps (StringLit s) = Just (StringLit s)
+
 ||| Instantiate universe level parameters from a list
 ||| Given param names and corresponding level values, substitute them
 public export
 instantiateLevelParams : List Name -> List Level -> Expr n -> Expr n
 instantiateLevelParams names levels e =
   substLevelParams (zip names levels) e
+
+||| Safely instantiate universe level parameters with occur check
+||| Returns Nothing if any substitution would create a cycle
+public export
+instantiateLevelParamsSafe : List Name -> List Level -> Expr n -> Maybe (Expr n)
+instantiateLevelParamsSafe names levels e =
+  substLevelParamsSafe (zip names levels) e

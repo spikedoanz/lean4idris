@@ -1,0 +1,2084 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proof Dependency Graph</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --bg-light: #16213e;
+            --text: #eee;
+            --text-dim: #888;
+            --accent: #e94560;
+            --green: #4ecca3;
+            --yellow: #ffd369;
+            --blue: #00adb5;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            overflow: hidden;
+        }
+
+        #graph {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        .controls {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: var(--bg-light);
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 100;
+            max-width: 280px;
+        }
+
+        .controls h1 {
+            font-size: 1.2em;
+            color: var(--accent);
+            margin-bottom: 10px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .stat {
+            text-align: center;
+            padding: 8px;
+            background: var(--bg);
+            border-radius: 4px;
+        }
+
+        .stat .num {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: var(--blue);
+        }
+
+        .stat .label {
+            font-size: 0.75em;
+            color: var(--text-dim);
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.8em;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .tooltip {
+            position: fixed;
+            background: var(--bg-light);
+            border: 1px solid var(--accent);
+            padding: 10px 15px;
+            border-radius: 6px;
+            pointer-events: none;
+            z-index: 200;
+            max-width: 300px;
+            display: none;
+        }
+
+        .tooltip h3 {
+            color: var(--yellow);
+            font-family: monospace;
+            margin-bottom: 5px;
+        }
+
+        .tooltip .type {
+            color: var(--text-dim);
+            font-size: 0.85em;
+        }
+
+        .tooltip .holes {
+            color: var(--accent);
+            margin-top: 5px;
+        }
+
+        .tooltip code {
+            background: var(--bg);
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.85em;
+        }
+
+        .node {
+            cursor: pointer;
+        }
+
+        .node:hover {
+            filter: brightness(1.3);
+        }
+
+        .link {
+            stroke-opacity: 0.4;
+        }
+
+        .link.imports {
+            stroke: var(--accent);
+            stroke-dasharray: 5,5;
+        }
+
+        .link.contains {
+            stroke: var(--text-dim);
+        }
+
+        .link.calls {
+            stroke: var(--blue);
+        }
+
+        .link.has_hole {
+            stroke: #ff6b6b;
+            stroke-dasharray: 3,3;
+        }
+
+        .label {
+            font-size: 10px;
+            fill: var(--text);
+            pointer-events: none;
+        }
+
+        .filter-btn {
+            background: var(--bg);
+            border: 1px solid var(--text-dim);
+            color: var(--text);
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8em;
+            margin: 2px;
+        }
+
+        .filter-btn:hover {
+            border-color: var(--accent);
+        }
+
+        .filter-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .filters {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <h1>🔗 Proof Dependency Graph</h1>
+        <div class="stats">
+            <div class="stat">
+                <div class="num">7</div>
+                <div class="label">Modules</div>
+            </div>
+            <div class="stat">
+                <div class="num">69</div>
+                <div class="label">Definitions</div>
+            </div>
+            <div class="stat">
+                <div class="num">14</div>
+                <div class="label">Holes</div>
+            </div>
+            <div class="stat">
+                <div class="num" id="visible-count">90</div>
+                <div class="label">Visible</div>
+            </div>
+        </div>
+        <div class="filters">
+            <button class="filter-btn active" data-type="all">All</button>
+            <button class="filter-btn" data-type="module">Modules</button>
+            <button class="filter-btn" data-type="lemma">Lemmas</button>
+            <button class="filter-btn" data-type="hole">Holes</button>
+            <button class="filter-btn" data-type="with-holes">With Holes</button>
+        </div>
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #e94560"></div>
+                <span>Module</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #4ecca3"></div>
+                <span>Data</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #00adb5"></div>
+                <span>Function</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #ffd369"></div>
+                <span>Lemma</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #ff6b6b"></div>
+                <span>Hole</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <svg id="graph"></svg>
+
+    <script>
+        const graphData = {
+  "nodes": [
+    {
+      "id": "mod_Lean4Idris.Proofs.Reduction",
+      "label": "Reduction",
+      "fullName": "Lean4Idris.Proofs.Reduction",
+      "type": "module",
+      "color": "#e94560",
+      "size": 42,
+      "holes": 10,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr"
+    },
+    {
+      "id": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "label": "SubjectReduction",
+      "fullName": "Lean4Idris.Proofs.SubjectReduction",
+      "type": "module",
+      "color": "#e94560",
+      "size": 24,
+      "holes": 0,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubjectReduction.idr"
+    },
+    {
+      "id": "mod_Lean4Idris.Proofs.Substitution",
+      "label": "Substitution",
+      "fullName": "Lean4Idris.Proofs.Substitution",
+      "type": "module",
+      "color": "#e94560",
+      "size": 82,
+      "holes": 0,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr"
+    },
+    {
+      "id": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "label": "SubstitutionLemma",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma",
+      "type": "module",
+      "color": "#e94560",
+      "size": 36,
+      "holes": 4,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr"
+    },
+    {
+      "id": "mod_Lean4Idris.Proofs.Syntax",
+      "label": "Syntax",
+      "fullName": "Lean4Idris.Proofs.Syntax",
+      "type": "module",
+      "color": "#e94560",
+      "size": 36,
+      "holes": 0,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr"
+    },
+    {
+      "id": "mod_Lean4Idris.Proofs.Typing",
+      "label": "Typing",
+      "fullName": "Lean4Idris.Proofs.Typing",
+      "type": "module",
+      "color": "#e94560",
+      "size": 28,
+      "holes": 0,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr"
+    },
+    {
+      "id": "mod_Lean4Idris.Proofs.Weakening",
+      "label": "Weakening",
+      "fullName": "Lean4Idris.Proofs.Weakening",
+      "type": "module",
+      "color": "#e94560",
+      "size": 30,
+      "holes": 0,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_Step",
+      "label": "Step",
+      "fullName": "Lean4Idris.Proofs.Reduction.Step",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 26,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_Steps",
+      "label": "Steps",
+      "fullName": "Lean4Idris.Proofs.Reduction.Steps",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 99,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_single",
+      "label": "single",
+      "fullName": "Lean4Idris.Proofs.Reduction.single",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 108,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "Step e e' -> Steps e e'"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_NormalForm",
+      "label": "NormalForm",
+      "fullName": "Lean4Idris.Proofs.Reduction.NormalForm",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 123,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "Expr n -> Type"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_Value",
+      "label": "Value",
+      "fullName": "Lean4Idris.Proofs.Reduction.Value",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 129,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "label": "betaDeterministic",
+      "fullName": "Lean4Idris.Proofs.Reduction.betaDeterministic",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": true,
+      "holes": [
+        "betaDet1",
+        "betaDet2",
+        "betaDet3",
+        "betaDet4",
+        "betaDet5",
+        "betaDet6",
+        "betaDet7",
+        "betaDet8",
+        "betaDet9"
+      ],
+      "line": 142,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "Step (App (Lam ty body) arg) e1"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_stepsAppL",
+      "label": "stepsAppL",
+      "fullName": "Lean4Idris.Proofs.Reduction.stepsAppL",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 162,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "Steps f f' -> Steps (App f x) (App f' x)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_stepsAppR",
+      "label": "stepsAppR",
+      "fullName": "Lean4Idris.Proofs.Reduction.stepsAppR",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 168,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "Steps x x' -> Steps (App f x) (App f x')"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_stepsLam",
+      "label": "stepsLam",
+      "fullName": "Lean4Idris.Proofs.Reduction.stepsLam",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 174,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "Steps body body' -> Steps (Lam ty body) (Lam ty bo..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_WHNF",
+      "label": "WHNF",
+      "fullName": "Lean4Idris.Proofs.Reduction.WHNF",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 185,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Reduction_whnfNoHead",
+      "label": "whnfNoHead",
+      "fullName": "Lean4Idris.Proofs.Reduction.whnfNoHead",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": true,
+      "holes": [
+        "whnfApp1"
+      ],
+      "line": 196,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Reduction.idr",
+      "typeSig": "WHNF e -> Step e e' -> Either (WHNF e') (e' = e)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubjectReduction_subjectReduction",
+      "label": "subjectReduction",
+      "fullName": "Lean4Idris.Proofs.SubjectReduction.subjectReduction",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 31,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubjectReduction.idr",
+      "typeSig": "{ctx : Ctx n} -> {e : Expr n} -> {e' : Expr n} -> ..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubjectReduction_subjectReductionMulti",
+      "label": "subjectReductionMulti",
+      "fullName": "Lean4Idris.Proofs.SubjectReduction.subjectReductionMulti",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 198,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubjectReduction.idr",
+      "typeSig": "HasType ctx e ty"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_Ren",
+      "label": "Ren",
+      "fullName": "Lean4Idris.Proofs.Substitution.Ren",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 23,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Nat -> Nat -> Type"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_idRen",
+      "label": "idRen",
+      "fullName": "Lean4Idris.Proofs.Substitution.idRen",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 28,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Ren n n"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_shiftRen",
+      "label": "shiftRen",
+      "fullName": "Lean4Idris.Proofs.Substitution.shiftRen",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 34,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Ren n (S n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftRen",
+      "label": "liftRen",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftRen",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 40,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Ren n m -> Ren (S n) (S m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_rename",
+      "label": "rename",
+      "fullName": "Lean4Idris.Proofs.Substitution.rename",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 46,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Ren n m -> Expr n -> Expr m"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "label": "weaken",
+      "fullName": "Lean4Idris.Proofs.Substitution.weaken",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 12,
+      "hasHoles": false,
+      "holes": [],
+      "line": 61,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Expr n -> Expr (S n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_weakenN",
+      "label": "weakenN",
+      "fullName": "Lean4Idris.Proofs.Substitution.weakenN",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 66,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(k : Nat) -> Expr n -> Expr (k + n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_Sub",
+      "label": "Sub",
+      "fullName": "Lean4Idris.Proofs.Substitution.Sub",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 77,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Nat -> Nat -> Type"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_idSub",
+      "label": "idSub",
+      "fullName": "Lean4Idris.Proofs.Substitution.idSub",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 82,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Sub n n"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_shiftSub",
+      "label": "shiftSub",
+      "fullName": "Lean4Idris.Proofs.Substitution.shiftSub",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 87,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Sub n (S n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftSub",
+      "label": "liftSub",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftSub",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 94,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Sub n m -> Sub (S n) (S m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_subst",
+      "label": "subst",
+      "fullName": "Lean4Idris.Proofs.Substitution.subst",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 100,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Sub n m -> Expr n -> Expr m"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_singleSub",
+      "label": "singleSub",
+      "fullName": "Lean4Idris.Proofs.Substitution.singleSub",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 115,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Expr n -> Sub (S n) n"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_subst0",
+      "label": "subst0",
+      "fullName": "Lean4Idris.Proofs.Substitution.subst0",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 12,
+      "hasHoles": false,
+      "holes": [],
+      "line": 122,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "Expr (S n) -> Expr n -> Expr n"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftRenExt",
+      "label": "liftRenExt",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftRenExt",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 131,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(r1 : Ren n m) -> (r2 : Ren n m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_renameExt",
+      "label": "renameExt",
+      "fullName": "Lean4Idris.Proofs.Substitution.renameExt",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 140,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(r1 : Ren n m) -> (r2 : Ren n m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftSubExt",
+      "label": "liftSubExt",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftSubExt",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 160,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(s1 : Sub n m) -> (s2 : Sub n m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_substExt",
+      "label": "substExt",
+      "fullName": "Lean4Idris.Proofs.Substitution.substExt",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 168,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(s1 : Sub n m) -> (s2 : Sub n m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftRenId",
+      "label": "liftRenId",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftRenId",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 192,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(i : Fin (S n)) -> liftRen Substitution.idRen i = ..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_renameId",
+      "label": "renameId",
+      "fullName": "Lean4Idris.Proofs.Substitution.renameId",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 199,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(e : Expr n) -> rename Substitution.idRen e = e"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftRenComp",
+      "label": "liftRenComp",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftRenComp",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 219,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(r1 : Ren n m) -> (r2 : Ren m k)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_renameComp",
+      "label": "renameComp",
+      "fullName": "Lean4Idris.Proofs.Substitution.renameComp",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 227,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(r1 : Ren n m) -> (r2 : Ren m k) -> (e : Expr n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftSubId",
+      "label": "liftSubId",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftSubId",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 256,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(i : Fin (S n)) -> liftSub Substitution.idSub i = ..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_substId",
+      "label": "substId",
+      "fullName": "Lean4Idris.Proofs.Substitution.substId",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 263,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(e : Expr n) -> subst Substitution.idSub e = e"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftSubRenComp",
+      "label": "liftSubRenComp",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftSubRenComp",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 287,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(r : Ren n m) -> (s : Sub m k)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_substRename",
+      "label": "substRename",
+      "fullName": "Lean4Idris.Proofs.Substitution.substRename",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 295,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(r : Ren n m) -> (s : Sub m k) -> (e : Expr n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftRenSubComp",
+      "label": "liftRenSubComp",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftRenSubComp",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 320,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(s : Sub n m) -> (r : Ren m k)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_renameSubst",
+      "label": "renameSubst",
+      "fullName": "Lean4Idris.Proofs.Substitution.renameSubst",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 333,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(s : Sub n m) -> (r : Ren m k) -> (e : Expr n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_weakenSubst0",
+      "label": "weakenSubst0",
+      "fullName": "Lean4Idris.Proofs.Substitution.weakenSubst0",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 364,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(e : Expr n) -> (x : Expr n) -> subst0 (weaken e) ..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_liftSubWeakenComp",
+      "label": "liftSubWeakenComp",
+      "fullName": "Lean4Idris.Proofs.Substitution.liftSubWeakenComp",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 376,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(s : Sub n m)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Substitution_weakenSubst",
+      "label": "weakenSubst",
+      "fullName": "Lean4Idris.Proofs.Substitution.weakenSubst",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 389,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Substitution.idr",
+      "typeSig": "(s : Sub n m) -> (e : Expr n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_SubWf",
+      "label": "SubWf",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.SubWf",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 28,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_idSubWf",
+      "label": "idSubWf",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.idSubWf",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": true,
+      "holes": [
+        "idSubWfExt"
+      ],
+      "line": 45,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "(ctx : Ctx n) -> SubWf Substitution.idSub ctx ctx"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_singleSubWf",
+      "label": "singleSubWf",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.singleSubWf",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": true,
+      "holes": [
+        "singleSubWf_proof"
+      ],
+      "line": 55,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "{ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionGeneral",
+      "label": "substitutionGeneral",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.substitutionGeneral",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": true,
+      "holes": [
+        "substVar"
+      ],
+      "line": 71,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "{s : Sub n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionLemma",
+      "label": "substitutionLemma",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.substitutionLemma",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 120,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "{ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionPreservesWellTyped",
+      "label": "substitutionPreservesWellTyped",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.substitutionPreservesWellTyped",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 134,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "{ctx : Ctx n} -> {ty : Expr n} -> {eTy : Expr (S n..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_liftSubWf",
+      "label": "liftSubWf",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.liftSubWf",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": true,
+      "holes": [
+        "liftSubWf_proof"
+      ],
+      "line": 147,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "SubWf s ctx ctx'"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.SubstitutionLemma_weakenSubstCommutes",
+      "label": "weakenSubstCommutes",
+      "fullName": "Lean4Idris.Proofs.SubstitutionLemma.weakenSubstCommutes",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 159,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/SubstitutionLemma.idr",
+      "typeSig": "(s : Sub n m) -> (e : Expr n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_Level",
+      "label": "Level",
+      "fullName": "Lean4Idris.Proofs.Syntax.Level",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 19,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_lmax",
+      "label": "lmax",
+      "fullName": "Lean4Idris.Proofs.Syntax.lmax",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 31,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "Level -> Level -> Level"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_Expr",
+      "label": "Expr",
+      "fullName": "Lean4Idris.Proofs.Syntax.Expr",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 48,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_shift",
+      "label": "shift",
+      "fullName": "Lean4Idris.Proofs.Syntax.shift",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 78,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "Expr n -> Expr (S n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_Arrow",
+      "label": "Arrow",
+      "fullName": "Lean4Idris.Proofs.Syntax.Arrow",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 89,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "Expr n -> Expr n -> Expr n"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_showVar",
+      "label": "showVar",
+      "fullName": "Lean4Idris.Proofs.Syntax.showVar",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 101,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "Fin n -> String"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_finEq",
+      "label": "finEq",
+      "fullName": "Lean4Idris.Proofs.Syntax.finEq",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 119,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "(i : Fin n) -> (j : Fin n) -> Dec (i = j)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Syntax_levelEq",
+      "label": "levelEq",
+      "fullName": "Lean4Idris.Proofs.Syntax.levelEq",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 129,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Syntax.idr",
+      "typeSig": "(l1 : Level) -> (l2 : Level) -> Dec (l1 = l2)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Typing_Ctx",
+      "label": "Ctx",
+      "fullName": "Lean4Idris.Proofs.Typing.Ctx",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 28,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Typing_lookupVar",
+      "label": "lookupVar",
+      "fullName": "Lean4Idris.Proofs.Typing.lookupVar",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 41,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr",
+      "typeSig": "(ctx : Ctx n) -> (i : Fin n) -> Expr n"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Typing_HasType",
+      "label": "HasType",
+      "fullName": "Lean4Idris.Proofs.Typing.HasType",
+      "type": "data",
+      "color": "#4ecca3",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 57,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr",
+      "typeSig": ""
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Typing_exampleId",
+      "label": "exampleId",
+      "fullName": "Lean4Idris.Proofs.Typing.exampleId",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 163,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Typing.idr",
+      "typeSig": "HasType Empty"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_weakenLookup",
+      "label": "weakenLookup",
+      "fullName": "Lean4Idris.Proofs.Weakening.weakenLookup",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 26,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "(ctx : Ctx n) -> (i : Fin n) -> (a : Expr n)"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_exchangeRen",
+      "label": "exchangeRen",
+      "fullName": "Lean4Idris.Proofs.Weakening.exchangeRen",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 37,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "Ren (S (S n)) (S (S n))"
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_exchangeInvol",
+      "label": "exchangeInvol",
+      "fullName": "Lean4Idris.Proofs.Weakening.exchangeInvol",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 44,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "(i : Fin (S (S n))) -> exchangeRen (exchangeRen i)..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_renameExchangeInvol",
+      "label": "renameExchangeInvol",
+      "fullName": "Lean4Idris.Proofs.Weakening.renameExchangeInvol",
+      "type": "lemma",
+      "color": "#ffd369",
+      "size": 8,
+      "hasHoles": false,
+      "holes": [],
+      "line": 51,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "(e : Expr (S (S n))) -> rename Weakening.exchangeR..."
+    },
+    {
+      "id": "def_Lean4Idris.Proofs.Weakening_weakening",
+      "label": "weakening",
+      "fullName": "Lean4Idris.Proofs.Weakening.weakening",
+      "type": "function",
+      "color": "#00adb5",
+      "size": 10,
+      "hasHoles": false,
+      "holes": [],
+      "line": 71,
+      "file": "/Users/spike/R/lean4idris/src/Lean4Idris/Proofs/Weakening.idr",
+      "typeSig": "{ctx : Ctx n} -> {e : Expr n} -> {ty : Expr n}"
+    },
+    {
+      "id": "hole_betaDet1",
+      "label": "?betaDet1",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet2",
+      "label": "?betaDet2",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet3",
+      "label": "?betaDet3",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet4",
+      "label": "?betaDet4",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet5",
+      "label": "?betaDet5",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet6",
+      "label": "?betaDet6",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet7",
+      "label": "?betaDet7",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet8",
+      "label": "?betaDet8",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_betaDet9",
+      "label": "?betaDet9",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_whnfApp1",
+      "label": "?whnfApp1",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_idSubWfExt",
+      "label": "?idSubWfExt",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_singleSubWf_proof",
+      "label": "?singleSubWf_proof",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_substVar",
+      "label": "?substVar",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    },
+    {
+      "id": "hole_liftSubWf_proof",
+      "label": "?liftSubWf_proof",
+      "type": "hole",
+      "color": "#ff6b6b",
+      "size": 6
+    }
+  ],
+  "links": [
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_Step",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_Steps",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_single",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_NormalForm",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_Value",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_stepsAppL",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_stepsAppR",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_stepsLam",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_WHNF",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "def_Lean4Idris.Proofs.Reduction_whnfNoHead",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "def_Lean4Idris.Proofs.SubjectReduction_subjectReduction",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "def_Lean4Idris.Proofs.SubjectReduction_subjectReductionMulti",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_Ren",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_idRen",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_shiftRen",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftRen",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_rename",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_weakenN",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_Sub",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_idSub",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_shiftSub",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftSub",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_subst",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_singleSub",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_subst0",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftRenExt",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_renameExt",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftSubExt",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_substExt",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftRenId",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_renameId",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftRenComp",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_renameComp",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftSubId",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_substId",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftSubRenComp",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_substRename",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftRenSubComp",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_renameSubst",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_weakenSubst0",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftSubWeakenComp",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "def_Lean4Idris.Proofs.Substitution_weakenSubst",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_SubWf",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_idSubWf",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_singleSubWf",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionGeneral",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionLemma",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionPreservesWellTyped",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_liftSubWf",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "def_Lean4Idris.Proofs.SubstitutionLemma_weakenSubstCommutes",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_Level",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_lmax",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_Expr",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_shift",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_Arrow",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_showVar",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_finEq",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Syntax",
+      "target": "def_Lean4Idris.Proofs.Syntax_levelEq",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Typing",
+      "target": "def_Lean4Idris.Proofs.Typing_Ctx",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Typing",
+      "target": "def_Lean4Idris.Proofs.Typing_lookupVar",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Typing",
+      "target": "def_Lean4Idris.Proofs.Typing_HasType",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Typing",
+      "target": "def_Lean4Idris.Proofs.Typing_exampleId",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_weakenLookup",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_exchangeRen",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_exchangeInvol",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_renameExchangeInvol",
+      "type": "contains"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_weakening",
+      "type": "contains"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet1",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet2",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet3",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet4",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet5",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet6",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet7",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet8",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_betaDeterministic",
+      "target": "hole_betaDet9",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_whnfNoHead",
+      "target": "hole_whnfApp1",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.SubstitutionLemma_idSubWf",
+      "target": "hole_idSubWfExt",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.SubstitutionLemma_singleSubWf",
+      "target": "hole_singleSubWf_proof",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.SubstitutionLemma_substitutionGeneral",
+      "target": "hole_substVar",
+      "type": "has_hole"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.SubstitutionLemma_liftSubWf",
+      "target": "hole_liftSubWf_proof",
+      "type": "has_hole"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "mod_Lean4Idris.Proofs.Syntax",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Reduction",
+      "target": "mod_Lean4Idris.Proofs.Substitution",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "mod_Lean4Idris.Proofs.Syntax",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "mod_Lean4Idris.Proofs.Substitution",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "mod_Lean4Idris.Proofs.Typing",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "mod_Lean4Idris.Proofs.Reduction",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "mod_Lean4Idris.Proofs.Weakening",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubjectReduction",
+      "target": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Substitution",
+      "target": "mod_Lean4Idris.Proofs.Syntax",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "mod_Lean4Idris.Proofs.Syntax",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "mod_Lean4Idris.Proofs.Substitution",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "mod_Lean4Idris.Proofs.Typing",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.SubstitutionLemma",
+      "target": "mod_Lean4Idris.Proofs.Weakening",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Typing",
+      "target": "mod_Lean4Idris.Proofs.Syntax",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Typing",
+      "target": "mod_Lean4Idris.Proofs.Substitution",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "mod_Lean4Idris.Proofs.Syntax",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "mod_Lean4Idris.Proofs.Substitution",
+      "type": "imports"
+    },
+    {
+      "source": "mod_Lean4Idris.Proofs.Weakening",
+      "target": "mod_Lean4Idris.Proofs.Typing",
+      "type": "imports"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Reduction_NormalForm",
+      "target": "def_Lean4Idris.Proofs.Reduction_Step",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_rename",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftRen",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "target": "def_Lean4Idris.Proofs.Substitution_rename",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "target": "def_Lean4Idris.Proofs.Substitution_shiftRen",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_weakenN",
+      "target": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_liftSub",
+      "target": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_subst",
+      "target": "def_Lean4Idris.Proofs.Substitution_liftSub",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_subst0",
+      "target": "def_Lean4Idris.Proofs.Substitution_subst",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_subst0",
+      "target": "def_Lean4Idris.Proofs.Substitution_singleSub",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_liftSubExt",
+      "target": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Substitution_liftSubId",
+      "target": "def_Lean4Idris.Proofs.Substitution_weaken",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Syntax_Arrow",
+      "target": "def_Lean4Idris.Proofs.Syntax_shift",
+      "type": "calls"
+    },
+    {
+      "source": "def_Lean4Idris.Proofs.Weakening_weakening",
+      "target": "def_Lean4Idris.Proofs.Weakening_weakenLookup",
+      "type": "calls"
+    }
+  ]
+};
+
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        const svg = d3.select("#graph")
+            .attr("width", width)
+            .attr("height", height);
+
+        // Add zoom behavior
+        const g = svg.append("g");
+
+        svg.call(d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            }));
+
+        // Create arrow markers for links
+        svg.append("defs").selectAll("marker")
+            .data(["imports", "calls", "contains", "has_hole"])
+            .join("marker")
+            .attr("id", d => `arrow-${d}`)
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 20)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("fill", d => {
+                if (d === "imports") return "#e94560";
+                if (d === "calls") return "#00adb5";
+                if (d === "has_hole") return "#ff6b6b";
+                return "#888";
+            })
+            .attr("d", "M0,-5L10,0L0,5");
+
+        // Force simulation
+        const simulation = d3.forceSimulation(graphData.nodes)
+            .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(80))
+            .force("charge", d3.forceManyBody().strength(-200))
+            .force("center", d3.forceCenter(width / 2, height / 2))
+            .force("collision", d3.forceCollide().radius(d => d.size + 5));
+
+        // Draw links
+        const link = g.append("g")
+            .selectAll("line")
+            .data(graphData.links)
+            .join("line")
+            .attr("class", d => `link ${d.type}`)
+            .attr("stroke-width", 1.5)
+            .attr("marker-end", d => `url(#arrow-${d.type})`);
+
+        // Draw nodes
+        const node = g.append("g")
+            .selectAll("circle")
+            .data(graphData.nodes)
+            .join("circle")
+            .attr("class", "node")
+            .attr("r", d => d.size)
+            .attr("fill", d => d.color)
+            .attr("stroke", d => d.hasHoles ? "#ff6b6b" : "none")
+            .attr("stroke-width", d => d.hasHoles ? 3 : 0)
+            .call(d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended));
+
+        // Add labels
+        const label = g.append("g")
+            .selectAll("text")
+            .data(graphData.nodes)
+            .join("text")
+            .attr("class", "label")
+            .attr("dx", d => d.size + 3)
+            .attr("dy", 3)
+            .text(d => d.label);
+
+        // Tooltip
+        const tooltip = d3.select("#tooltip");
+
+        node.on("mouseover", (event, d) => {
+            let html = `<h3>${d.label}</h3>`;
+            html += `<div class="type">${d.type}</div>`;
+            if (d.typeSig) {
+                html += `<div><code>${d.typeSig}</code></div>`;
+            }
+            if (d.holes && d.holes.length > 0) {
+                html += `<div class="holes">Holes: ${d.holes.map(h => '?' + h).join(', ')}</div>`;
+            }
+            if (d.file) {
+                html += `<div class="type">${d.file.split('/').pop()}:${d.line || ''}</div>`;
+            }
+
+            tooltip.html(html)
+                .style("display", "block")
+                .style("left", (event.pageX + 15) + "px")
+                .style("top", (event.pageY - 10) + "px");
+        })
+        .on("mouseout", () => {
+            tooltip.style("display", "none");
+        });
+
+        // Update positions on tick
+        simulation.on("tick", () => {
+            link
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+
+            node
+                .attr("cx", d => d.x)
+                .attr("cy", d => d.y);
+
+            label
+                .attr("x", d => d.x)
+                .attr("y", d => d.y);
+        });
+
+        // Drag functions
+        function dragstarted(event) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        }
+
+        function dragged(event) {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        }
+
+        function dragended(event) {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        }
+
+        // Filter buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                const filterType = btn.dataset.type;
+
+                node.style("opacity", d => {
+                    if (filterType === "all") return 1;
+                    if (filterType === "with-holes") return d.hasHoles || d.type === "hole" ? 1 : 0.1;
+                    return d.type === filterType ? 1 : 0.1;
+                });
+
+                label.style("opacity", d => {
+                    if (filterType === "all") return 1;
+                    if (filterType === "with-holes") return d.hasHoles || d.type === "hole" ? 1 : 0.1;
+                    return d.type === filterType ? 1 : 0.1;
+                });
+
+                link.style("opacity", d => {
+                    if (filterType === "all") return 0.4;
+                    return 0.1;
+                });
+
+                // Update visible count
+                let count = graphData.nodes.filter(d => {
+                    if (filterType === "all") return true;
+                    if (filterType === "with-holes") return d.hasHoles || d.type === "hole";
+                    return d.type === filterType;
+                }).length;
+                document.getElementById("visible-count").textContent = count;
+            });
+        });
+    </script>
+</body>
+</html>

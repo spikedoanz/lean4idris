@@ -107,10 +107,50 @@ simplify (IMax l1 l2) =
        _ => if l1' == l2' then l1' else IMax l1' l2'
 simplify (Param n) = Param n
 
-||| Substitute a parameter with a level
+||| Check if a name occurs in a level (for occur check)
 public export
-substParam : Name -> Level -> Level -> Level
-substParam n replacement = go
+occursIn : Name -> Level -> Bool
+occursIn _ Zero = False
+occursIn n (Succ l) = occursIn n l
+occursIn n (Max l1 l2) = occursIn n l1 || occursIn n l2
+occursIn n (IMax l1 l2) = occursIn n l1 || occursIn n l2
+occursIn n (Param m) = n == m
+
+||| Check if a name occurs as a proper subterm in a level (for cycle detection)
+|||
+||| Returns False for the identity case: occursInProper n (Param n) = False
+||| Returns True when n is nested inside Succ/Max/IMax.
+|||
+||| This distinguishes between:
+||| - u := Param u (identity substitution, allowed)
+||| - u := Succ (Param u) (creates cycle, rejected)
+public export
+occursInProper : Name -> Level -> Bool
+occursInProper _ Zero = False
+occursInProper n (Succ l) = occursIn n l  -- Any occurrence inside Succ is proper
+occursInProper n (Max l1 l2) = occursIn n l1 || occursIn n l2  -- Inside Max is proper
+occursInProper n (IMax l1 l2) = occursIn n l1 || occursIn n l2  -- Inside IMax is proper
+occursInProper n (Param m) = False  -- Param n is NOT a proper subterm of itself
+
+||| Substitute a parameter with a level (with proper occur check for cycle detection)
+|||
+||| Returns Nothing only if substitution would create a genuine cycle,
+||| i.e., when n appears as a proper subterm of replacement.
+|||
+||| Identity substitutions like `u := Param u` are allowed (they are no-ops).
+|||
+||| Examples:
+|||   substParamSafe "u" (Param "u") level = Just level  -- Identity, allowed
+|||   substParamSafe "u" Zero level = Just (subst result)  -- Concrete, allowed
+|||   substParamSafe "u" (Succ (Param "u")) level = Nothing  -- Cycle!
+public export
+substParamSafe : Name -> Level -> Level -> Maybe Level
+substParamSafe n replacement level =
+  -- Proper occur check: reject only if n is a proper subterm of replacement
+  -- This allows identity substitutions like u := Param u (which are no-ops)
+  if occursInProper n replacement
+    then Nothing
+    else Just (simplify (go level))  -- Simplify after substitution!
   where
     go : Level -> Level
     go Zero = Zero
@@ -119,7 +159,31 @@ substParam n replacement = go
     go (IMax l1 l2) = IMax (go l1) (go l2)
     go (Param m) = if n == m then replacement else Param m
 
+||| Substitute a parameter with a level
+||| NOTE: This version does not check for cycles. Use substParamSafe for untrusted input.
+||| Simplifies the result to handle IMax properly.
+public export
+substParam : Name -> Level -> Level -> Level
+substParam n replacement = simplify . go
+  where
+    go : Level -> Level
+    go Zero = Zero
+    go (Succ l) = Succ (go l)
+    go (Max l1 l2) = Max (go l1) (go l2)
+    go (IMax l1 l2) = IMax (go l1) (go l2)
+    go (Param m) = if n == m then replacement else Param m
+
+||| Substitute all parameters using a list of replacements (with occur check)
+||| Returns Nothing if any substitution would create a cycle
+public export
+substParamsSafe : List (Name, Level) -> Level -> Maybe Level
+substParamsSafe [] l = Just l
+substParamsSafe ((n, repl) :: rest) l = do
+  l' <- substParamSafe n repl l
+  substParamsSafe rest l'
+
 ||| Substitute all parameters using a list of replacements
+||| NOTE: This version does not check for cycles. Use substParamsSafe for untrusted input.
 public export
 substParams : List (Name, Level) -> Level -> Level
 substParams ps l = foldl (\acc, (n, repl) => substParam n repl acc) l ps

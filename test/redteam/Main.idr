@@ -132,6 +132,13 @@ soundnessTests =
   , MkTestSpec "26-let-value-type-mismatch.export"
       "Let binding value type doesn't match declared type (let x : Bool := Nat.zero)"
       "reject"
+  -- Extended attack surface tests
+  , MkTestSpec "29-app-defequal-not-structural.export"
+      "Application where types are def-equal but not structurally equal after whnf"
+      "accept"
+  , MkTestSpec "30-whnf-deep-beta.export"
+      "Deeply nested beta reductions (15 levels) to test fuel limits"
+      "accept"
   ]
 
 ||| Run a single test and report results

@@ -115,6 +115,20 @@ data TCError : Type where
   UnknownConst : Name -> TCError
   ||| Wrong number of universe levels
   WrongNumLevels : (expected : Nat) -> (actual : Nat) -> Name -> TCError
+  ||| Negative occurrence in inductive type (non-strict positivity)
+  NegativeOccurrence : (indName : Name) -> (ctorName : Name) -> TCError
+  ||| Constructor return type doesn't match inductive type
+  CtorWrongReturnType : (ctorName : Name) -> (expected : Name) -> (actual : ClosedExpr) -> TCError
+  ||| Constructor field count doesn't match type
+  CtorWrongFieldCount : (ctorName : Name) -> (declared : Nat) -> (actual : Nat) -> TCError
+  ||| Constructor references wrong inductive type
+  CtorWrongInductive : (ctorName : Name) -> (declared : Name) -> (actual : Name) -> TCError
+  ||| Constructor universe parameters don't match inductive
+  CtorUniverseMismatch : (ctorName : Name) -> (indParams : List Name) -> (ctorParams : List Name) -> TCError
+  ||| Inductive type not found for constructor
+  CtorInductiveNotFound : (ctorName : Name) -> (indName : Name) -> TCError
+  ||| Cyclic universe level parameter (would cause infinite loop)
+  CyclicLevelParam : Name -> TCError
   ||| Other error
   OtherError : String -> TCError
 
@@ -128,6 +142,22 @@ Show TCError where
   show (WrongNumLevels exp act n) =
     "wrong number of universe levels for " ++ show n ++
     ": expected " ++ show exp ++ ", got " ++ show act
+  show (NegativeOccurrence ind ctor) =
+    "negative occurrence of " ++ show ind ++ " in constructor " ++ show ctor
+  show (CtorWrongReturnType ctor expected _) =
+    "constructor " ++ show ctor ++ " must return " ++ show expected
+  show (CtorWrongFieldCount ctor decl actual) =
+    "constructor " ++ show ctor ++ " declares " ++ show decl ++
+    " fields but type has " ++ show actual
+  show (CtorWrongInductive ctor decl actual) =
+    "constructor " ++ show ctor ++ " registered for " ++ show decl ++
+    " but returns " ++ show actual
+  show (CtorUniverseMismatch ctor indPs ctorPs) =
+    "constructor " ++ show ctor ++ " universe params don't match inductive"
+  show (CtorInductiveNotFound ctor ind) =
+    "inductive " ++ show ind ++ " not found for constructor " ++ show ctor
+  show (CyclicLevelParam n) =
+    "cyclic universe level parameter: " ++ show n
   show (OtherError s) = s
 
 ------------------------------------------------------------------------
@@ -198,7 +228,8 @@ unfoldConst env name levels = do
   let params = declLevelParams decl
   -- Check level count matches
   guard (length params == length levels)
-  pure (instantiateLevelParams params levels value)
+  -- Use safe instantiation to prevent cyclic params
+  instantiateLevelParamsSafe params levels value
 
 ||| Get the head constant of an application spine
 ||| e.g., for `f a b c` returns `Just (f, [a, b, c])`
@@ -303,7 +334,8 @@ tryIotaReduction env e whnfStep = do
   --   3. remaining args after major
 
   let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
-  let rhs = instantiateLevelParams (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
+  -- Use safe instantiation; if cyclic params detected, fail iota reduction
+  rhs <- instantiateLevelParamsSafe (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
 
   -- Apply: rhs params motives minors
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
@@ -528,9 +560,11 @@ mutual
         Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
         Just ty =>
           let params = declLevelParams decl in
-          if length params == length levels
-            then Right (instantiateLevelParams params levels ty)
-            else Left (WrongNumLevels (length params) (length levels) name)
+          if length params /= length levels
+            then Left (WrongNumLevels (length params) (length levels) name)
+            else case instantiateLevelParamsSafe params levels ty of
+              Nothing => Left (CyclicLevelParam name)
+              Just ty' => Right ty'
 
   -- App: infer function type, check it's Pi, verify arg type, instantiate with arg
   inferType env (App f arg) = do
@@ -594,9 +628,11 @@ mutual
         Nothing => Left (UnknownConst name)
         Just ty =>
           let params = declLevelParams decl in
-          if length params == length levels
-            then Right (instantiateLevelParams params levels ty)
-            else Left (WrongNumLevels (length params) (length levels) name)
+          if length params /= length levels
+            then Left (WrongNumLevels (length params) (length levels) name)
+            else case instantiateLevelParamsSafe params levels ty of
+              Nothing => Left (CyclicLevelParam name)
+              Just ty' => Right ty'
 
   -- BVar: look up type in local context
   inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type
@@ -975,6 +1011,127 @@ checkThmDecl env name ty value levelParams = do
         then Right ()
         else Left (OtherError $ "theorem proof type mismatch for " ++ show name)
 
+------------------------------------------------------------------------
+-- Inductive/Constructor Validation
+------------------------------------------------------------------------
+
+||| Check if a name occurs in negative position in an expression.
+||| A negative position is on the left side of an arrow (Pi domain).
+||| Returns True if the name occurs in strictly positive position only.
+|||
+||| Strict positivity means:
+||| - The inductive name doesn't occur in the domain of any Pi
+||| - The inductive name can only occur as the head of the final return type
+|||   or as an argument to another strictly positive type
+||| Check if a type contains the inductive name in a negative position.
+||| This is used for strict positivity checking.
+|||
+||| Strict positivity rules:
+||| 1. The inductive can appear as a direct constructor parameter: Nat.succ : Nat -> Nat (OK)
+||| 2. The inductive CANNOT appear in the domain of a function that is itself a parameter:
+|||    Bad.mk : (Bad -> False) -> Bad (BAD - Bad in domain of function parameter)
+||| 3. The inductive CAN appear as a parameter applied to other types:
+|||    List.cons : A -> List A -> List A (OK - List A is applied form)
+|||
+||| We track "depth" - how many function domains deep we are:
+||| - depth 0: at the top level or in codomain
+||| - depth 1: in the direct domain of a constructor parameter (OK for inductive to appear here)
+||| - depth >= 2: in a nested function domain (NOT OK - negative occurrence)
+checkNegativeOccurrence : Name -> {n : Nat} -> Expr n -> Bool
+checkNegativeOccurrence indName = go 0
+  where
+    ||| Check if the name appears in negative position.
+    ||| `depth` counts how many function domains deep we are.
+    go : {m : Nat} -> Nat -> Expr m -> Bool
+    go _ (BVar _) = False  -- No occurrence
+    go _ (Sort _) = False  -- No occurrence
+    go _ (NatLit _) = False
+    go _ (StringLit _) = False
+    go depth (Const n _) =
+      -- Negative occurrence if we're 2+ levels deep in function domains
+      depth >= 2 && n == indName
+    go depth (App f x) =
+      go depth f || go depth x
+    go depth (Lam _ _ ty body) =
+      go depth ty || go depth body
+    go depth (Pi _ _ dom cod) =
+      -- When entering domain, increment depth
+      -- When in codomain, reset to 0 (we're back at "top level" for that branch)
+      go (S depth) dom || go 0 cod
+    go depth (Let _ ty val body) =
+      go depth ty || go depth val || go depth body
+    go depth (Proj _ _ e) = go depth e
+
+checkStrictlyPositive : Name -> ClosedExpr -> Bool
+checkStrictlyPositive indName ty = not (checkNegativeOccurrence indName ty)
+
+||| Check if an inductive type satisfies the strict positivity condition.
+||| This checks all constructor types to ensure the inductive name doesn't
+||| appear in negative position.
+checkPositivity : Name -> List ConstructorInfo -> TC ()
+checkPositivity indName [] = Right ()
+checkPositivity indName (ctor :: ctors) =
+  if checkStrictlyPositive indName ctor.type
+    then checkPositivity indName ctors
+    else Left (NegativeOccurrence indName ctor.name)
+
+||| Get the head constant from the return type of a constructor.
+||| Strips off all Pi binders and returns the head of the resulting type.
+getReturnTypeHead : Expr n -> Maybe (Name, List Level)
+getReturnTypeHead (Pi _ _ _ cod) = getReturnTypeHead cod
+getReturnTypeHead (App f _) = getReturnTypeHead f
+getReturnTypeHead (Const n ls) = Just (n, ls)
+getReturnTypeHead _ = Nothing
+
+||| Count the number of Pi binders in a type (i.e., the arity/field count)
+countPiBinders : Expr n -> Nat
+countPiBinders (Pi _ _ _ cod) = S (countPiBinders cod)
+countPiBinders _ = 0
+
+||| Check that a constructor's type returns the correct inductive type.
+checkCtorReturnType : Name -> Name -> ClosedExpr -> TC ()
+checkCtorReturnType ctorName indName ctorTy =
+  case getReturnTypeHead ctorTy of
+    Just (returnName, _) =>
+      if returnName == indName
+        then Right ()
+        else Left (CtorWrongInductive ctorName indName returnName)
+    Nothing =>
+      Left (CtorWrongReturnType ctorName indName ctorTy)
+
+||| Check that the declared field count matches the actual type.
+||| The field count is the number of Pi binders after the parameters.
+checkCtorFieldCount : Name -> Nat -> Nat -> ClosedExpr -> TC ()
+checkCtorFieldCount ctorName numParams declaredFields ctorTy =
+  let totalBinders = countPiBinders ctorTy
+      actualFields = if totalBinders >= numParams
+                       then totalBinders `minus` numParams
+                       else 0
+  in if declaredFields == actualFields
+       then Right ()
+       else Left (CtorWrongFieldCount ctorName declaredFields actualFields)
+
+||| Check that constructor universe parameters match the inductive's parameters.
+checkCtorUniverseParams : Name -> List Name -> List Name -> TC ()
+checkCtorUniverseParams ctorName indParams ctorParams =
+  if indParams == ctorParams
+    then Right ()
+    else Left (CtorUniverseMismatch ctorName indParams ctorParams)
+
+||| Get the inductive info for a name (if it exists and is an inductive)
+getInductiveInfo : TCEnv -> Name -> Maybe InductiveInfo
+getInductiveInfo env name =
+  case lookupDecl name env of
+    Just (IndDecl info _) => Just info
+    _ => Nothing
+
+||| Get the level parameters for an inductive
+getInductiveLevelParams : TCEnv -> Name -> Maybe (List Name)
+getInductiveLevelParams env name =
+  case lookupDecl name env of
+    Just (IndDecl _ params) => Just params
+    _ => Nothing
+
 ||| Validate and add an axiom to the environment
 export
 covering
@@ -1017,16 +1174,33 @@ addDeclChecked env (OpaqueDecl name ty value levelParams) = do
 addDeclChecked env QuotDecl =
   Right (enableQuot env)
 addDeclChecked env decl@(IndDecl info levelParams) = do
-  -- Basic checks for inductive - full validation would be much more complex
+  -- Validate inductive type declaration
   checkNameNotDeclared env info.name
   checkNoDuplicateUnivParams levelParams
   _ <- checkIsType env info.type
+  -- Note: positivity check is done per constructor in CtorDecl processing,
+  -- since IndDecl only has placeholder types for constructors at parse time
   Right (addDecl decl env)
-addDeclChecked env decl@(CtorDecl name ty _ _ _ _ levelParams) = do
+addDeclChecked env decl@(CtorDecl name ty indName ctorIdx numParams numFields levelParams) = do
+  -- Basic checks
   checkNameNotDeclared env name
   checkNoDuplicateUnivParams levelParams
   _ <- checkIsType env ty
-  Right (addDecl decl env)
+  -- Validate that the inductive exists
+  case getInductiveLevelParams env indName of
+    Nothing => Left (CtorInductiveNotFound name indName)
+    Just indLevelParams => do
+      -- Check strict positivity: the inductive name must not appear in negative position
+      if checkStrictlyPositive indName ty
+        then pure ()
+        else Left (NegativeOccurrence indName name)
+      -- Check return type matches the inductive
+      checkCtorReturnType name indName ty
+      -- Check field count is correct
+      checkCtorFieldCount name numParams numFields ty
+      -- Check universe parameters match
+      checkCtorUniverseParams name indLevelParams levelParams
+      Right (addDecl decl env)
 addDeclChecked env decl@(RecDecl info levelParams) = do
   checkNameNotDeclared env info.name
   checkNoDuplicateUnivParams levelParams

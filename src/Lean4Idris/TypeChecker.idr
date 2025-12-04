@@ -609,6 +609,49 @@ inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
 inferTypeOpen _ _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
 
 ------------------------------------------------------------------------
+-- Proof Irrelevance
+------------------------------------------------------------------------
+
+||| Check if an expression has type in Prop (i.e., its type has type Sort 0)
+||| For example, if p : P where P : Prop, then isProp(p) = True
+export
+covering
+isProp : TCEnv -> ClosedExpr -> TC Bool
+isProp env e = do
+  -- Get the type of e (e.g., P for a proof p : P)
+  ty <- inferType env e
+  -- Get the type of that type (e.g., Prop = Sort 0 for P : Prop)
+  tyTy <- inferType env ty
+  tyTy' <- whnf env tyTy
+  case tyTy' of
+    Sort l => Right (simplify l == Zero)
+    _ => Right False
+
+||| Try proof irrelevance: if both terms have type Prop and their types
+||| are definitionally equal, then the terms are definitionally equal.
+|||
+||| This is the key rule that makes Prop impredicative and proof-irrelevant:
+||| any two proofs of the same proposition are equal.
+|||
+||| Takes isDefEq as parameter to break mutual recursion.
+covering
+tryProofIrrelevance : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                      TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryProofIrrelevance recurEq env t s = do
+  -- Check if t has type Prop
+  tIsProp <- isProp env t
+  if not tIsProp
+    then Right Nothing  -- Not a proof, proof irrelevance doesn't apply
+    else do
+      -- t is a proof, check if s has the same type
+      tTy <- inferType env t
+      sTy <- inferType env s
+      typesEq <- recurEq env tTy sTy
+      if typesEq
+        then Right (Just True)   -- Same Prop type, proofs are equal
+        else Right (Just False)  -- Different types, not equal
+
+------------------------------------------------------------------------
 -- Definitional Equality
 ------------------------------------------------------------------------
 
@@ -692,10 +735,7 @@ tryEtaExpansion recurEq env t s = do
 ||| - Let unfolding
 ||| - Delta reduction (constant unfolding)
 ||| - Eta expansion (λx. f x = f when x not free in f)
-|||
-||| Full implementation would add:
-||| - Proof irrelevance
-||| - Nat/String literal reduction
+||| - Proof irrelevance (any two proofs of the same Prop are equal)
 export
 covering
 isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
@@ -703,8 +743,13 @@ isDefEq env e1 e2 = do
   -- First reduce both to whnf (includes delta reduction)
   e1' <- whnf env e1
   e2' <- whnf env e2
-  -- Then check structural equality
-  isDefEqWhnf e1' e2'
+  -- Try proof irrelevance first (before structural comparison)
+  proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
+  case proofIrrel of
+    Just result => Right result
+    Nothing =>
+      -- Then check structural equality
+      isDefEqWhnf e1' e2'
   where
     -- Check equality of expressions in whnf
     covering

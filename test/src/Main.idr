@@ -415,6 +415,71 @@ testOpenInfer = do
     Left err => putStrLn $ "  error: " ++ show err
     Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
 
+||| Test proof irrelevance
+testProofIrrelevance : IO ()
+testProofIrrelevance = do
+  putStrLn "\n=== Testing Proof Irrelevance ==="
+
+  -- Set up an environment with:
+  -- - Prop (Sort 0)
+  -- - A proposition P : Prop
+  -- - Two proofs p1, p2 : P
+  let propName = Str "Prop" Anonymous
+  let prop : ClosedExpr = Sort Zero  -- Prop = Sort 0
+
+  let pName = Str "P" Anonymous
+  let p : ClosedExpr = Const pName []
+
+  -- P is a Prop (an axiom with type Prop)
+  let pDecl = AxiomDecl pName prop []
+
+  -- Two different proofs of P
+  let p1Name = Str "p1" Anonymous
+  let p2Name = Str "p2" Anonymous
+  let p1 : ClosedExpr = Const p1Name []
+  let p2 : ClosedExpr = Const p2Name []
+  let p1Decl = AxiomDecl p1Name p []  -- p1 : P
+  let p2Decl = AxiomDecl p2Name p []  -- p2 : P
+
+  let env = addDecl p2Decl $ addDecl p1Decl $ addDecl pDecl emptyEnv
+
+  -- Test 1: p1 and p2 should be definitionally equal (proof irrelevance)
+  putStrLn "\nTest 1: p1 == p2 (both proofs of P : Prop)"
+  case isDefEq env p1 p2 of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: True)"
+
+  -- Test 2: isProp p1 should be True
+  putStrLn "\nTest 2: isProp(p1)"
+  case isProp env p1 of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: True)"
+
+  -- Test 3: A term of Type should NOT be proof irrelevant
+  -- Add Nat : Type 1 and n1, n2 : Nat
+  let natName = Str "Nat" Anonymous
+  let nat : ClosedExpr = Const natName []
+  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+
+  let n1Name = Str "n1" Anonymous
+  let n2Name = Str "n2" Anonymous
+  let n1 : ClosedExpr = Const n1Name []
+  let n2 : ClosedExpr = Const n2Name []
+  let n1Decl = AxiomDecl n1Name nat []
+  let n2Decl = AxiomDecl n2Name nat []
+
+  let env2 = addDecl n2Decl $ addDecl n1Decl $ addDecl natDecl env
+
+  putStrLn "\nTest 3: n1 == n2 (both of type Nat : Type, NOT Prop)"
+  case isDefEq env2 n1 n2 of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: False)"
+
+  putStrLn "\nTest 4: isProp(n1)"
+  case isProp env2 n1 of
+    Left err => putStrLn $ "  error: " ++ show err
+    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: False)"
+
 ||| Test parsing a real Lean export file
 testRealExport : IO ()
 testRealExport = do
@@ -461,6 +526,7 @@ main = do
   testEta
   testIota
   testOpenInfer
+  testProofIrrelevance
   testRealExport
 
   putStrLn "\n\nAll tests completed!"

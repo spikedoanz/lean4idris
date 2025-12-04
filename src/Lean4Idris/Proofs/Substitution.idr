@@ -443,3 +443,124 @@ renameSubst0 r cod arg =
                    (renameSingleSub r arg) cod in
   rewrite sym (substRename (liftRen r) (singleSub (rename r arg)) cod) in
   Refl
+
+------------------------------------------------------------------------
+-- Substitution Composition
+------------------------------------------------------------------------
+
+||| Composed substitution: applies s1, then s2
+public export
+compSub : Sub m k -> Sub n m -> Sub n k
+compSub s2 s1 i = subst s2 (s1 i)
+
+||| Lifting distributes over composition (pointwise)
+||| liftSub (compSub s2 s1) i = compSub (liftSub s2) (liftSub s1) i
+public export
+liftSubComp : (s1 : Sub n m) -> (s2 : Sub m k)
+           -> (i : Fin (S n)) -> liftSub (compSub s2 s1) i = compSub (liftSub s2) (liftSub s1) i
+liftSubComp s1 s2 FZ = Refl  -- Var FZ = Var FZ
+liftSubComp s1 s2 (FS i) =
+  -- LHS: liftSub (compSub s2 s1) (FS i) = weaken (subst s2 (s1 i)) = weaken (compSub s2 s1 i)
+  -- RHS: compSub (liftSub s2) (liftSub s1) (FS i)
+  --    = subst (liftSub s2) (liftSub s1 (FS i))
+  --    = subst (liftSub s2) (weaken (s1 i))
+  -- By weakenSubst: weaken (subst s2 (s1 i)) = subst (liftSub s2) (weaken (s1 i))
+  weakenSubst s2 (s1 i)
+
+||| Substitution composition: subst s2 (subst s1 e) = subst (compSub s2 s1) e
+public export
+substSubst : (s1 : Sub n m) -> (s2 : Sub m k) -> (e : Expr n)
+          -> subst s2 (subst s1 e) = subst (compSub s2 s1) e
+substSubst s1 s2 (Var i) = Refl
+substSubst s1 s2 (Sort l) = Refl
+substSubst s1 s2 (Pi d c) =
+  rewrite substSubst s1 s2 d in
+  rewrite substSubst (liftSub s1) (liftSub s2) c in
+  rewrite sym (substExt (liftSub (compSub s2 s1)) (compSub (liftSub s2) (liftSub s1)) (liftSubComp s1 s2) c) in
+  Refl
+substSubst s1 s2 (Lam t b) =
+  rewrite substSubst s1 s2 t in
+  rewrite substSubst (liftSub s1) (liftSub s2) b in
+  rewrite sym (substExt (liftSub (compSub s2 s1)) (compSub (liftSub s2) (liftSub s1)) (liftSubComp s1 s2) b) in
+  Refl
+substSubst s1 s2 (App f x) =
+  rewrite substSubst s1 s2 f in
+  rewrite substSubst s1 s2 x in
+  Refl
+substSubst s1 s2 (Let t v b) =
+  rewrite substSubst s1 s2 t in
+  rewrite substSubst s1 s2 v in
+  rewrite substSubst (liftSub s1) (liftSub s2) b in
+  rewrite sym (substExt (liftSub (compSub s2 s1)) (compSub (liftSub s2) (liftSub s1)) (liftSubComp s1 s2) b) in
+  Refl
+
+||| Key lemma: composition of s with singleSub equals singleSub composed with liftSub s
+||| compSub s (singleSub arg) i = compSub (singleSub (subst s arg)) (liftSub s) i
+|||
+||| This says: applying singleSub then s = applying liftSub s then singleSub (subst s arg)
+public export
+compSubSingleSub : (s : Sub n m) -> (arg : Expr n) -> (i : Fin (S n))
+                -> compSub s (singleSub arg) i = compSub (singleSub (subst s arg)) (liftSub s) i
+compSubSingleSub s arg FZ =
+  -- LHS: compSub s (singleSub arg) FZ = subst s (singleSub arg FZ) = subst s arg
+  -- RHS: compSub (singleSub (subst s arg)) (liftSub s) FZ
+  --    = subst (singleSub (subst s arg)) (liftSub s FZ)
+  --    = subst (singleSub (subst s arg)) (Var FZ)
+  --    = singleSub (subst s arg) FZ
+  --    = subst s arg
+  Refl
+compSubSingleSub s arg (FS i) =
+  -- LHS: compSub s (singleSub arg) (FS i) = subst s (singleSub arg (FS i)) = subst s (Var i) = s i
+  -- RHS: compSub (singleSub (subst s arg)) (liftSub s) (FS i)
+  --    = subst (singleSub (subst s arg)) (liftSub s (FS i))
+  --    = subst (singleSub (subst s arg)) (weaken (s i))
+  --    = subst (singleSub (subst s arg)) (rename FS (s i))
+  --    By substRename: = rename FS (subst (singleSub (subst s arg) . FS) (s i))
+  --                   = rename FS (subst idSub (s i))    since singleSub _ . FS = idSub
+  --                   = rename FS (s i)                   by substId
+  --                   = weaken (s i)
+  -- But we want: s i
+  -- So we need: s i = weaken (s i)? No, that's wrong.
+  --
+  -- Wait, let me reconsider. We have s : Sub n m, so s i : Expr m.
+  -- LHS = s i : Expr m
+  -- RHS needs to also be Expr m.
+  --
+  -- RHS = subst (singleSub (subst s arg)) (weaken (s i))
+  --     = subst (singleSub (subst s arg)) (rename FS (s i))
+  -- By substRename: = rename FS (subst (singleSub (subst s arg) . FS) (s i))
+  -- But singleSub e (FS j) = Var j, so singleSub e . FS = Var = idSub
+  -- So: = rename FS (subst idSub (s i)) = rename FS (s i) = weaken (s i)
+  --
+  -- Hmm this gives weaken (s i), not s i. Let me check my substRename usage...
+  --
+  -- Actually substRename goes the other way:
+  -- substRename r s e : subst s (rename r e) = subst (s . r) e
+  --
+  -- So subst (singleSub x) (rename FS e) = subst (singleSub x . FS) e
+  --                                      = subst idSub e   (since singleSub x (FS i) = Var i)
+  --                                      = e
+  --
+  -- So RHS = subst (singleSub (subst s arg)) (weaken (s i))
+  --        = s i   by the above!
+  rewrite substRename FS (singleSub (subst s arg)) (s i) in
+  rewrite substExt (singleSub (subst s arg) . FS) idSub (\j => Refl) (s i) in
+  rewrite substId (s i) in
+  Refl
+
+||| Substitution commutes with single-variable substitution
+||| subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)
+public export
+substSubst0 : (s : Sub n m) -> (cod : Expr (S n)) -> (arg : Expr n)
+           -> subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)
+substSubst0 s cod arg =
+  -- subst s (subst (singleSub arg) cod)
+  --   = subst (compSub s (singleSub arg)) cod                      by substSubst
+  --   = subst (compSub (singleSub (subst s arg)) (liftSub s)) cod  by compSubSingleSub
+  --   = subst (singleSub (subst s arg)) (subst (liftSub s) cod)    by substSubst (backwards)
+  --   = subst0 (subst (liftSub s) cod) (subst s arg)
+  rewrite substSubst (singleSub arg) s cod in
+  rewrite substExt (compSub s (singleSub arg)) (compSub (singleSub (subst s arg)) (liftSub s))
+                   (compSubSingleSub s arg) cod in
+  rewrite sym (substSubst (liftSub s) (singleSub (subst s arg)) cod) in
+  Refl

@@ -143,12 +143,26 @@ substitutionGeneral {s} sWf (TLam l ty body bodyTy tyWf bodyWf) =
   in TLam l (subst s ty) (subst (liftSub s) body) (subst (liftSub s) bodyTy) tyWf' bodyWf'
 
 -- Application case: substitute in function and argument
--- Need substSubst0: subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)
--- We use believe_me until we prove substitution composition
-substitutionGeneral sWf (TApp dom cod f arg fWf argWf) = believe_me True
+substitutionGeneral {s} sWf (TApp dom cod f arg fWf argWf) =
+  let fWf' = substitutionGeneral sWf fWf
+      argWf' = substitutionGeneral sWf argWf
+      -- fWf' : HasType ctx' (subst s f) (subst s (Pi dom cod)) = HasType ctx' (subst s f) (Pi (subst s dom) (subst (liftSub s) cod))
+      -- argWf' : HasType ctx' (subst s arg) (subst s dom)
+      -- TApp gives: HasType ctx' (App (subst s f) (subst s arg)) (subst0 (subst (liftSub s) cod) (subst s arg))
+      -- Need: HasType ctx' (subst s (App f arg)) (subst s (subst0 cod arg))
+      --     = HasType ctx' (App (subst s f) (subst s arg)) (subst s (subst0 cod arg))
+      -- By substSubst0: subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)
+  in rewrite substSubst0 s cod arg in
+     TApp (subst s dom) (subst (liftSub s) cod) (subst s f) (subst s arg) fWf' argWf'
 
 -- Let case: similar to App
-substitutionGeneral sWf (TLet l ty val body bodyTy tyWf valWf bodyWf) = believe_me True
+substitutionGeneral {s} sWf (TLet l ty val body bodyTy tyWf valWf bodyWf) =
+  let tyWf' = substitutionGeneral sWf tyWf
+      valWf' = substitutionGeneral sWf valWf
+      bodyWf' = substitutionGeneral (liftSubWfHelper sWf) bodyWf
+  in rewrite substSubst0 s bodyTy val in
+     TLet l (subst s ty) (subst s val) (subst (liftSub s) body) (subst (liftSub s) bodyTy)
+          tyWf' valWf' bodyWf'
 
 -- Conversion case
 substitutionGeneral {s} sWf (TConv l e ty1 ty2 eWf eq tyWf) =

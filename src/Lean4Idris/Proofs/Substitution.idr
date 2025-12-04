@@ -50,6 +50,8 @@ rename r (Pi d c) = Pi (rename r d) (rename (liftRen r) c)
 rename r (Lam t b) = Lam (rename r t) (rename (liftRen r) b)
 rename r (App f x) = App (rename r f) (rename r x)
 rename r (Let t v b) = Let (rename r t) (rename r v) (rename (liftRen r) b)
+rename r (Const n ls) = Const n ls  -- Constants have no free variables
+rename r (Proj sn idx s) = Proj sn idx (rename r s)
 
 ------------------------------------------------------------------------
 -- Weakening
@@ -104,6 +106,8 @@ subst s (Pi d c) = Pi (subst s d) (subst (liftSub s) c)
 subst s (Lam t b) = Lam (subst s t) (subst (liftSub s) b)
 subst s (App f x) = App (subst s f) (subst s x)
 subst s (Let t v b) = Let (subst s t) (subst s v) (subst (liftSub s) b)
+subst s (Const n ls) = Const n ls  -- Constants have no free variables
+subst s (Proj sn idx st) = Proj sn idx (subst s st)
 
 ------------------------------------------------------------------------
 -- Single-Variable Substitution
@@ -154,6 +158,8 @@ renameExt r1 r2 ext (Let t v b) =
   rewrite renameExt r1 r2 ext t in
   rewrite renameExt r1 r2 ext v in
   rewrite renameExt (liftRen r1) (liftRen r2) (liftRenExt r1 r2 ext) b in Refl
+renameExt r1 r2 ext (Const n ls) = Refl
+renameExt r1 r2 ext (Proj sn idx s) = rewrite renameExt r1 r2 ext s in Refl
 
 ||| Lifting preserves pointwise equality of substitutions
 public export
@@ -182,6 +188,8 @@ substExt s1 s2 ext (Let t v b) =
   rewrite substExt s1 s2 ext t in
   rewrite substExt s1 s2 ext v in
   rewrite substExt (liftSub s1) (liftSub s2) (liftSubExt s1 s2 ext) b in Refl
+substExt s1 s2 ext (Const n ls) = Refl
+substExt s1 s2 ext (Proj sn idx s) = rewrite substExt s1 s2 ext s in Refl
 
 ------------------------------------------------------------------------
 -- Renaming Laws
@@ -213,6 +221,8 @@ renameId (Let t v b) =
   rewrite renameId v in
   rewrite renameExt (liftRen idRen) idRen liftRenId b in
   rewrite renameId b in Refl
+renameId (Const n ls) = Refl
+renameId (Proj sn idx s) = rewrite renameId s in Refl
 
 ||| Lifting distributes over renaming composition
 public export
@@ -246,6 +256,8 @@ renameComp r1 r2 (Let t v b) =
   rewrite renameComp (liftRen r1) (liftRen r2) b in
   rewrite renameExt (liftRen r2 . liftRen r1) (liftRen (r2 . r1)) (liftRenComp r1 r2) b in
   Refl
+renameComp r1 r2 (Const n ls) = Refl
+renameComp r1 r2 (Proj sn idx s) = rewrite renameComp r1 r2 s in Refl
 
 ------------------------------------------------------------------------
 -- Substitution Laws
@@ -277,6 +289,8 @@ substId (Let t v b) =
   rewrite substId v in
   rewrite substExt (liftSub idSub) idSub liftSubId b in
   rewrite substId b in Refl
+substId (Const n ls) = Refl
+substId (Proj sn idx s) = rewrite substId s in Refl
 
 ------------------------------------------------------------------------
 -- Rename-Subst Interaction
@@ -314,6 +328,8 @@ substRename r s (Let t v b) =
   rewrite substRename (liftRen r) (liftSub s) b in
   rewrite substExt (liftSub s . liftRen r) (liftSub (s . r)) (liftSubRenComp r s) b in
   Refl
+substRename r s (Const n ls) = Refl
+substRename r s (Proj sn idx st) = rewrite substRename r s st in Refl
 
 ||| Lifting of (rename r . s) equals composition of lifts pointwise
 public export
@@ -352,6 +368,8 @@ renameSubst s r (Let t v b) =
   rewrite renameSubst (liftSub s) (liftRen r) b in
   rewrite substExt (rename (liftRen r) . liftSub s) (liftSub (rename r . s)) (liftRenSubComp s r) b in
   Refl
+renameSubst s r (Const n ls) = Refl
+renameSubst s r (Proj sn idx st) = rewrite renameSubst s r st in Refl
 
 ||| Weaken then substitute at 0 is identity
 ||| subst0 (weaken e) x = e
@@ -493,6 +511,8 @@ substSubst s1 s2 (Let t v b) =
   rewrite substSubst (liftSub s1) (liftSub s2) b in
   rewrite sym (substExt (liftSub (compSub s2 s1)) (compSub (liftSub s2) (liftSub s1)) (liftSubComp s1 s2) b) in
   Refl
+substSubst s1 s2 (Const n ls) = Refl
+substSubst s1 s2 (Proj sn idx st) = rewrite substSubst s1 s2 st in Refl
 
 ||| Key lemma: composition of s with singleSub equals singleSub composed with liftSub s
 ||| compSub s (singleSub arg) i = compSub (singleSub (subst s arg)) (liftSub s) i

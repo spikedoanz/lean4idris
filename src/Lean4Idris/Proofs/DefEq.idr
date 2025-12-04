@@ -73,6 +73,10 @@ data DefEq : Expr n -> Expr n -> Type where
   DELet : DefEq ty ty' -> DefEq val val' -> DefEq body body'
        -> DefEq (Let ty val body) (Let ty' val' body')
 
+  ||| Projection congruence: s ≡ s' → Proj name idx s ≡ Proj name idx s'
+  DEProj : DefEq struct struct'
+        -> DefEq (Proj name idx struct) (Proj name idx struct')
+
 ------------------------------------------------------------------------
 -- Basic Properties
 ------------------------------------------------------------------------
@@ -105,6 +109,7 @@ defEqRename r (DEPi dom cod) = DEPi (defEqRename r dom) (defEqRename (liftRen r)
 defEqRename r (DELam ty body) = DELam (defEqRename r ty) (defEqRename (liftRen r) body)
 defEqRename r (DEApp f x) = DEApp (defEqRename r f) (defEqRename r x)
 defEqRename r (DELet ty val body) = DELet (defEqRename r ty) (defEqRename r val) (defEqRename (liftRen r) body)
+defEqRename r (DEProj s) = DEProj (defEqRename r s)
 
 ||| If e₁ ≡ e₂, then weaken e₁ ≡ weaken e₂
 |||
@@ -130,6 +135,7 @@ defEqSubst s (DEPi dom cod) = DEPi (defEqSubst s dom) (defEqSubst (liftSub s) co
 defEqSubst s (DELam ty body) = DELam (defEqSubst s ty) (defEqSubst (liftSub s) body)
 defEqSubst s (DEApp f x) = DEApp (defEqSubst s f) (defEqSubst s x)
 defEqSubst s (DELet ty val body) = DELet (defEqSubst s ty) (defEqSubst s val) (defEqSubst (liftSub s) body)
+defEqSubst s (DEProj st) = DEProj (defEqSubst s st)
 
 ||| Single substitution preserves DefEq
 public export
@@ -159,6 +165,8 @@ defEqSubstSame sEq (Pi dom cod) = DEPi (defEqSubstSame sEq dom) (defEqSubstSame 
 defEqSubstSame sEq (Lam ty body) = DELam (defEqSubstSame sEq ty) (defEqSubstSame (liftSubDefEq sEq) body)
 defEqSubstSame sEq (App f x) = DEApp (defEqSubstSame sEq f) (defEqSubstSame sEq x)
 defEqSubstSame sEq (Let ty val body) = DELet (defEqSubstSame sEq ty) (defEqSubstSame sEq val) (defEqSubstSame (liftSubDefEq sEq) body)
+defEqSubstSame sEq (Const n ls) = DERefl  -- Constants have no free variables
+defEqSubstSame sEq (Proj sn idx s) = DEProj (defEqSubstSame sEq s)
 
 ||| If s1 ≡ s2 pointwise and e1 ≡ e2, then subst s1 e1 ≡ subst s2 e2
 |||
@@ -176,6 +184,7 @@ defEqSubstBoth sEq (DEPi dom cod) = DEPi (defEqSubstBoth sEq dom) (defEqSubstBot
 defEqSubstBoth sEq (DELam ty body) = DELam (defEqSubstBoth sEq ty) (defEqSubstBoth (liftSubDefEq sEq) body)
 defEqSubstBoth sEq (DEApp f x) = DEApp (defEqSubstBoth sEq f) (defEqSubstBoth sEq x)
 defEqSubstBoth sEq (DELet ty val body) = DELet (defEqSubstBoth sEq ty) (defEqSubstBoth sEq val) (defEqSubstBoth (liftSubDefEq sEq) body)
+defEqSubstBoth sEq (DEProj s) = DEProj (defEqSubstBoth sEq s)
 
 ||| singleSub preserves DefEq
 public export

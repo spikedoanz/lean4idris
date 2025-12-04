@@ -88,6 +88,13 @@ data Step : Expr n -> Expr n -> Type where
   ||| Congruence: reduce in let body
   SLetBody : Step body body' -> Step (Let ty val body) (Let ty val body')
 
+  ||| Congruence: reduce under projection
+  |||
+  |||   s → s'
+  ||| ─────────────────────
+  |||   Proj n i s → Proj n i s'
+  SProj : Step struct struct' -> Step (Proj name idx struct) (Proj name idx struct')
+
 ------------------------------------------------------------------------
 -- Multi-Step Reduction (Reflexive-Transitive Closure)
 ------------------------------------------------------------------------
@@ -131,6 +138,7 @@ data Value : Expr n -> Type where
   VPi : Value (Pi dom cod)
   VLam : Value (Lam ty body)
   VVar : Value (Var i)  -- Neutral: stuck on a variable
+  VConst : Value (Const n ls)  -- Global constants (axioms/opaque defs)
 
 ------------------------------------------------------------------------
 -- Properties of Reduction
@@ -174,6 +182,12 @@ stepsLam : Steps body body' -> Steps (Lam ty body) (Lam ty body')
 stepsLam Refl = Refl
 stepsLam (Trans s rest) = Trans (SLamBody s) (stepsLam rest)
 
+||| If s →* s', then Proj n i s →* Proj n i s'
+public export
+stepsProj : Steps struct struct' -> Steps (Proj name idx struct) (Proj name idx struct')
+stepsProj Refl = Refl
+stepsProj (Trans s rest) = Trans (SProj s) (stepsProj rest)
+
 ------------------------------------------------------------------------
 -- Weak Head Normal Form
 ------------------------------------------------------------------------
@@ -186,9 +200,12 @@ data WHNF : Expr n -> Type where
   WPi : WHNF (Pi dom cod)
   WLam : WHNF (Lam ty body)
   WVar : WHNF (Var i)
+  WConst : WHNF (Const n ls)  -- Constants are WHNF (until delta-unfolded)
   -- App is WHNF only if head is not a lambda
   WApp : WHNF f -> (notLam : (ty : Expr n) -> (body : Expr (S n)) -> f = Lam ty body -> Void)
       -> WHNF (App f x)
+  -- Proj is WHNF when the struct is not a constructor application (neutral)
+  WProj : WHNF struct -> WHNF (Proj name idx struct)
 
 ||| WHNF terms don't β-reduce at the head
 public export
@@ -206,6 +223,7 @@ whnfNoHead (WApp wf notLam) SBeta = ?whnfNoHead_WApp_SBeta
 -- This lemma isn't needed for the main subject reduction theorem.
 whnfNoHead (WApp wf notLam) (SAppL s) = ?whnfNoHead_WApp_SAppL
 whnfNoHead (WApp wf notLam) (SAppR s) = Left (WApp wf notLam)
+whnfNoHead (WProj ws) (SProj s) = ?whnfNoHead_WProj_SProj  -- requires IH on struct WHNF
 
 ------------------------------------------------------------------------
 -- Renaming Preserves Reduction
@@ -243,6 +261,7 @@ stepRename r (SPiCod s) = SPiCod (stepRename (liftRen r) s)
 stepRename r (SLetTy s) = SLetTy (stepRename r s)
 stepRename r (SLetVal s) = SLetVal (stepRename r s)
 stepRename r (SLetBody s) = SLetBody (stepRename (liftRen r) s)
+stepRename r (SProj s) = SProj (stepRename r s)
 
 ||| Weakening preserves single-step reduction.
 |||
@@ -297,6 +316,7 @@ stepSubst s (SPiCod step) = SPiCod (stepSubst (liftSub s) step)
 stepSubst s (SLetTy step) = SLetTy (stepSubst s step)
 stepSubst s (SLetVal step) = SLetVal (stepSubst s step)
 stepSubst s (SLetBody step) = SLetBody (stepSubst (liftSub s) step)
+stepSubst s (SProj step) = SProj (stepSubst s step)
 
 ||| Multi-step reduction is preserved by substitution
 public export

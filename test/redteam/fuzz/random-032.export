@@ -1,0 +1,28 @@
+0.0.0
+1 #NS 0 hxm
+2 #NS 0 ii
+3 #NS 0 rzmpounmu
+1 #UIM 0 0
+2 #US 1
+3 #US 0
+0 #ES 5
+1 #EC 2
+2 #ES 3
+3 #ES 0
+4 #EL #BS 1 1 3
+5 #EV 7
+6 #EC 3
+7 #EP #BS 3 4 4
+8 #ES 0
+9 #EL #BS 1 4 5
+10 #ES 1
+11 #EP #BC 2 6 1
+12 #EA 0 2
+13 #EA 2 11
+14 #ES 0
+15 #EC 3
+16 #EV 0
+#IND 1 0 0 0 0 0 0 1 1 0
+#DEF 7 0 3 N 0
+#AX 9 8 2
+#IND 1 0 0 0 0 0 0 1 1 0

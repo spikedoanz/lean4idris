@@ -1,0 +1,31 @@
+0.0.0
+1 #NS 0 zhc
+2 #NS 0 cxxwm
+3 #NS 1 niyzubg
+1 #US 0
+2 #UM 0 1
+3 #UM 0 2
+0 #EP #BC 1 0 0
+1 #EA 0 0
+2 #EV 0
+3 #ES 3
+4 #EV 5
+5 #EV 9
+6 #EC 1
+7 #EA 1 6
+8 #EC 1
+9 #EV 8
+10 #EC 2
+11 #EC 2
+12 #EP #BI 3 11 6
+13 #EA 9 9
+14 #EP #BD 2 13 10
+15 #ES 2
+16 #ES 5
+17 #EP #BS 2 10 8
+18 #EC 1
+19 #EL #BC 2 15 15
+20 #ES 3
+#QUOT
+#IND 1 0 0 0 0 0 0 1 1 0
+#AX 5 3 3

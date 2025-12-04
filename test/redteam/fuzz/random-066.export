@@ -1,0 +1,39 @@
+0.0.0
+1 #NS 0 yuhzucw
+2 #NS 1 mdu
+3 #NS 0 sksqac
+1 #UM 0 0
+2 #US 0
+3 #UP 10
+4 #UM 2 3
+5 #UIM 1 2
+6 #US 1
+0 #EV 10
+1 #EV 6
+2 #ES 2
+3 #ES 3
+4 #EV 0
+5 #EL #BD 2 3 4
+6 #EA 0 5
+7 #EA 4 5
+8 #ES 5
+9 #EL #BC 2 7 5
+10 #EV 3
+11 #EC 1
+12 #EV 4
+13 #ES 2
+14 #EA 5 9
+15 #EP #BC 2 0 9
+16 #EL #BI 3 9 10
+17 #ES 2
+18 #ES 2
+19 #ES 0
+20 #EA 0 5
+21 #EC 3
+22 #EP #BI 3 3 17
+23 #EA 3 17
+24 #ES 2
+#QUOT
+#QUOT
+#DEF 2 0 7 N 0
+#DEF 9 7 5 A 0

@@ -1,0 +1,55 @@
+0.0.0
+1 #NS 0 twh
+2 #NS 1 bnwuquxyca
+3 #NS 2 c
+4 #NS 3 timazc
+5 #NS 2 omj
+6 #NS 2 ord
+7 #NS 5 zmkkgpzn
+8 #NS 0 ro
+9 #NS 1 jw
+10 #NS 7 rgpfuva
+11 #NS 10 cy
+12 #NS 2 d
+13 #NS 7 qrntvnotvs
+14 #NS 13 thnimmrio
+15 #NS 9 vtzyjlplgy
+16 #NS 11 elgvhgzkm
+17 #NS 0 pxc
+18 #NS 10 cynurztgd
+1 #UM 0 0
+2 #UP 8
+3 #UM 0 1
+4 #US 3
+5 #UM 4 0
+6 #UIM 5 3
+0 #EL #BS 8 0 0
+1 #EV 0
+2 #EL #BI 2 1 1
+3 #EV 1
+4 #ES 3
+5 #EL #BC 2 0 3
+6 #EA 0 2
+7 #EV 0
+8 #EC 5
+9 #EP #BC 16 1 4
+10 #EP #BS 15 6 1
+11 #ES 4
+12 #EL #BD 5 5 8
+13 #EV 8
+14 #EL #BD 7 13 5
+15 #EA 11 13
+16 #EP #BS 13 13 2
+17 #ES 0
+18 #EL #BS 3 1 6
+19 #EA 7 2
+20 #EA 9 2
+21 #EV 9
+22 #EV 2
+23 #EV 7
+24 #EV 2
+25 #EC 15
+26 #EA 11 2
+#DEF 8 2 5 O 1
+#DEF 1 3 3 O 1
+#AX 9 2 0

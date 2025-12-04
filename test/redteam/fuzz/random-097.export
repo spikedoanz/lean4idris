@@ -1,0 +1,35 @@
+0.0.0
+1 #NS 0 xvbaua
+2 #NS 1 aqmcix
+3 #NS 0 tneco
+4 #NS 1 ud
+5 #NS 0 nxqtlzgap
+6 #NS 4 jsya
+7 #NS 5 z
+1 #UP 1
+2 #UP 1
+0 #EP #BD 5 0 0
+1 #ES 0
+2 #EP #BD 7 0 0
+3 #EL #BC 4 1 0
+4 #EA 0 2
+5 #EL #BS 3 0 1
+6 #EC 7
+7 #EC 3
+8 #EV 1
+9 #EL #BD 5 3 7
+10 #ES 0
+11 #EL #BC 1 7 4
+12 #EL #BD 2 8 4
+13 #EL #BD 1 8 4
+14 #EA 3 5
+15 #EP #BD 5 9 2
+16 #EA 0 4
+17 #EA 6 16
+18 #EP #BC 1 4 6
+19 #EC 4
+20 #EC 7
+21 #ES 3
+22 #EV 2
+23 #EC 1
+#IND 1 0 0 0 0 0 0 1 1 0

@@ -1,0 +1,35 @@
+0.0.0
+1 #NS 0 wo
+2 #NS 0 k
+3 #NS 0 dm
+4 #NS 3 fixilqu
+5 #NS 3 coacesh
+1 #UM 0 0
+2 #UIM 0 0
+3 #UM 0 0
+4 #UIM 2 1
+0 #EP #BS 5 0 0
+1 #EP #BS 5 0 0
+2 #EC 4
+3 #EP #BD 2 2 1
+4 #EV 3
+5 #ES 4
+6 #ES 4
+7 #EC 4
+8 #EC 2
+9 #ES 0
+10 #EV 0
+11 #EP #BS 4 7 8
+12 #EP #BD 2 1 7
+13 #EL #BS 1 1 9
+14 #EP #BD 1 5 4
+15 #EP #BD 3 10 0
+16 #ES 1
+17 #EC 5
+18 #EL #BD 2 0 16
+19 #EC 3
+20 #EC 4
+21 #EV 1
+22 #EA 3 6
+#DEF 4 1 4 A 3
+#DEF 2 7 7 A 1

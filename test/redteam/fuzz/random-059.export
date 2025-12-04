@@ -1,0 +1,31 @@
+0.0.0
+1 #NS 0 awsravju
+2 #NS 1 sir
+3 #NS 2 cq
+4 #NS 2 cfcpc
+5 #NS 2 rx
+6 #NS 5 cidkulnfnz
+7 #NS 3 pdtyz
+8 #NS 6 ljstjnmfqf
+1 #UP 4
+2 #UIM 0 1
+3 #US 1
+4 #UIM 3 0
+5 #US 4
+6 #UP 2
+7 #UM 4 3
+8 #US 6
+9 #UP 3
+0 #EP #BS 6 0 0
+1 #EV 1
+2 #EV 7
+3 #EP #BD 8 0 0
+4 #EC 8
+5 #EL #BD 2 2 3
+6 #EP #BS 1 1 0
+7 #EV 0
+8 #EC 1
+9 #EV 4
+#IND 1 0 0 0 0 0 0 1 1 0
+#AX 10 3 0
+#DEF 1 0 4 A 2

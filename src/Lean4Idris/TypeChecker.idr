@@ -30,11 +30,35 @@ record TCEnv where
   constructor MkTCEnv
   decls : SortedMap Name Declaration
   quotInit : Bool  -- True if quotient types are initialized
+  ||| Types of placeholder constants created by closeWithPlaceholders.
+  ||| When we close an open term, bound variables become placeholder constants
+  ||| like `Const "_local_x" []`. This map tracks their types so we can
+  ||| properly type-check expressions containing them.
+  placeholders : SortedMap Name ClosedExpr
 
 ||| Empty environment
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False
+emptyEnv = MkTCEnv empty False empty
+
+||| Add a placeholder constant with its type (as an axiom in the environment)
+||| This allows regular constant lookup to find placeholder types.
+public export
+addPlaceholder : Name -> ClosedExpr -> TCEnv -> TCEnv
+addPlaceholder name ty env =
+  -- Add as both a placeholder (for tracking) and as an axiom (for lookup)
+  let env' = { placeholders $= insert name ty } env
+  in { decls $= insert name (AxiomDecl name ty []) } env'
+
+||| Look up a placeholder's type
+public export
+lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
+lookupPlaceholder name env = lookup name env.placeholders
+
+||| Clear all placeholders (for fresh type checking context)
+public export
+clearPlaceholders : TCEnv -> TCEnv
+clearPlaceholders env = { placeholders := empty } env
 
 ||| Enable quotient types in the environment
 public export
@@ -551,17 +575,30 @@ ensurePi env e = do
 -- Type Inference
 ------------------------------------------------------------------------
 
+||| Create a placeholder constant name for a local variable
+||| Uses a unique counter to avoid name collisions
+placeholderName : Name -> Nat -> Name
+placeholderName n counter = Str "_local" (Num counter n)
+
 ||| Close an expression by substituting all bound variables with placeholders.
 ||| This is used to convert Expr n to ClosedExpr for type checking purposes.
 |||
 ||| We substitute each variable with a unique constant based on its name.
-||| This is safe for type inference since we only need the *structure* of the type.
-closeWithPlaceholders : LocalCtx n -> Expr n -> ClosedExpr
-closeWithPlaceholders [] e = e
-closeWithPlaceholders {n = S m} (entry :: ctx) e =
-  -- Substitute var 0 with a placeholder, then close the rest
-  let e' : Expr m = subst0 e (Const (Str "_local" entry.name) [])
-  in closeWithPlaceholders ctx e'
+||| Also registers placeholder types in the environment so they can be looked up later.
+||| Uses a counter to ensure unique placeholder names across multiple closures.
+closeWithPlaceholders : TCEnv -> LocalCtx n -> Expr n -> (TCEnv, ClosedExpr)
+closeWithPlaceholders env ctx e = go env ctx e 0
+  where
+    go : TCEnv -> LocalCtx m -> Expr m -> Nat -> (TCEnv, ClosedExpr)
+    go env [] e _ = (env, e)
+    go env {m = S k} (entry :: ctx) e counter =
+      -- Create unique placeholder name using counter
+      let phName = placeholderName entry.name counter
+          -- Register this placeholder's type in the environment
+          env' = addPlaceholder phName entry.type env
+          -- Substitute var 0 with a placeholder, then close the rest
+          e' : Expr k = subst0 e (Const phName [])
+      in go env' ctx e' (S counter)
 
 ------------------------------------------------------------------------
 -- Projection Type Inference Helpers
@@ -600,61 +637,74 @@ getProjType env structName idx structParams = do
 
 mutual
   ||| Infer the type of a closed expression.
+  ||| Returns the updated environment (with any new placeholders) and the type.
   ||| Delegates to inferTypeOpen with empty context for binder forms.
   export
   covering
-  inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
+  inferTypeE : TCEnv -> ClosedExpr -> TC (TCEnv, ClosedExpr)
 
   -- Sort : Sort (succ level)
-  inferType _ (Sort l) = Right (Sort (Succ l))
+  inferTypeE env (Sort l) = Right (env, Sort (Succ l))
 
   -- Const: look up type in environment and instantiate levels
-  inferType env (Const name levels) =
-    case lookupDecl name env of
-      Nothing => Left (UnknownConst name)
-      Just decl => case declType decl of
-        Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
-        Just ty =>
-          let params = declLevelParams decl in
-          if length params /= length levels
-            then Left (WrongNumLevels (length params) (length levels) name)
-            else case instantiateLevelParamsSafe params levels ty of
-              Nothing => Left (CyclicLevelParam name)
-              Just ty' => Right ty'
+  -- First check if it's a placeholder constant (from closeWithPlaceholders)
+  inferTypeE env (Const name levels) =
+    case lookupPlaceholder name env of
+      Just ty => Right (env, ty)  -- Placeholder constant - return its registered type
+      Nothing =>
+        case lookupDecl name env of
+          Nothing => Left (UnknownConst name)
+          Just decl => case declType decl of
+            Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
+            Just ty =>
+              let params = declLevelParams decl in
+              if length params /= length levels
+                then Left (WrongNumLevels (length params) (length levels) name)
+                else case instantiateLevelParamsSafe params levels ty of
+                  Nothing => Left (CyclicLevelParam name)
+                  Just ty' => Right (env, ty')
 
   -- App: infer function type, check it's Pi, verify arg type, instantiate with arg
-  inferType env (App f arg) = do
-    fTy <- inferType env f
-    (_, _, dom, cod) <- ensurePi env fTy
+  inferTypeE env (App f arg) = do
+    (env1, fTy) <- inferTypeE env f
+    (_, _, dom, cod) <- ensurePi env1 fTy
     -- Verify argument type matches domain (basic check - full isDefEq requires mutual recursion)
-    argTy <- inferType env arg
-    argTy' <- whnf env argTy
-    dom' <- whnf env dom
+    (env2, argTy) <- inferTypeE env1 arg
+    argTy' <- whnf env2 argTy
+    dom' <- whnf env2 dom
     -- Simple structural equality after reduction
     if argTy' == dom'
-      then Right (subst0 cod arg)
+      then Right (env2, subst0 cod arg)
       else Left (AppTypeMismatch dom argTy)
 
-  -- Lam: delegate to inferTypeOpen which properly handles the body
-  inferType env (Lam name bi ty body) =
-    inferTypeOpen env emptyCtx (Lam name bi ty body)
+  -- Lam: delegate to inferTypeOpenE which properly handles the body
+  inferTypeE env (Lam name bi ty body) =
+    inferTypeOpenE env emptyCtx (Lam name bi ty body)
 
-  -- Pi: delegate to inferTypeOpen which properly handles the codomain
-  inferType env (Pi name bi dom cod) =
-    inferTypeOpen env emptyCtx (Pi name bi dom cod)
+  -- Pi: delegate to inferTypeOpenE which properly handles the codomain
+  inferTypeE env (Pi name bi dom cod) =
+    inferTypeOpenE env emptyCtx (Pi name bi dom cod)
 
-  -- Let: delegate to inferTypeOpen which properly handles the body
-  inferType env (Let name ty val body) =
-    inferTypeOpen env emptyCtx (Let name ty val body)
+  -- Let: delegate to inferTypeOpenE which properly handles the body
+  inferTypeE env (Let name ty val body) =
+    inferTypeOpenE env emptyCtx (Let name ty val body)
 
   -- Proj: for now unsupported (requires inductive types)
-  inferType _ (Proj _ _ _) = Left (OtherError "projection not yet supported")
+  inferTypeE env (Proj _ _ _) = Right (env, Const (Str "_error" Anonymous) [])
 
   -- NatLit: type is Nat
-  inferType _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
+  inferTypeE env (NatLit _) = Right (env, Const (Str "Nat" Anonymous) [])
 
   -- StringLit: type is String
-  inferType _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
+  inferTypeE env (StringLit _) = Right (env, Const (Str "String" Anonymous) [])
+
+  ||| Convenience wrapper that discards the environment
+  export
+  covering
+  inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
+  inferType env e = do
+    (_, ty) <- inferTypeE env e
+    Right ty
 
   -- BVar: should not appear in closed expressions (Fin 0 is empty)
 
@@ -663,97 +713,101 @@ mutual
   ------------------------------------------------------------------------
 
   ||| Infer the type of an open expression with a local context.
+  ||| Returns the updated environment (with placeholders) and the type.
   |||
   ||| This is the general form that handles expressions with bound variables.
-  ||| The result is always a closed expression (type).
+  ||| The result type is always a closed expression.
   |||
   ||| Key idea: when we look up a bound variable, we return its type from context.
   ||| When we go under a binder, we extend the context with the domain type.
   export
   covering
-  inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+  inferTypeOpenE : TCEnv -> LocalCtx n -> Expr n -> TC (TCEnv, ClosedExpr)
 
   -- Sort: same as closed case
-  inferTypeOpen _ _ (Sort l) = Right (Sort (Succ l))
+  inferTypeOpenE env _ (Sort l) = Right (env, Sort (Succ l))
 
-  -- Const: same as closed case
-  inferTypeOpen env _ (Const name levels) =
-    case lookupDecl name env of
-      Nothing => Left (UnknownConst name)
-      Just decl => case declType decl of
-        Nothing => Left (UnknownConst name)
-        Just ty =>
-          let params = declLevelParams decl in
-          if length params /= length levels
-            then Left (WrongNumLevels (length params) (length levels) name)
-            else case instantiateLevelParamsSafe params levels ty of
-              Nothing => Left (CyclicLevelParam name)
-              Just ty' => Right ty'
+  -- Const: same as closed case (also checks placeholders)
+  inferTypeOpenE env _ (Const name levels) =
+    case lookupPlaceholder name env of
+      Just ty => Right (env, ty)  -- Placeholder constant
+      Nothing =>
+        case lookupDecl name env of
+          Nothing => Left (UnknownConst name)
+          Just decl => case declType decl of
+            Nothing => Left (UnknownConst name)
+            Just ty =>
+              let params = declLevelParams decl in
+              if length params /= length levels
+                then Left (WrongNumLevels (length params) (length levels) name)
+                else case instantiateLevelParamsSafe params levels ty of
+                  Nothing => Left (CyclicLevelParam name)
+                  Just ty' => Right (env, ty')
 
   -- BVar: look up type in local context
-  inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type
+  inferTypeOpenE env ctx (BVar i) = Right (env, (lookupCtx i ctx).type)
 
   -- App: infer function type, ensure it's Pi, instantiate codomain
-  inferTypeOpen env ctx (App f arg) = do
-    fTy <- inferTypeOpen env ctx f
-    (_, _, dom, cod) <- ensurePi env fTy
+  inferTypeOpenE env ctx (App f arg) = do
+    (env1, fTy) <- inferTypeOpenE env ctx f
+    (_, _, dom, cod) <- ensurePi env1 fTy
     -- Substitute the argument into the codomain
     -- We close the argument to get a ClosedExpr for substitution
-    let argClosed = closeWithPlaceholders ctx arg
-    Right (subst0 cod argClosed)
+    let (env2, argClosed) = closeWithPlaceholders env1 ctx arg
+    Right (env2, subst0 cod argClosed)
 
   -- Lam: type is Pi type
-  inferTypeOpen env ctx (Lam name bi domExpr body) = do
+  inferTypeOpenE env ctx (Lam name bi domExpr body) = do
     -- Check domain is a type
-    domTy <- inferTypeOpen env ctx domExpr
-    _ <- ensureSort env domTy
-    -- Close the domain to use in the context
-    let domClosed = closeWithPlaceholders ctx domExpr
+    (env1, domTy) <- inferTypeOpenE env ctx domExpr
+    _ <- ensureSort env1 domTy
+    -- Close the domain to use in the context (and register placeholder for body var)
+    let (env2, domClosed) = closeWithPlaceholders env1 ctx domExpr
     -- Infer body type with extended context
     let ctx' = extendCtx name domClosed ctx
-    bodyTy <- inferTypeOpen env ctx' body
+    (env3, bodyTy) <- inferTypeOpenE env2 ctx' body
     -- Result is Pi type
-    Right (Pi name bi domClosed (weaken1 bodyTy))
+    Right (env3, Pi name bi domClosed (weaken1 bodyTy))
 
   -- Pi: infer universe level of the result
-  inferTypeOpen env ctx (Pi name bi domExpr codExpr) = do
+  inferTypeOpenE env ctx (Pi name bi domExpr codExpr) = do
     -- Infer domain type and get its universe level
-    domTy <- inferTypeOpen env ctx domExpr
-    domLevel <- ensureSort env domTy
-    -- Close domain for context extension
-    let domClosed = closeWithPlaceholders ctx domExpr
+    (env1, domTy) <- inferTypeOpenE env ctx domExpr
+    domLevel <- ensureSort env1 domTy
+    -- Close domain for context extension (and register placeholder for codomain var)
+    let (env2, domClosed) = closeWithPlaceholders env1 ctx domExpr
     let ctx' = extendCtx name domClosed ctx
     -- Infer codomain type and get its universe level
-    codTy <- inferTypeOpen env ctx' codExpr
-    codLevel <- ensureSort env codTy
+    (env3, codTy) <- inferTypeOpenE env2 ctx' codExpr
+    codLevel <- ensureSort env3 codTy
     -- Result universe is imax of domain and codomain, simplified
-    Right (Sort (simplify (IMax domLevel codLevel)))
+    Right (env3, Sort (simplify (IMax domLevel codLevel)))
 
   -- Let: check value type matches declared type, then extend context and infer body type
-  inferTypeOpen env ctx (Let name tyExpr valExpr body) = do
+  inferTypeOpenE env ctx (Let name tyExpr valExpr body) = do
     -- Check type is a type
-    tyTy <- inferTypeOpen env ctx tyExpr
-    _ <- ensureSort env tyTy
-    -- Close type and value
-    let tyClosed = closeWithPlaceholders ctx tyExpr
-    let valClosed = closeWithPlaceholders ctx valExpr
+    (env1, tyTy) <- inferTypeOpenE env ctx tyExpr
+    _ <- ensureSort env1 tyTy
+    -- Close type and value (registering placeholders)
+    let (env2, tyClosed) = closeWithPlaceholders env1 ctx tyExpr
+    let (env3, valClosed) = closeWithPlaceholders env2 ctx valExpr
     -- Check value has the declared type
-    valTy <- inferTypeOpen env ctx valExpr
-    tyClosed' <- whnf env tyClosed
-    valTy' <- whnf env valTy
+    (env4, valTy) <- inferTypeOpenE env3 ctx valExpr
+    tyClosed' <- whnf env4 tyClosed
+    valTy' <- whnf env4 valTy
     if tyClosed' == valTy'
       then do
         -- Extend context with let binding
         let ctx' = extendCtxLet name tyClosed valClosed ctx
         -- Infer body type
-        inferTypeOpen env ctx' body
+        inferTypeOpenE env4 ctx' body
       else Left (LetTypeMismatch tyClosed valTy)
 
   -- Proj: infer structure type and get field type
-  inferTypeOpen env ctx (Proj structName idx structExpr) = do
-    structTy <- inferTypeOpen env ctx structExpr
+  inferTypeOpenE env ctx (Proj structName idx structExpr) = do
+    (env1, structTy) <- inferTypeOpenE env ctx structExpr
     -- Reduce struct type to WHNF to expose the structure application
-    structTy' <- whnf env structTy
+    structTy' <- whnf env1 structTy
     -- Extract the head (should be the structure name) and args (params)
     let (head, params) = getAppSpine structTy'
     case getConstHead head of
@@ -762,13 +816,21 @@ mutual
         -- Verify the type matches the declared structure name
         if tyName /= structName
           then Left (OtherError $ "projection: type mismatch, expected " ++ show structName ++ " got " ++ show tyName)
-          else case getProjType env structName idx params of
+          else case getProjType env1 structName idx params of
             Nothing => Left (OtherError $ "projection: could not compute field type for " ++ show structName ++ " at index " ++ show idx)
-            Just fieldTy => Right fieldTy
+            Just fieldTy => Right (env1, fieldTy)
 
   -- Literals
-  inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
-  inferTypeOpen _ _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
+  inferTypeOpenE env _ (NatLit _) = Right (env, Const (Str "Nat" Anonymous) [])
+  inferTypeOpenE env _ (StringLit _) = Right (env, Const (Str "String" Anonymous) [])
+
+  ||| Convenience wrapper that discards the environment
+  export
+  covering
+  inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+  inferTypeOpen env ctx e = do
+    (_, ty) <- inferTypeOpenE env ctx e
+    Right ty
 
 ------------------------------------------------------------------------
 -- Proof Irrelevance
@@ -1047,8 +1109,10 @@ checkDefDecl env name ty value levelParams = do
   checkNameNotDeclared env name
   checkNoDuplicateUnivParams levelParams
   _ <- checkIsType env ty
-  valueTy <- inferType env value
-  eq <- isDefEq env valueTy ty
+  -- Use inferTypeE to get updated env with placeholders
+  (env', valueTy) <- inferTypeE env value
+  -- Use updated env for comparison (so placeholders can be looked up)
+  eq <- isDefEq env' valueTy ty
   if eq
     then Right ()
     else Left (OtherError $ "definition type mismatch for " ++ show name)
@@ -1072,8 +1136,9 @@ checkThmDecl env name ty value levelParams = do
   if simplify tyLevel /= Zero
     then Left (OtherError $ "theorem type must be a Prop: " ++ show name)
     else do
-      valueTy <- inferType env value
-      eq <- isDefEq env valueTy ty
+      -- Use inferTypeE to get updated env with placeholders
+      (env', valueTy) <- inferTypeE env value
+      eq <- isDefEq env' valueTy ty
       if eq
         then Right ()
         else Left (OtherError $ "theorem proof type mismatch for " ++ show name)

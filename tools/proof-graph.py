@@ -65,6 +65,7 @@ def parse_module(file_path: Path) -> Module:
     def_pattern = re.compile(r'^(\w+)\s+.*=')
     data_pattern = re.compile(r'^data\s+(\w+)')
     hole_pattern = re.compile(r'\?(\w+)')
+    believe_me_pattern = re.compile(r'\bbelieve_me\b')
 
     # Known function names in our codebase (for dependency tracking)
     known_names = set()
@@ -96,6 +97,10 @@ def parse_module(file_path: Path) -> Module:
 
         # Type signature
         if match := type_sig_pattern.match(line):
+            # Save previous definition before starting a new one
+            if current_def and current_def.name not in [d.name for d in definitions]:
+                definitions.append(current_def)
+
             name = match.group(1)
             type_sig = match.group(2)
 
@@ -115,13 +120,25 @@ def parse_module(file_path: Path) -> Module:
             )
             continue
 
-        # Definition body - look for holes and calls
-        if current_def and (stripped.startswith(current_def.name) or stripped.startswith('=')):
+        # Definition body - look for holes, believe_me, and calls
+        # Include: lines starting with def name, '=', or indented continuation lines
+        in_def_body = current_def and (
+            stripped.startswith(current_def.name) or
+            stripped.startswith('=') or
+            (line and line[0].isspace())  # indented continuation
+        )
+        if in_def_body:
             # Find holes
             for match in hole_pattern.finditer(line):
                 hole_name = match.group(1)
                 current_def.holes.append(hole_name)
                 current_def.has_holes = True
+
+            # Detect believe_me (treated as unproven)
+            if believe_me_pattern.search(line):
+                current_def.has_holes = True
+                if 'believe_me' not in current_def.holes:
+                    current_def.holes.append('believe_me')
 
             # Find calls to known functions
             words = re.findall(r'\b(\w+)\b', line)

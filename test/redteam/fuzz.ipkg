@@ -1,0 +1,7 @@
+package fuzz
+
+depends = lean4idris
+
+main = FuzzRunner
+
+executable = lean4idris-fuzz

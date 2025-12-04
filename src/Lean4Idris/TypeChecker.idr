@@ -127,6 +127,8 @@ data TCError : Type where
   CtorUniverseMismatch : (ctorName : Name) -> (indParams : List Name) -> (ctorParams : List Name) -> TCError
   ||| Inductive type not found for constructor
   CtorInductiveNotFound : (ctorName : Name) -> (indName : Name) -> TCError
+  ||| Cyclic universe level parameter (would cause infinite loop)
+  CyclicLevelParam : Name -> TCError
   ||| Other error
   OtherError : String -> TCError
 
@@ -154,6 +156,8 @@ Show TCError where
     "constructor " ++ show ctor ++ " universe params don't match inductive"
   show (CtorInductiveNotFound ctor ind) =
     "inductive " ++ show ind ++ " not found for constructor " ++ show ctor
+  show (CyclicLevelParam n) =
+    "cyclic universe level parameter: " ++ show n
   show (OtherError s) = s
 
 ------------------------------------------------------------------------
@@ -224,7 +228,8 @@ unfoldConst env name levels = do
   let params = declLevelParams decl
   -- Check level count matches
   guard (length params == length levels)
-  pure (instantiateLevelParams params levels value)
+  -- Use safe instantiation to prevent cyclic params
+  instantiateLevelParamsSafe params levels value
 
 ||| Get the head constant of an application spine
 ||| e.g., for `f a b c` returns `Just (f, [a, b, c])`
@@ -329,7 +334,8 @@ tryIotaReduction env e whnfStep = do
   --   3. remaining args after major
 
   let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
-  let rhs = instantiateLevelParams (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
+  -- Use safe instantiation; if cyclic params detected, fail iota reduction
+  rhs <- instantiateLevelParamsSafe (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
 
   -- Apply: rhs params motives minors
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
@@ -554,9 +560,11 @@ mutual
         Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
         Just ty =>
           let params = declLevelParams decl in
-          if length params == length levels
-            then Right (instantiateLevelParams params levels ty)
-            else Left (WrongNumLevels (length params) (length levels) name)
+          if length params /= length levels
+            then Left (WrongNumLevels (length params) (length levels) name)
+            else case instantiateLevelParamsSafe params levels ty of
+              Nothing => Left (CyclicLevelParam name)
+              Just ty' => Right ty'
 
   -- App: infer function type, check it's Pi, verify arg type, instantiate with arg
   inferType env (App f arg) = do
@@ -620,9 +628,11 @@ mutual
         Nothing => Left (UnknownConst name)
         Just ty =>
           let params = declLevelParams decl in
-          if length params == length levels
-            then Right (instantiateLevelParams params levels ty)
-            else Left (WrongNumLevels (length params) (length levels) name)
+          if length params /= length levels
+            then Left (WrongNumLevels (length params) (length levels) name)
+            else case instantiateLevelParamsSafe params levels ty of
+              Nothing => Left (CyclicLevelParam name)
+              Just ty' => Right ty'
 
   -- BVar: look up type in local context
   inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type

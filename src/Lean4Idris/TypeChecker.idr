@@ -770,9 +770,8 @@ mutual
                 Nothing => Left (OtherError $ "ensurePi: stuck App with unknown head " ++ show name)
         Nothing => Left (FunctionExpected expr)
     Sort l =>
-      -- A Sort being used as a function type - this happens with higher-order type variables
-      -- Trust the input and synthesize Pi components
-      Right (Anonymous, Default, expr, weaken1 expr)
+      -- A Sort cannot be applied to arguments - it's not a function type
+      Left (FunctionExpected expr)
     Lam _ _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Lam")
     Let _ _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Let")
     BVar _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got BVar (should not happen in closed expr)")
@@ -1019,8 +1018,112 @@ betaReduceN : {n : Nat} -> Expr n -> Maybe (Expr n)
 betaReduceN (App (Lam _ _ _ body) arg) = Just (subst0SingleN body arg)
 betaReduceN _ = Nothing
 
--- For open expressions (under binders), we can only do beta reduction
--- since whnf requires closed expressions
+-- Helper functions for normalizeTypeOpenWithEnv
+getAppSpineN : {m : Nat} -> Expr m -> (Expr m, List (Expr m))
+getAppSpineN e = go e []
+  where
+    go : Expr m -> List (Expr m) -> (Expr m, List (Expr m))
+    go (App f x) args = go f (x :: args)
+    go e args = (e, args)
+
+mkAppN : {m : Nat} -> Expr m -> List (Expr m) -> Expr m
+mkAppN f [] = f
+mkAppN f (x :: xs) = mkAppN (App f x) xs
+
+-- Try to unfold a constant in an open expression context
+covering
+unfoldConstN : TCEnv -> {n : Nat} -> Name -> List Level -> Maybe (Expr n)
+unfoldConstN env name levels = do
+  decl <- lookupDecl name env
+  value <- getDeclValue decl
+  let params = declLevelParams decl
+  guard (length params == length levels)
+  instantiated <- instantiateLevelParamsSafe params levels value
+  Just (believe_me instantiated)
+
+-- Try delta reduction on an application whose head is a constant
+covering
+tryDeltaOpenN : TCEnv -> {n : Nat} -> Expr n -> Maybe (Expr n)
+tryDeltaOpenN env e =
+  let (head, args) = getAppSpineN e
+  in case head of
+    Const name levels => do
+      unfolded <- unfoldConstN env name levels
+      Just (mkAppN unfolded args)
+    _ => Nothing
+
+-- Try iota reduction for Nat.rec when the major premise is a constructor
+-- Nat.rec.{u} motive zeroCase succCase Nat.zero = zeroCase
+-- Nat.rec.{u} motive zeroCase succCase (Nat.succ n) = succCase n (Nat.rec.{u} motive zeroCase succCase n)
+tryNatRecIota : {n : Nat} -> Expr n -> Maybe (Expr n)
+tryNatRecIota e =
+  let (head, args) = getAppSpineN e
+  in case head of
+    Const name [u] =>
+      if name == Str "rec" (Str "Nat" Anonymous)
+        then case args of
+          -- Nat.rec motive zeroCase succCase major
+          [motive, zeroCase, succCase, major] =>
+            case major of
+              -- Nat.zero case: result = zeroCase
+              Const zeroName [] =>
+                if zeroName == Str "zero" (Str "Nat" Anonymous)
+                  then Just zeroCase
+                  else Nothing
+              -- Nat.succ n case: result = succCase n (Nat.rec motive zeroCase succCase n)
+              App (Const succName []) innerN =>
+                if succName == Str "succ" (Str "Nat" Anonymous)
+                  then let recCall = mkAppN (Const name [u]) [motive, zeroCase, succCase, innerN]
+                       in Just (App (App succCase innerN) recCall)
+                  else Nothing
+              _ => Nothing
+          _ => Nothing
+        else Nothing
+    _ => Nothing
+
+-- For open expressions (under binders), we can do beta reduction
+-- and delta reduction on constants. For iota reduction,
+-- we need to handle it symbolically when the major premise is a constructor.
+covering
+normalizeTypeOpenWithEnv : TCEnv -> {n : Nat} -> Expr n -> TC (Expr n)
+normalizeTypeOpenWithEnv env e = case betaReduceN e of
+  Just e' => normalizeTypeOpenWithEnv env e'
+  Nothing => case e of
+    Pi name bi dom cod => do
+      dom' <- normalizeTypeOpenWithEnv env dom
+      cod' <- normalizeTypeOpenWithEnv env cod
+      Right (Pi name bi dom' cod')
+    Lam name bi ty body => do
+      ty' <- normalizeTypeOpenWithEnv env ty
+      body' <- normalizeTypeOpenWithEnv env body
+      Right (Lam name bi ty' body')
+    App f arg => do
+      f' <- normalizeTypeOpenWithEnv env f
+      arg' <- normalizeTypeOpenWithEnv env arg
+      let app = App f' arg'
+      case betaReduceN app of
+        Just reduced => normalizeTypeOpenWithEnv env reduced
+        Nothing =>
+          -- Try iota reduction for Nat.rec
+          case tryNatRecIota app of
+            Just reduced => normalizeTypeOpenWithEnv env reduced
+            Nothing =>
+              -- Try delta reduction if f' is a constant
+              case tryDeltaOpenN env app of
+                Just reduced => normalizeTypeOpenWithEnv env reduced
+                Nothing => Right app
+    Let name ty val body => normalizeTypeOpenWithEnv env (subst0SingleN body val)
+    Proj n i e => do
+      e' <- normalizeTypeOpenWithEnv env e
+      Right (Proj n i e')
+    Sort l => Right (Sort (simplify l))
+    -- For constants, try delta reduction
+    Const name levels => case unfoldConstN env name levels of
+      Just unfolded => normalizeTypeOpenWithEnv env unfolded
+      Nothing => Right (Const name levels)
+    e => Right e
+
+-- Wrapper that doesn't need env (for backwards compat)
 covering
 normalizeTypeOpen : {n : Nat} -> Expr n -> TC (Expr n)
 normalizeTypeOpen e = case betaReduceN e of
@@ -1063,12 +1166,12 @@ normalizeType env e = do
     normalizeDeep (Pi name bi dom cod) = do
       dom' <- normalizeType env dom
       -- For codomain, we need to handle it carefully since it has a bound var
-      -- We can still recursively normalize since normalizeType handles whnf
-      cod' <- normalizeTypeOpen cod
+      -- Use normalizeTypeOpenWithEnv to allow delta reduction in open terms
+      cod' <- normalizeTypeOpenWithEnv env cod
       Right (Pi name bi dom' cod')
     normalizeDeep (Lam name bi ty body) = do
       ty' <- normalizeType env ty
-      body' <- normalizeTypeOpen body
+      body' <- normalizeTypeOpenWithEnv env body
       Right (Lam name bi ty' body')
     normalizeDeep (App f arg) = do
       -- App after whnf means no beta/delta/iota at head, so just normalize subterms
@@ -1079,7 +1182,7 @@ normalizeType env e = do
       -- Let should have been reduced by whnf, but normalize subterms anyway
       ty' <- normalizeType env ty
       val' <- normalizeType env val
-      body' <- normalizeTypeOpen body
+      body' <- normalizeTypeOpenWithEnv env body
       Right (Let name ty' val' body')
     normalizeDeep (Proj n i e) = do
       e' <- normalizeType env e

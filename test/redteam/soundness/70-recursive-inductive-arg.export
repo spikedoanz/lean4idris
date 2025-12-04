@@ -1,0 +1,30 @@
+0.0.0
+1 #NS 0 W
+2 #NS 1 sup
+3 #NS 0 A
+4 #NS 0 B
+5 #NS 0 a
+6 #NS 0 f
+1 #US 0
+2 #US 1
+0 #ES 0
+1 #ES 1
+2 #ES 2
+3 #EC 1
+4 #EC 3
+5 #EC 4
+6 #EA 3 4
+7 #EA 6 5
+8 #EP #BD 6 5 3
+9 #EP #BD 5 4 8
+10 #EP #BD 3 1 9
+11 #EP #BD 4 1 10
+12 #EP #BD 5 4 7
+13 #EP #BD 6 12 6
+14 #EP #BD 5 4 13
+15 #EP #BD 3 1 14
+16 #EP #BD 4 1 15
+#AX 3 1
+#AX 4 1
+#IND 1 11 0 2 0 0 0 1 2 0 3 4
+#CTOR 2 16 1 0 2 2

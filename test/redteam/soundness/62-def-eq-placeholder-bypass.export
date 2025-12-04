@@ -1,0 +1,21 @@
+0.0.0
+1 #NS 0 _x
+2 #NS 1 _isDefEqBody
+3 #NS 0 Nat
+4 #NS 0 Bool
+5 #NS 0 x
+6 #NS 0 bad
+1 #US 0
+0 #ES 0
+1 #ES 1
+2 #EC 3
+3 #EC 4
+4 #EC 2
+5 #EV 0
+6 #EA 4 5
+7 #EL #BD 5 2 6
+8 #EP #BD 5 2 2
+#AX 3 1
+#AX 4 1
+#AX 2 1
+#DEF 6 8 7 A

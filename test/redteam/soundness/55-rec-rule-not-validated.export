@@ -1,0 +1,24 @@
+0.0.0
+1 #NS 0 Nat
+2 #NS 1 zero
+3 #NS 1 succ
+4 #NS 1 rec
+5 #NS 0 Prop
+6 #NS 0 False
+7 #NS 0 false_elim
+1 #US 0
+2 #US 1
+0 #ES 0
+1 #ES 1
+2 #ES 2
+3 #EC 1
+4 #EC 2
+5 #EC 5
+6 #EC 6
+7 #EP #BD 0 3 3
+#AX 1 1
+#AX 5 0
+#IND 1 3 0 1 0 0 0 0 1 0
+#CTOR 2 3 1 0 0 0
+#CTOR 3 7 1 1 0 1
+#REC 4 3 0 6 0

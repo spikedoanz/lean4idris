@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Red team testing of the lean4idris type checker has been conducted in four rounds.
+Red team testing of the lean4idris type checker has been conducted in five rounds.
 
 ### Round 1 (Fixed)
 Identified **3 soundness bugs**, all **FIXED**:
@@ -31,7 +31,11 @@ Deep analysis found **5 theoretical concerns**, all low severity or informationa
 4. Projection not fully implemented (fails safe)
 5. K-axiom flag unused (covered by other checks)
 
-**Total test cases: 52 | Passing: 52 | Failing: 0**
+### Round 5 (Fixed)
+Identified **1 soundness bug**, **FIXED**:
+1. **Sort used as function type** - `ensurePiWhnf` was incorrectly treating `Sort l` as a valid function type, allowing `Sort 0 Sort 0` to type-check ✅ FIXED (Tests 06, 24, 33, 41)
+
+**Total test cases: 68 | Passing: 64 | Failing: 4 (all test file issues, not bugs)**
 
 ## Fixed Soundness Bugs
 
@@ -524,6 +528,131 @@ Sources:
 - [lean4#10475](https://github.com/leanprover/lean4/issues/10475) - inferLet bug
 - [lean4#10511](https://github.com/leanprover/lean4/issues/10511) - Substring reflexivity
 - [Lean4Lean paper](https://arxiv.org/abs/2403.14064) - looseBVarRange bug
+
+---
+
+## Round 5: Test Analysis (Pending Review)
+
+### Test 06 - deep-nesting.export (FIXED)
+
+**Expected**: reject
+**Actual**: ✅ NOW REJECTED
+**Analysis**: Axiom type is `(Sort 0) (Sort 0) ... (Sort 0)` with 20 nested applications.
+- `Sort 0` is not a function, so `Sort 0 Sort 0` is ill-typed
+- **Bug found**: `ensurePiWhnf` was treating `Sort l` as a valid function type with comment "Trust the input"
+- **Fix**: Changed `Sort l` case in `ensurePiWhnf` to return `FunctionExpected` error
+
+---
+
+### Test 24 - recursor-wrong-major.export (FIXED)
+
+**Expected**: reject
+**Actual**: ✅ NOW REJECTED
+**Analysis**: Definition `test : Sort 1 := Nat Bool`
+- `Nat` is a type (Sort 1), not a function
+- `Nat Bool` is ill-typed since `Nat` doesn't accept arguments
+- **Root cause**: Same as test 06 - `Sort 1` (type of `Nat`) was being treated as a valid function type
+
+**Fix**: Same fix as test 06.
+
+---
+
+### Test 33 - rec-rule-arbitrary-rhs.export (FIXED)
+
+**Expected**: reject
+**Actual**: ✅ NOW REJECTED
+**Analysis**: Recursor rule has RHS as `Sort 0` instead of proper minor premise application.
+- This test was also fixed by the Sort-as-function-type fix
+- Previously the type checker would "trust" Sort types as function types
+
+---
+
+### Test 41 - rec-rule-rhs-untyped.export (FIXED)
+
+**Expected**: reject
+**Actual**: ✅ NOW REJECTED
+**Analysis**: Similar to test 33 - recursor rule RHS is `Sort 1` instead of proper term.
+- Fixed by the same Sort-as-function-type fix
+
+---
+
+### Test 45 - imax-param-unsimplified.export
+
+**Expected**: reject
+**Actual**: accept
+**Analysis**:
+- `T.{u} : Sort (IMax 0 u)` (axiom)
+- `bad : Sort (IMax 0 u) := T.{u}` (definition)
+- Level `IMax 0 u` should simplify to `u` when `u` is non-zero
+- The test expects this to fail but it passes because the types are definitionally equal
+
+**Recommendation**: Change expectation to "accept" - `Sort (IMax 0 u)` and `T.{u}` both normalize correctly. The concern in the test description doesn't apply here.
+
+---
+
+### Test 57 - placeholder-name-collision.export
+
+**Expected**: reject
+**Actual**: accept
+**Analysis**: User creates constant `_local.0._local` to potentially collide with placeholders.
+- Definition: `bad : (Nat -> Nat) := λx:Nat. BVar 0`
+- This is actually a valid identity function on Nat
+- The placeholder collision doesn't cause unsoundness here
+
+**Recommendation**: Change expectation to "accept" - the term is valid (identity function).
+
+---
+
+### Test 63 - subst0single-depth-exploit.export
+
+**Expected**: reject
+**Actual**: accept
+**Analysis**: This test file appears to be valid Lean code:
+- Defines `bad : (y : Nat) -> (x : Nat) -> Nat`
+- Value: `λy:Nat. λx:Nat. BVar 1` which is `λy. λx. y`
+- Inside nested lambda at depth 2, BVar 1 correctly refers to `y : Nat`
+- This is a valid projection function that returns the first argument
+
+**Recommendation**: Change expectation to "accept" - the term is well-typed.
+
+---
+
+### Test 70 - recursive-inductive-arg.export
+
+**Expected**: accept
+**Actual**: reject (unknown constant: W)
+**Analysis**: The export file appears malformed:
+
+1. **IND declaration issues**:
+   ```
+   #IND 1 11 0 2 0 0 0 1 2 0 3 4
+   ```
+   - `indNames=[2]` refers to name 2 (W.sup), not name 1 (W)
+   - `numCtors=0` but there's a constructor declared separately
+   - Level params `[3, 4]` are names "A" and "B" (type params), not universe level params
+
+2. **Expression structure**: The types don't match standard W-type signature:
+   - Expected: `W : (A : Type) -> (B : A -> Type) -> Type`
+   - Actual: `W : (B : Type) -> (A : Type) -> (a : A) -> (f : B) -> W`
+
+**Recommendation**: Either fix the export file to be valid W-type format, or change expectation to "reject" since the file is malformed.
+
+---
+
+### Summary of Round 5
+
+| Test | Status | Action Needed |
+|------|--------|--------------|
+| 06 | ✅ FIXED | Sort-as-function-type bug fixed |
+| 24 | ✅ FIXED | Sort-as-function-type bug fixed |
+| 33 | ✅ FIXED | Sort-as-function-type bug fixed |
+| 41 | ✅ FIXED | Sort-as-function-type bug fixed |
+| 45 | Test issue | Change to "accept" |
+| 57 | Test issue | Change to "accept" |
+| 63 | Test issue | Change to "accept" |
+| 70 | Test issue | Fix export file or change to "reject" |
+
+**Bug Fixed**: `ensurePiWhnf` in `TypeChecker.idr:772-775` was incorrectly treating `Sort l` as a valid function type. This allowed expressions like `Sort 0 Sort 0` to be typed as if Sort could be applied to arguments. The fix changes this to return `FunctionExpected` error.
 
 ---
 

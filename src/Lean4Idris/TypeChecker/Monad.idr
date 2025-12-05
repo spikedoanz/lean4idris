@@ -125,25 +125,25 @@ data TCError : Type where
   FuelExhausted : TCError
   OtherError : String -> TCError
 
+||| Truncate a string to max length, adding "..." if truncated
+truncate : Nat -> String -> String
+truncate maxLen s =
+  if length s <= maxLen
+    then s
+    else substr 0 maxLen s ++ "..."
+
+||| Show expression truncated to reasonable length (avoids huge output)
+covering
+showExprTruncated : ClosedExpr -> String
+showExprTruncated e = truncate 200 (show e)
+
 export
 covering
 Show TCError where
-  show (TypeExpected e) = "type expected (got: " ++ showExprHead e ++ ")"
-    where
-      showExprHead : ClosedExpr -> String
-      showExprHead (Sort _) = "Sort"
-      showExprHead (Const n _) = "Const " ++ show n
-      showExprHead (App _ _) = "App"
-      showExprHead (Lam _ _ _ _) = "Lam"
-      showExprHead (Pi _ _ _ _) = "Pi"
-      showExprHead (Let _ _ _ _) = "Let"
-      showExprHead (BVar _) = "BVar"
-      showExprHead (Proj _ _ _) = "Proj"
-      showExprHead (NatLit _) = "NatLit"
-      showExprHead (StringLit _) = "StringLit"
-  show (FunctionExpected e) = "function expected: " ++ show e
-  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ show dom ++ ", got " ++ show argTy
-  show (LetTypeMismatch expected actual) = "let binding type mismatch: expected " ++ show expected ++ ", got " ++ show actual
+  show (TypeExpected e) = "type expected (got: " ++ showExprTruncated e ++ ")"
+  show (FunctionExpected e) = "function expected: " ++ showExprTruncated e
+  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ showExprTruncated dom ++ ", got " ++ showExprTruncated argTy
+  show (LetTypeMismatch expected actual) = "let binding type mismatch: expected " ++ showExprTruncated expected ++ ", got " ++ showExprTruncated actual
   show (UnknownConst n) = "XXXUNKNOWN constant: " ++ show n
   show (WrongNumLevels exp act n) = "wrong number of universe levels for " ++ show n ++ ": expected " ++ show exp ++ ", got " ++ show act
   show (NegativeOccurrence ind ctor) = "negative occurrence of " ++ show ind ++ " in constructor " ++ show ctor

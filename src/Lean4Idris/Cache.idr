@@ -51,13 +51,13 @@ getCacheDir = do
     Just h => pure (h ++ "/.cache/lean4idris")
     Nothing => pure "/tmp/lean4idris-cache"
 
-||| Get the global cache file path
+||| Get the cache file path for a specific version
 export
 covering
-getGlobalCachePath : IO String
-getGlobalCachePath = do
+getCachePath : String -> IO String
+getCachePath version = do
   cacheDir <- getCacheDir
-  pure (cacheDir ++ "/global.cache")
+  pure (cacheDir ++ "/" ++ version ++ ".cache")
 
 ||| Ensure the cache directory exists
 export
@@ -97,25 +97,25 @@ serializeCache st =
       decls = Prelude.toList st.passedDecls
   in unlines (header :: decls)
 
-||| Load global cache from disk if it exists and version matches
+||| Load cache from disk for a specific version
 export
 covering
 loadCache : String -> IO (Maybe CacheState)
-loadCache expectedVersion = do
-  cachePath <- getGlobalCachePath
+loadCache version = do
+  cachePath <- getCachePath version
   result <- readFile cachePath
   case result of
     Left _ => pure Nothing  -- File doesn't exist or can't be read
-    Right content => pure (parseCacheContent expectedVersion content)
+    Right content => pure (parseCacheContent version content)
 
-||| Save cache to disk
+||| Save cache to disk (uses version from cache state)
 export
 covering
 saveCache : CacheState -> IO ()
 saveCache st = do
   ok <- ensureCacheDir
   when ok $ do
-    cachePath <- getGlobalCachePath
+    cachePath <- getCachePath st.version
     let content = serializeCache st
     _ <- writeFile cachePath content
     pure ()

@@ -22,6 +22,19 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 - [x] Proof irrelevance (proofs of Prop are definitionally equal)
 - [x] Declaration validation (axioms, definitions, theorems)
 
+## Coverage
+
+Type checking coverage on Lean 4 export files (using `lean4idris -c`):
+
+| Export File | Declarations | Passed | Failed | Coverage |
+|-------------|--------------|--------|--------|----------|
+| Init.Prelude | 2036 | 1788 | 248 | 87.8% |
+| Init.Core | 3748 | 3353 | 395 | 89.5% |
+| Init.Classical | 8044 | 6577 | 1467 | 81.8% |
+| Init.Data.Nat.Basic | 4586 | 4050 | 536 | 88.3% |
+
+Known blocking issues tracked in [GitHub Issues](https://github.com/spikedoanz/lean4idris/issues).
+
 ## Build
 
 Requires [pack](https://github.com/stefan-hoeck/idris2-pack).

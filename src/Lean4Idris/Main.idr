@@ -11,6 +11,7 @@ import System
 import Data.List
 import Data.Maybe
 import Data.String
+import Data.Bits
 import System.FFI
 
 ||| Check all declarations in order, with verbose output
@@ -37,6 +38,30 @@ flushStdout : IO ()
 flushStdout = do
   _ <- primIO $ prim__fflush prim__getNullAnyPtr
   pure ()
+
+||| Simple FNV-1a hash for cache versioning
+fnvHash : String -> Bits64
+fnvHash s = foldl (\h, c => (h `xor` cast (ord c)) * 0x100000001b3) 0xcbf29ce484222325 (unpack s)
+
+||| Compute version string from the binary
+||| We hash the actual .so binary to detect changes
+covering
+computeVersion : IO String
+computeVersion = do
+  args <- getArgs
+  case args of
+    (binPath :: _) => do
+      -- The wrapper script is at /path/to/bin/lean4idris
+      -- The actual binary is at /path/to/bin/lean4idris_app/lean4idris.so
+      -- But when run via chez, arg0 might be the .so directly
+      let soPath = if isSuffixOf ".so" binPath
+                     then binPath
+                     else binPath ++ "_app/lean4idris.so"
+      result <- readFile soPath
+      case result of
+        Right content => pure $ "lean4idris-" ++ show (fnvHash content)
+        Left _ => pure "lean4idris-unknown"
+    _ => pure "lean4idris-unknown"
 
 ||| Check all declarations in IO (with progress output and caching)
 ||| If continueOnError is True, continues checking after failures and reports summary
@@ -125,6 +150,8 @@ main = do
   let args' = drop 1 args
   let opts = parseArgs args'
   let fuel = fromMaybe defaultFuel opts.fuel
+  -- Compute version hash from binary
+  tcVersion <- computeVersion
   case opts.files of
     (path :: _) => do
       result <- readFile path
@@ -135,16 +162,16 @@ main = do
         Right content => do
           -- Load global cache if caching is enabled
           cache <- if opts.noCache
-                     then pure initCache
+                     then pure (initCache tcVersion)
                      else do
-                       maybeCache <- loadCache
+                       maybeCache <- loadCache tcVersion
                        case maybeCache of
                          Just c => do
                            putStrLn $ "Global cache loaded: " ++ show (cacheSize c) ++ " declarations (version: " ++ tcVersion ++ ")"
                            pure c
                          Nothing => do
                            putStrLn $ "No cache found or version mismatch, starting fresh (version: " ++ tcVersion ++ ")"
-                           pure initCache
+                           pure (initCache tcVersion)
           case parseExport content of
             Left err => do
               putStrLn $ "Parse error: " ++ err

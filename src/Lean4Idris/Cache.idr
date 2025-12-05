@@ -2,7 +2,7 @@
 |||
 ||| Cache is shared across all export files. Declarations are assumed to have
 ||| globally unique names (which is true in Lean). Cache is invalidated when
-||| the type checker version changes.
+||| the type checker version changes (passed in at runtime).
 module Lean4Idris.Cache
 
 import Data.SortedSet
@@ -14,12 +14,6 @@ import System
 
 %default total
 
-||| Type checker version - change this when the type checker changes
-||| to invalidate all caches
-export
-tcVersion : String
-tcVersion = "lean4idris-v1"
-
 ||| Cache state tracking which declarations have passed
 public export
 record CacheState where
@@ -27,10 +21,10 @@ record CacheState where
   version : String
   passedDecls : SortedSet String
 
-||| Create an empty cache
+||| Create an empty cache with the given version
 export
-initCache : CacheState
-initCache = MkCacheState tcVersion empty
+initCache : String -> CacheState
+initCache version = MkCacheState version empty
 
 ||| Check if a declaration is in the cache
 export
@@ -77,21 +71,21 @@ ensureCacheDir = do
     Left FileExists => pure True
     Left _ => pure False
 
-||| Parse cache file content
+||| Parse cache file content, checking version matches expected
 ||| Format:
 |||   VERSION <version>
 |||   <decl1>
 |||   <decl2>
 |||   ...
-parseCacheContent : String -> Maybe CacheState
-parseCacheContent content =
+parseCacheContent : String -> String -> Maybe CacheState
+parseCacheContent expectedVersion content =
   let ls = lines content
   in case ls of
     [] => Nothing
     (firstLine :: rest) =>
       case words firstLine of
         ["VERSION", v] =>
-          if v == tcVersion
+          if v == expectedVersion
             then Just $ MkCacheState v (fromList rest)
             else Nothing  -- Version mismatch, cache invalid
         _ => Nothing  -- Invalid format
@@ -106,13 +100,13 @@ serializeCache st =
 ||| Load global cache from disk if it exists and version matches
 export
 covering
-loadCache : IO (Maybe CacheState)
-loadCache = do
+loadCache : String -> IO (Maybe CacheState)
+loadCache expectedVersion = do
   cachePath <- getGlobalCachePath
   result <- readFile cachePath
   case result of
     Left _ => pure Nothing  -- File doesn't exist or can't be read
-    Right content => pure (parseCacheContent content)
+    Right content => pure (parseCacheContent expectedVersion content)
 
 ||| Save cache to disk
 export

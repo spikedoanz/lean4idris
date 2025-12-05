@@ -1,0 +1,12 @@
+package lean4idris-vis
+version = 0.1.0
+authors = "spike"
+
+depends = contrib
+
+modules = Lean4Idris.VisMain
+
+main = Lean4Idris.VisMain
+
+executable = "lean4idris-vis"
+sourcedir = "src"

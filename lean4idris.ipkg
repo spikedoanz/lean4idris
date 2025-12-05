@@ -26,6 +26,8 @@ modules = Lean4Idris
         , Lean4Idris.TypeChecker
         , Lean4Idris.Trace
         , Lean4Idris.TracingWhnf
+        , Lean4Idris.TracingDefEq
+        , Lean4Idris.VisMain
         , Lean4Idris.Export.Token
         , Lean4Idris.Export.Lexer
         , Lean4Idris.Export.Parser

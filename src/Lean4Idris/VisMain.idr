@@ -1,6 +1,7 @@
 ||| Simple CLI for reduction visualization
 |||
 ||| Usage: lean4idris-vis <export-file> <decl-name> [--json|--html|--text]
+|||        lean4idris-vis <export-file> --defeq <decl1> <decl2> [--json|--html|--text]
 module Lean4Idris.VisMain
 
 import Lean4Idris
@@ -11,6 +12,7 @@ import Lean4Idris.Decl
 import Lean4Idris.TypeChecker
 import Lean4Idris.Trace
 import Lean4Idris.TracingWhnf
+import Lean4Idris.TracingDefEq
 import Lean4Idris.Pretty
 import Lean4Idris.Export.Parser
 import System
@@ -57,13 +59,18 @@ main = do
   case args of
     [_, file, name] => runVis file name Text
     [_, file, name, mode] => runVis file name (parseOutputMode [mode])
+    [_, file, "--defeq", name1, name2] => runDefEq file name1 name2 Text
+    [_, file, "--defeq", name1, name2, mode] => runDefEq file name1 name2 (parseOutputMode [mode])
     _ => do
-      putStrLn "Usage: lean4idris-vis <export-file> <decl-name> [--json|--html|--text]"
+      putStrLn "Usage:"
+      putStrLn "  lean4idris-vis <export-file> <decl-name> [--json|--html|--text]"
+      putStrLn "  lean4idris-vis <export-file> --defeq <decl1> <decl2> [--json|--html|--text]"
       putStrLn ""
       putStrLn "Examples:"
       putStrLn "  lean4idris-vis test.export Nat.add"
       putStrLn "  lean4idris-vis test.export Nat.add --html > trace.html"
       putStrLn "  lean4idris-vis test.export Nat.add --json"
+      putStrLn "  lean4idris-vis test.export --defeq Nat.add Nat.add --html"
   where
     runVis : String -> String -> OutputMode -> IO ()
     runVis file name mode = do
@@ -94,3 +101,37 @@ main = do
                         Text => putStrLn (ppTrace trace)
                         JSON => putStrLn (traceToJSON trace)
                         HTML => putStrLn (traceToHTML trace)
+
+    runDefEq : String -> String -> String -> OutputMode -> IO ()
+    runDefEq file name1 name2 mode = do
+      Right content <- readFile file
+        | Left err => putStrLn $ "Error reading file: " ++ show err
+      case parseExport content of
+        Left err => putStrLn $ "Parse error: " ++ err
+        Right st => do
+          let decls = getDecls st
+          let env = foldl (\e, d => addDecl d e) emptyEnv decls
+          let targetName1 = parseDottedName name1
+          let targetName2 = parseDottedName name2
+          case (findDecl targetName1 decls, findDecl targetName2 decls) of
+            (Nothing, _) => putStrLn $ "Declaration not found: " ++ name1
+            (_, Nothing) => putStrLn $ "Declaration not found: " ++ name2
+            (Just decl1, Just decl2) => do
+              putStrLn $ "Comparing: " ++ name1 ++ " =?= " ++ name2
+              case (getDeclExpr decl1, getDeclExpr decl2) of
+                (Nothing, _) => putStrLn $ name1 ++ " has no value"
+                (_, Nothing) => putStrLn $ name2 ++ " has no value"
+                (Just expr1, Just expr2) => do
+                  putStrLn $ "LHS: " ++ show expr1
+                  putStrLn $ "RHS: " ++ show expr2
+                  putStrLn ""
+                  case isDefEqTraced env expr1 expr2 of
+                    Left err => putStrLn $ "Error during comparison: " ++ show err
+                    Right (result, node) => do
+                      putStrLn $ "Result: " ++ (if result then "Equal" else "Not Equal")
+                      putStrLn ""
+                      putStrLn "=== DefEq Trace ==="
+                      case mode of
+                        Text => putStrLn (ppDefEqNode 0 node)
+                        JSON => putStrLn (defEqNodeToJSON node)
+                        HTML => putStrLn (defEqToFullHTML node)

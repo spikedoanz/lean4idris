@@ -1847,6 +1847,7 @@ tryProofIrrelevance recurEq env t s = do
 
 ||| Normalize and compare levels for equality
 ||| Uses simplification to bring levels to a canonical form before comparison
+export
 covering
 levelEq : Level -> Level -> Bool
 levelEq l1 l2 =
@@ -1863,6 +1864,7 @@ levelEq l1 l2 =
     levelEqCore _ _ = False
 
 ||| Check syntactic equality of level lists
+export
 covering
 levelListEq : List Level -> List Level -> Bool
 levelListEq [] [] = True
@@ -1993,6 +1995,7 @@ isDefEqBodyWithName : Name -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> 
 isDefEqBodyWithName binderName = isDefEqBodyWithNameAndType binderName (Sort Zero)
 
 ||| Helper for comparing bodies (Expr 1) - fallback for cases without binder name
+export
 covering
 isDefEqBody : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
 isDefEqBody = isDefEqBodyWithName Anonymous

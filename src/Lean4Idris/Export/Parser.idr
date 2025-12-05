@@ -608,8 +608,13 @@ parseAllLines st toks@(TCommand CTOR :: _) = do
 parseAllLines st toks@(TCommand REC :: _) = do
   (st', rest) <- parseRec st toks
   parseAllLines st' (skipNewlines rest)
+parseAllLines st toks@(TCommand QUOT :: _) = do
+  -- #QUOT nameIdx typeIdx numArgs [rules...]
+  -- This enables quotient types - just add QuotDecl to state
+  let decl = QuotDecl
+  parseAllLines ({ decls $= (decl ::) } st) (skipToNewline (drop 1 toks))
 parseAllLines st (TCommand _ :: rest) =
-  -- Skip other declaration lines (QUOT, OPAQ, etc.)
+  -- Skip other declaration lines (OPAQ, ABBREV, etc.)
   parseAllLines st (skipToNewline rest)
 -- Indexed lines (names, levels, exprs, rec rules)
 parseAllLines st toks@(TNat _ :: _) = do

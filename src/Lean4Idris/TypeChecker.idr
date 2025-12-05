@@ -501,6 +501,135 @@ quotLiftName = Str "lift" (Str "Quot" Anonymous)
 quotIndName : Name
 quotIndName = Str "ind" (Str "Quot" Anonymous)
 
+||| Names for quotient type parameters
+alphaName : Name
+alphaName = Str "α" Anonymous
+
+rName : Name
+rName = Str "r" Anonymous
+
+betaName : Name
+betaName = Str "β" Anonymous
+
+fName : Name
+fName = Str "f" Anonymous
+
+hName : Name
+hName = Str "h" Anonymous
+
+qName : Name
+qName = Str "q" Anonymous
+
+uName : Name
+uName = Str "u" Anonymous
+
+vName : Name
+vName = Str "v" Anonymous
+
+||| Get the type of a quotient primitive (if it is one)
+||| Returns (type, levelParams) if the name is a quotient primitive, Nothing otherwise
+|||
+||| Types (following Lean's Quot declaration):
+||| - Quot : {α : Sort u} → (α → α → Prop) → Sort u
+||| - Quot.mk : {α : Sort u} → {r : α → α → Prop} → α → Quot r
+||| - Quot.lift : {α : Sort u} → {r : α → α → Prop} → {β : Sort v} →
+|||              (f : α → β) → (∀ a b : α, r a b → f a = f b) → Quot r → β
+||| - Quot.ind : {α : Sort u} → {r : α → α → Prop} → {β : Quot r → Prop} →
+|||             (∀ a : α, β (Quot.mk a)) → ∀ q : Quot r, β q
+||| Helper to create BVar with any index for quotient type construction
+mkQBVar : Nat -> ClosedExpr
+mkQBVar n = believe_me (the (Expr 1) (BVar (believe_me n)))
+
+||| Helper to create Pi for quotient type construction
+mkQPi : Name -> BinderInfo -> ClosedExpr -> ClosedExpr -> ClosedExpr
+mkQPi name bi ty body = believe_me (the (Expr 0) (Pi name bi (believe_me ty) (believe_me body)))
+
+||| Build a quotient type expression with the standard structure.
+||| All indices use believe_me to bypass the scope checker since these are
+||| programmatically generated types that we know are well-formed.
+getQuotType : Name -> Maybe (ClosedExpr, List Name)
+getQuotType name =
+  if name == quotName then
+    -- Quot : {α : Sort u} → (α → α → Prop) → Sort u
+    let u = Param uName
+        sortU = Sort u
+        prop = Sort Zero
+        -- r : α → α → Prop  (where α is BVar 0 in the inner context)
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        quotTy = mkQPi alphaName Implicit sortU (mkQPi rName Default rTy sortU)
+    in Just (quotTy, [uName])
+  else if name == quotMkName then
+    -- Quot.mk : {α : Sort u} → {r : α → α → Prop} → α → Quot r
+    let u = Param uName
+        sortU = Sort u
+        prop = Sort Zero
+        -- r type: α → α → Prop (α is BVar 0 inside r's context)
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- Inside the final result: α is BVar 2, r is BVar 1
+        -- Quot r = Quot.{u} α r
+        quotR = App (App (Const quotName [u]) (mkQBVar 2)) (mkQBVar 1)
+        -- α is BVar 1 in context of final Pi domain
+        mkTy = mkQPi alphaName Implicit sortU
+                 (mkQPi rName Implicit rTy
+                   (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) quotR))
+    in Just (mkTy, [uName])
+  else if name == quotLiftName then
+    -- Quot.lift : {α : Sort u} → {r : α → α → Prop} → {β : Sort v} →
+    --             (f : α → β) → (∀ a b : α, r a b → f a = f b) → Quot r → β
+    -- This is complex - for now return a simplified type that allows lookups
+    let u = Param uName
+        v = Param vName
+        sortU = Sort u
+        sortV = Sort v
+        prop = Sort Zero
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- Simplified: we build the full type step by step
+        -- At outermost: {α : Sort u} → rest
+        -- Inside rest (depth 1): {r : α → α → Prop} → rest'
+        -- Inside rest' (depth 2): {β : Sort v} → rest''
+        -- Inside rest'' (depth 3): (f : α → β) → rest'''
+        -- etc.
+        -- For simplicity, construct the type directly
+        liftTy = mkQPi alphaName Implicit sortU
+                   (mkQPi rName Implicit rTy
+                     (mkQPi betaName Implicit sortV
+                       (mkQPi fName Default (mkQPi (Str "_" Anonymous) Default (mkQBVar 2) (mkQBVar 1))
+                         (mkQPi hName Default
+                           (mkQPi (Str "a" Anonymous) Default (mkQBVar 4)
+                             (mkQPi (Str "b" Anonymous) Default (mkQBVar 5)
+                               (mkQPi (Str "_" Anonymous) Default
+                                 (App (App (mkQBVar 4) (mkQBVar 1)) (mkQBVar 0))
+                                 (App (App (App (Const (Str "Eq" Anonymous) [v]) (mkQBVar 4))
+                                           (App (mkQBVar 3) (mkQBVar 2)))
+                                      (App (mkQBVar 3) (mkQBVar 1))))))
+                           (mkQPi (Str "_" Anonymous) Default
+                             (App (App (Const quotName [u]) (mkQBVar 5)) (mkQBVar 4))
+                             (mkQBVar 3))))))
+    in Just (liftTy, [uName, vName])
+  else if name == quotIndName then
+    -- Quot.ind : {α : Sort u} → {r : α → α → Prop} → {β : Quot r → Prop} →
+    --            (∀ a : α, β (Quot.mk a)) → ∀ q : Quot r, β q
+    let u = Param uName
+        sortU = Sort u
+        prop = Sort Zero
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- β : Quot r → Prop  (at depth 2: α is BVar 1, r is BVar 0)
+        betaTy = mkQPi (Str "_" Anonymous) Default (App (App (Const quotName [u]) (mkQBVar 1)) (mkQBVar 0)) prop
+        -- h : ∀ a : α. β (Quot.mk a)  (at depth 3: α is BVar 2, r is BVar 1, β is BVar 0)
+        -- Quot.mk a = Quot.mk.{u} α r a
+        hTy = mkQPi (Str "a" Anonymous) Default (mkQBVar 3)
+                (App (mkQBVar 1) (App (App (App (Const quotMkName [u]) (mkQBVar 4)) (mkQBVar 3)) (mkQBVar 0)))
+        -- Final: ∀ q : Quot r. β q (at depth 4: α is BVar 3, r is BVar 2, β is BVar 1, h is BVar 0)
+        indTy = mkQPi alphaName Implicit sortU
+                  (mkQPi rName Implicit rTy
+                    (mkQPi betaName Implicit betaTy
+                      (mkQPi hName Default hTy
+                        (mkQPi qName Default (App (App (Const quotName [u]) (mkQBVar 4)) (mkQBVar 3))
+                          (App (mkQBVar 2) (mkQBVar 0))))))
+    in Just (indTy, [uName])
+  else
+    Nothing
+
 ||| Try quotient reduction.
 |||
 ||| Quot.lift reduces when applied to Quot.mk:
@@ -841,6 +970,13 @@ placeholderName n counter = Str "_local" (Num counter n)
 extractPlaceholderBase : Name -> Maybe Name
 extractPlaceholderBase (Str "_local" (Num _ base)) = Just base
 extractPlaceholderBase _ = Nothing
+
+||| Extract the binder name from a comparison placeholder
+||| Returns Just binderName if this is a comparison placeholder, Nothing otherwise
+||| Comparison placeholders have the form: Str "_isDefEqBody" (Str counter binderName)
+extractComparisonPlaceholderBinder : Name -> Maybe Name
+extractComparisonPlaceholderBinder (Str "_isDefEqBody" (Str _ binderName)) = Just binderName
+extractComparisonPlaceholderBinder _ = Nothing
 
 ||| Build a vector of placeholder constants for all context entries
 ||| Returns the updated environment, updated context with placeholders assigned, and the vector of placeholders.
@@ -1272,19 +1408,31 @@ alphaEq = alphaEqWithEnv [] []
     alphaEqWithEnv : List Name -> List Name -> ClosedExpr -> ClosedExpr -> Bool
     alphaEqWithEnv env1 env2 (Sort l1) (Sort l2) = simplify l1 == simplify l2
     alphaEqWithEnv env1 env2 (Const n1 ls1) (Const n2 ls2) =
-      -- Check if both are placeholder constants at the same level
-      -- First try to extract base names from placeholder format
-      let base1 = extractPlaceholderBase n1
-          base2 = extractPlaceholderBase n2
-          -- Use base name for lookup if available, otherwise use raw name
-          lookupName1 = fromMaybe n1 base1
-          lookupName2 = fromMaybe n2 base2
-          level1 = findLevelNat lookupName1 env1 0
-          level2 = findLevelNat lookupName2 env2 0
-      in case (level1, level2) of
-            (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
-            (Nothing, Nothing) => n1 == n2 && map simplify ls1 == map simplify ls2
-            _ => False
+      -- First, if names are exactly equal, they're the same constant
+      if n1 == n2 && map simplify ls1 == map simplify ls2
+        then True
+        else
+          -- Check if both are placeholder constants at the same level
+          -- Extract base names from placeholder format (both inference and comparison)
+          let base1 = extractPlaceholderBase n1 <|> extractComparisonPlaceholderBinder n1
+              base2 = extractPlaceholderBase n2 <|> extractComparisonPlaceholderBinder n2
+              -- Use base name for lookup if available, otherwise use raw name
+              lookupName1 = fromMaybe n1 base1
+              lookupName2 = fromMaybe n2 base2
+              level1 = findLevelNat lookupName1 env1 0
+              level2 = findLevelNat lookupName2 env2 0
+          in case (level1, level2) of
+                (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
+                (Nothing, Nothing) =>
+                  -- If not in environment, check if both are placeholders for the same binder
+                  case (base1, base2) of
+                    (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
+                    _ => False  -- Already checked n1 == n2 above
+                -- One found, one not: check if both are placeholders for same base
+                -- This handles cases where binder names differ but placeholder base is same
+                _ => case (base1, base2) of
+                       (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
+                       _ => False
       where
         findLevelNat : Name -> List Name -> Nat -> Maybe Nat
         findLevelNat _ [] _ = Nothing
@@ -1326,21 +1474,28 @@ mutual
     case lookupPlaceholder name env of
       Just ty => Right (env, ty)  -- Placeholder constant - return its registered type
       Nothing =>
-        case lookupDecl name env of
-          Nothing => Left (OtherError $ "unknown constant: " ++ show name ++
-                          "\n  Name structure: " ++ showNameStructure name ++
-                          "\n  Registered placeholders: " ++ show (length (Data.SortedMap.toList env.placeholders)))
-          Just decl => case declType decl of
-            Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
-            Just ty =>
-              let params = declLevelParams decl in
-              if length params /= length levels
-                then Left (WrongNumLevels (length params) (length levels) name)
-                -- Use non-safe version: the level names in the replacement are from
-                -- the outer scope (current definition), not the inner scope (instantiated definition).
-                -- So "u := u+1" where the inner u is Fin.casesOn's param and outer u is
-                -- Fin.noConfusionType's param is NOT a cycle.
-                else Right (env, instantiateLevelParams params levels ty)
+        -- Check if it's a quotient primitive (when quotient is enabled)
+        case (if env.quotInit then getQuotType name else Nothing) of
+          Just (ty, params) =>
+            if length params /= length levels
+              then Left (WrongNumLevels (length params) (length levels) name)
+              else Right (env, instantiateLevelParams params levels ty)
+          Nothing =>
+            case lookupDecl name env of
+              Nothing => Left (OtherError $ "unknown constant: " ++ show name ++
+                              "\n  Name structure: " ++ showNameStructure name ++
+                              "\n  Registered placeholders: " ++ show (length (Data.SortedMap.toList env.placeholders)))
+              Just decl => case declType decl of
+                Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
+                Just ty =>
+                  let params = declLevelParams decl in
+                  if length params /= length levels
+                    then Left (WrongNumLevels (length params) (length levels) name)
+                    -- Use non-safe version: the level names in the replacement are from
+                    -- the outer scope (current definition), not the inner scope (instantiated definition).
+                    -- So "u := u+1" where the inner u is Fin.casesOn's param and outer u is
+                    -- Fin.noConfusionType's param is NOT a cycle.
+                    else Right (env, instantiateLevelParams params levels ty)
   where
     showNameStructure : Name -> String
     showNameStructure Anonymous = "Anonymous"
@@ -1434,30 +1589,37 @@ mutual
   -- Sort: same as closed case
   inferTypeOpenE env ctx (Sort l) = Right (env, ctx, Sort (Succ l))
 
-  -- Const: same as closed case (also checks placeholders)
+  -- Const: same as closed case (also checks placeholders and quotient primitives)
   inferTypeOpenE env ctx (Const name levels) =
     case lookupPlaceholder name env of
       Just ty => Right (env, ctx, ty)  -- Placeholder constant
       Nothing =>
-        case lookupDecl name env of
-          Nothing => Left (OtherError $ "unknown constant (inferTypeOpenE): " ++ show name ++
-                          "\n  Name structure: " ++ showNameStructure name ++
-                          "\n  Context depth: " ++ show (length ctx) ++
-                          "\n  Registered placeholders: " ++ show (length (Data.SortedMap.toList env.placeholders)))
-          Just decl => case declType decl of
-            Nothing => Left (UnknownConst name)
-            Just ty =>
-              let params = declLevelParams decl in
-              if length params /= length levels
-                then Left (WrongNumLevels (length params) (length levels) name)
-                -- Use non-safe version (same reasoning as in inferTypeE)
-                else
-                  let ty' = instantiateLevelParams params levels ty
-                      -- Debug: trace Fin.rec type lookup
-                      _ = case name of
-                            Str "rec" (Str "Fin" _) => debugPrint ("Const Fin.rec type=" ++ show ty') ()
-                            _ => ()
-                  in Right (env, ctx, ty')
+        -- Check if it's a quotient primitive (when quotient is enabled)
+        case (if env.quotInit then getQuotType name else Nothing) of
+          Just (ty, params) =>
+            if length params /= length levels
+              then Left (WrongNumLevels (length params) (length levels) name)
+              else Right (env, ctx, instantiateLevelParams params levels ty)
+          Nothing =>
+            case lookupDecl name env of
+              Nothing => Left (OtherError $ "unknown constant (inferTypeOpenE): " ++ show name ++
+                              "\n  Name structure: " ++ showNameStructure name ++
+                              "\n  Context depth: " ++ show (length ctx) ++
+                              "\n  Registered placeholders: " ++ show (length (Data.SortedMap.toList env.placeholders)))
+              Just decl => case declType decl of
+                Nothing => Left (UnknownConst name)
+                Just ty =>
+                  let params = declLevelParams decl in
+                  if length params /= length levels
+                    then Left (WrongNumLevels (length params) (length levels) name)
+                    -- Use non-safe version (same reasoning as in inferTypeE)
+                    else
+                      let ty' = instantiateLevelParams params levels ty
+                          -- Debug: trace Fin.rec type lookup
+                          _ = case name of
+                                Str "rec" (Str "Fin" _) => debugPrint ("Const Fin.rec type=" ++ show ty') ()
+                                _ => ()
+                      in Right (env, ctx, ty')
   where
     showNameStructure : Name -> String
     showNameStructure Anonymous = "Anonymous"
@@ -1707,10 +1869,15 @@ levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2
 levelListEq _ _ = False
 
 ||| Check if a name is an inference placeholder for a specific binder name
-||| Inference placeholders have format: Str "_local" (Num counter binderName)
-||| We match by binder name regardless of counter
+||| Check if a placeholder name matches a target binder name.
+||| Matches both inference placeholders and comparison placeholders:
+||| - Inference: Str "_local" (Num counter binderName)
+||| - Comparison: Str "_isDefEqBody" (Str counter binderName)
+||| We match by binder name regardless of counter.
 isPlaceholderForBinder : Name -> Name -> Bool
 isPlaceholderForBinder (Str "_local" (Num _ binderName)) targetName =
+  binderName == targetName
+isPlaceholderForBinder (Str "_isDefEqBody" (Str _ binderName)) targetName =
   binderName == targetName
 isPlaceholderForBinder _ _ = False
 
@@ -1723,6 +1890,7 @@ extractInferencePlaceholderBinder _ = Nothing
 ||| Check if a name is a comparison placeholder (created by isDefEqBodyWithNameAndType)
 isComparisonPlaceholder : Name -> Bool
 isComparisonPlaceholder (Str "_x" (Str "_isDefEqBody" _)) = True
+isComparisonPlaceholder (Str "_isDefEqBody" _) = True  -- Also match our actual format
 isComparisonPlaceholder _ = False
 
 ||| Check if expression contains any placeholders matching a binder name
@@ -1914,32 +2082,39 @@ isDefEq env e1 e2 = do
                ([], []) => Right (areEquivalentPlaceholders n1 n2)
                _ => Right False
       where
-        -- Check if two constant names are equivalent via binder alias
-        -- This handles the case where n1 is `α.0._local` and n2 is `_x._isDefEqBody`
-        -- (or vice versa) and we have an alias from binder `α` to `_x._isDefEqBody`
+        -- Check if two constant names are equivalent via binder alias or same binder
+        -- This handles:
+        -- 1. n1 is `α.0._local` and n2 is `α.8._isDefEqBody` (via alias lookup)
+        -- 2. n1 is `α.8._isDefEqBody` and n2 is `α.10._isDefEqBody` (same binder, different counters)
         areEquivalentPlaceholders : Name -> Name -> Bool
         areEquivalentPlaceholders c1 c2 =
-          -- Case 1: c1 is inference placeholder, c2 is comparison placeholder
-          case extractInferencePlaceholderBinder c1 of
-            Just binderName =>
-              case lookupBinderAlias binderName env of
-                Just aliasTarget =>
-                  let result = aliasTarget == c2
-                  in debugPrint ("alias lookup: " ++ show binderName ++ " -> " ++ show aliasTarget ++ " vs " ++ show c2 ++ " = " ++ show result) result
-                Nothing =>
-                  debugPrint ("no alias for " ++ show binderName) False
-            Nothing =>
-              -- Case 2: c2 is inference placeholder, c1 is comparison placeholder
-              case extractInferencePlaceholderBinder c2 of
+          -- Case 1: Both are comparison placeholders with the same binder name
+          case (extractComparisonPlaceholderBinder c1, extractComparisonPlaceholderBinder c2) of
+            (Just binder1, Just binder2) =>
+              let result = binder1 == binder2
+              in debugPrint ("comparison placeholder match: " ++ show binder1 ++ " vs " ++ show binder2 ++ " = " ++ show result) result
+            _ =>
+              -- Case 2: c1 is inference placeholder, c2 is comparison placeholder
+              case extractInferencePlaceholderBinder c1 of
                 Just binderName =>
                   case lookupBinderAlias binderName env of
                     Just aliasTarget =>
-                      let result = aliasTarget == c1
-                      in debugPrint ("alias lookup (reverse): " ++ show binderName ++ " -> " ++ show aliasTarget ++ " vs " ++ show c1 ++ " = " ++ show result) result
+                      let result = aliasTarget == c2
+                      in debugPrint ("alias lookup: " ++ show binderName ++ " -> " ++ show aliasTarget ++ " vs " ++ show c2 ++ " = " ++ show result) result
                     Nothing =>
-                      debugPrint ("no alias (reverse) for " ++ show binderName) False
+                      debugPrint ("no alias for " ++ show binderName) False
                 Nothing =>
-                  debugPrint ("neither is inference placeholder: " ++ show c1 ++ " vs " ++ show c2) False
+                  -- Case 3: c2 is inference placeholder, c1 is comparison placeholder
+                  case extractInferencePlaceholderBinder c2 of
+                    Just binderName =>
+                      case lookupBinderAlias binderName env of
+                        Just aliasTarget =>
+                          let result = aliasTarget == c1
+                          in debugPrint ("alias lookup (reverse): " ++ show binderName ++ " -> " ++ show aliasTarget ++ " vs " ++ show c1 ++ " = " ++ show result) result
+                        Nothing =>
+                          debugPrint ("no alias (reverse) for " ++ show binderName) False
+                    Nothing =>
+                      debugPrint ("neither is inference placeholder: " ++ show c1 ++ " vs " ++ show c2) False
 
     -- App: check function and arg
     isDefEqWhnf (App f1 a1) (App f2 a2) = do

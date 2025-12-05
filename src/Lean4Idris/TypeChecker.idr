@@ -944,15 +944,24 @@ ensurePi env e = do
 ------------------------------------------------------------------------
 
 ||| Create a placeholder constant name for a local variable
-||| Uses a unique counter to avoid name collisions
-placeholderName : Name -> Nat -> Name
-placeholderName n counter = Str "_local" (Num counter n)
+||| Uses a unique counter and depth to enable cross-matching with comparison placeholders.
+||| Format: Str "_local" (Num counter (Num depth binderName))
+placeholderName : Name -> Nat -> Nat -> Name
+placeholderName n counter depth = Str "_local" (Num counter (Num depth n))
 
 ||| Extract the base binder name from a placeholder constant name
 ||| Returns Just the base name if it's a placeholder, Nothing otherwise
 extractPlaceholderBase : Name -> Maybe Name
-extractPlaceholderBase (Str "_local" (Num _ base)) = Just base
+extractPlaceholderBase (Str "_local" (Num _ (Num _ base))) = Just base
+extractPlaceholderBase (Str "_local" (Num _ base)) = Just base  -- Old format fallback
 extractPlaceholderBase _ = Nothing
+
+||| Extract the depth from an inference placeholder
+||| Inference placeholders use format: Str "_local" (Num counter (Num depth binderName))
+||| Returns Just depth if this is a depth-aware inference placeholder, Nothing otherwise.
+extractInferencePlaceholderDepth : Name -> Maybe Nat
+extractInferencePlaceholderDepth (Str "_local" (Num _ (Num depth _))) = Just depth
+extractInferencePlaceholderDepth _ = Nothing
 
 ||| Extract the binder name from a comparison placeholder
 ||| Returns Just binderName if this is a comparison placeholder, Nothing otherwise
@@ -973,26 +982,31 @@ isComparisonPlaceholderName _ = False
 ||| Returns the updated environment, updated context with placeholders assigned, and the vector of placeholders.
 ||| The placeholders are in order matching the context (index 0 = first entry = innermost).
 ||| Uses a global counter from the environment to ensure unique placeholder names.
+||| Encodes de Bruijn depth in placeholder names for cross-matching with comparison placeholders.
 ||| IMPORTANTLY: reuses existing placeholders if already assigned to an entry.
 covering
 buildPlaceholders : TCEnv -> LocalCtx n -> (TCEnv, LocalCtx n, Vect n ClosedExpr)
-buildPlaceholders env [] = (env, [], [])
-buildPlaceholders env {n = S k} (entry :: ctx) =
-  case entry.placeholder of
-    Just ph =>
-      -- Entry already has a placeholder, reuse it
-      let (env', ctx', rest) = buildPlaceholders env ctx
-      in (env', entry :: ctx', ph :: rest)
-    Nothing =>
-      -- Create a new placeholder for this entry
-      let counter = env.nextPlaceholder
-          phName = placeholderName entry.name counter
-          env' = { nextPlaceholder := S counter } env
-          env'' = debugPrint ("buildPlaceholders: creating " ++ show phName ++ " : " ++ show entry.type) $ addPlaceholder phName entry.type env'
-          ph : ClosedExpr = Const phName []
-          entry' = { placeholder := Just ph } entry
-          (env''', ctx', rest) = buildPlaceholders env'' ctx
-      in (env''', entry' :: ctx', ph :: rest)
+buildPlaceholders env ctx = buildPlaceholdersWithDepth env ctx 0
+  where
+    -- Helper that tracks de Bruijn depth (entry at index i has depth i)
+    buildPlaceholdersWithDepth : TCEnv -> LocalCtx m -> Nat -> (TCEnv, LocalCtx m, Vect m ClosedExpr)
+    buildPlaceholdersWithDepth env [] _ = (env, [], [])
+    buildPlaceholdersWithDepth env (entry :: rest) depth =
+      case entry.placeholder of
+        Just ph =>
+          -- Entry already has a placeholder, reuse it
+          let (env', rest', phs) = buildPlaceholdersWithDepth env rest (S depth)
+          in (env', entry :: rest', ph :: phs)
+        Nothing =>
+          -- Create a new placeholder for this entry with depth information
+          let counter = env.nextPlaceholder
+              phName = placeholderName entry.name counter depth
+              env' = { nextPlaceholder := S counter } env
+              env'' = debugPrint ("buildPlaceholders: creating " ++ show phName ++ " (depth=" ++ show depth ++ ") : " ++ show entry.type) $ addPlaceholder phName entry.type env'
+              ph : ClosedExpr = Const phName []
+              entry' = { placeholder := Just ph } entry
+              (env''', rest', phs) = buildPlaceholdersWithDepth env'' rest (S depth)
+          in (env''', entry' :: rest', ph :: phs)
 
 ||| Close an expression by substituting all bound variables with placeholders.
 ||| This is used to convert Expr n to ClosedExpr for type checking purposes.
@@ -1402,23 +1416,31 @@ alphaEq = alphaEqWithEnv [] []
       -- First, if names are exactly equal, they're the same constant
       if n1 == n2 && map simplify ls1 == map simplify ls2
         then True
-        else
-          -- Check if both are placeholder constants
-          -- For comparison placeholders (de Bruijn): same depth = equivalent
-          -- For inference placeholders: same base name = equivalent
-          case (extractComparisonPlaceholderDepth n1, extractComparisonPlaceholderDepth n2) of
-            (Just d1, Just d2) => d1 == d2 && map simplify ls1 == map simplify ls2
-            _ => -- Fall back to inference placeholder comparison
-                 let base1 = extractPlaceholderBase n1
-                     base2 = extractPlaceholderBase n2
-                 in case (base1, base2) of
-                      (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
-                      -- Also check if both are in the binder environment at same position
-                      _ => let level1 = findLevelNat n1 env1 0
-                               level2 = findLevelNat n2 env2 0
-                           in case (level1, level2) of
-                                (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
-                                _ => False
+        else if map simplify ls1 /= map simplify ls2
+          then False
+          else
+            -- Check if both are placeholder constants by extracting depths
+            -- Support cross-matching: inference placeholder at depth D vs comparison placeholder at depth D
+            let compDepth1 = extractComparisonPlaceholderDepth n1
+                compDepth2 = extractComparisonPlaceholderDepth n2
+                infDepth1 = extractInferencePlaceholderDepth n1
+                infDepth2 = extractInferencePlaceholderDepth n2
+                -- Get depth from either format
+                depth1 = compDepth1 <|> infDepth1
+                depth2 = compDepth2 <|> infDepth2
+            in case (depth1, depth2) of
+                 (Just d1, Just d2) => d1 == d2  -- Cross-matching by depth
+                 _ => -- Fall back to inference placeholder base name comparison (old format)
+                      let base1 = extractPlaceholderBase n1
+                          base2 = extractPlaceholderBase n2
+                      in case (base1, base2) of
+                           (Just b1, Just b2) => b1 == b2
+                           -- Also check if both are in the binder environment at same position
+                           _ => let level1 = findLevelNat n1 env1 0
+                                    level2 = findLevelNat n2 env2 0
+                                in case (level1, level2) of
+                                     (Just l1, Just l2) => l1 == l2
+                                     _ => False
       where
         findLevelNat : Name -> List Name -> Nat -> Maybe Nat
         findLevelNat _ [] _ = Nothing
@@ -1661,8 +1683,9 @@ mutual
     let (env2, ctx2, domClosed) = closeWithPlaceholders env1 ctx1 domExpr
     -- Create a placeholder for the new bound variable BEFORE extending context
     -- This way we know what placeholder to replace with BVar 0 later
+    -- The new variable is at depth 0 (innermost, de Bruijn index 0)
     let counter = env2.nextPlaceholder
-        phName = placeholderName name counter
+        phName = placeholderName name counter 0
         env3 = { nextPlaceholder := S counter } env2
         env4 = addPlaceholder phName domClosed env3
         ph : ClosedExpr = Const phName []
@@ -2103,22 +2126,27 @@ isDefEq env e1 e2 = do
                _ => Right False
       where
         -- Check if two constant names are equivalent placeholders.
-        -- With de Bruijn depth-based naming, comparison placeholders are equivalent
-        -- if they have the same depth (different counters are fine - they represent
-        -- the same binder at the same nesting level).
+        -- Placeholders are equivalent if they represent the same binder, which means
+        -- they have the same de Bruijn depth. We support:
+        -- 1. Two comparison placeholders with same depth
+        -- 2. Two inference placeholders with same depth (new format) or same base name (old format)
+        -- 3. Cross-matching: inference at depth D vs comparison at depth D
         areEquivalentPlaceholders : Name -> Name -> Bool
         areEquivalentPlaceholders c1 c2 =
-          case (extractComparisonPlaceholderDepth c1, extractComparisonPlaceholderDepth c2) of
-            (Just depth1, Just depth2) =>
-              let result = depth1 == depth2
-              in debugPrint ("comparison placeholder depth match: " ++ show depth1 ++ " vs " ++ show depth2 ++ " = " ++ show result) result
-            -- Inference placeholders (from closeWithPlaceholders) use binder names.
-            -- Two inference placeholders with the same base name are equivalent.
-            _ => case (extractPlaceholderBase c1, extractPlaceholderBase c2) of
-                   (Just base1, Just base2) =>
-                     let result = base1 == base2
-                     in debugPrint ("inference placeholder match: " ++ show base1 ++ " vs " ++ show base2 ++ " = " ++ show result) result
-                   _ => debugPrint ("not equivalent placeholders: " ++ show c1 ++ " vs " ++ show c2) False
+          -- Try to extract depths from both placeholders
+          let compDepth1 = extractComparisonPlaceholderDepth c1
+              compDepth2 = extractComparisonPlaceholderDepth c2
+              infDepth1 = extractInferencePlaceholderDepth c1
+              infDepth2 = extractInferencePlaceholderDepth c2
+              -- Get depth from either format
+              depth1 = compDepth1 <|> infDepth1
+              depth2 = compDepth2 <|> infDepth2
+          in case (depth1, depth2) of
+               (Just d1, Just d2) => d1 == d2  -- Cross-matching by depth
+               -- Fallback for old-format inference placeholders without depth
+               _ => case (extractPlaceholderBase c1, extractPlaceholderBase c2) of
+                      (Just base1, Just base2) => base1 == base2
+                      _ => False
 
     -- App: check function and arg
     isDefEqWhnf (App f1 a1) (App f2 a2) = do

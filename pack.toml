@@ -13,3 +13,8 @@ ipkg = "test.ipkg"
 type = "local"
 path = "test/mathlib"
 ipkg = "mathlib-check.ipkg"
+
+[custom.all.lean4idris-vis]
+type = "local"
+path = "."
+ipkg = "visualizer.ipkg"

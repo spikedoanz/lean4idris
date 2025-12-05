@@ -322,6 +322,7 @@ getAppConst e = go e []
     go _ _ = Nothing
 
 ||| Try to unfold the head of an expression (delta reduction)
+export
 covering
 unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 unfoldHead env e =

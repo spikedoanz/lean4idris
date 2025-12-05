@@ -9,713 +9,484 @@ import Lean4Idris.Subst
 import Lean4Idris.TypeChecker
 import Lean4Idris.Decl
 import Data.Fin
+import Data.List
+import System
 import System.File
 
-||| Test lexer on simple input
-testLexer : IO ()
-testLexer = do
-  putStrLn "=== Testing Lexer ==="
+--------------------------------------------------------------------------------
+-- Test Framework
+--------------------------------------------------------------------------------
+
+||| Result of a single test assertion
+record TestResult where
+  constructor MkTestResult
+  name : String
+  passed : Bool
+  message : String  -- shown on failure or in verbose mode
+
+||| Command-line options
+record Options where
+  constructor MkOptions
+  verbose : Bool
+
+||| Assert a boolean condition
+assert : String -> Bool -> TestResult
+assert name True = MkTestResult name True ""
+assert name False = MkTestResult name False "Assertion failed"
+
+||| Assert equality
+assertEq : (Show a, Eq a) => String -> (expected : a) -> (actual : a) -> TestResult
+assertEq name expected actual =
+  if expected == actual
+    then MkTestResult name True ""
+    else MkTestResult name False $ "Expected: " ++ show expected ++ ", Got: " ++ show actual
+
+||| Assert an Either is Right and satisfies a predicate
+assertRight : Show e => String -> Either e a -> (a -> Bool) -> TestResult
+assertRight name (Left err) _ = MkTestResult name False $ "Got Left: " ++ show err
+assertRight name (Right val) pred =
+  if pred val
+    then MkTestResult name True ""
+    else MkTestResult name False "Predicate failed on Right value"
+
+||| Assert an Either is Right and equals expected value
+assertRightEq : (Show e, Show a, Eq a) => String -> Either e a -> a -> TestResult
+assertRightEq name (Left err) _ = MkTestResult name False $ "Got Left: " ++ show err
+assertRightEq name (Right actual) expected =
+  if actual == expected
+    then MkTestResult name True ""
+    else MkTestResult name False $ "Expected: " ++ show expected ++ ", Got: " ++ show actual
+
+||| Assert an Either is Left (expecting failure)
+assertLeft : String -> Either e a -> TestResult
+assertLeft name (Left _) = MkTestResult name True ""
+assertLeft name (Right _) = MkTestResult name False "Expected Left, got Right"
+
+||| Parse command line arguments
+parseArgs : List String -> Options
+parseArgs args = MkOptions (elem "-v" args || elem "--verbose" args)
+
+||| Print a single test result
+printResult : Options -> TestResult -> IO ()
+printResult opts res =
+  if opts.verbose
+    then putStrLn $ (if res.passed then "." else "X") ++ " " ++ res.name
+    else putStr $ if res.passed then "." else "X"
+
+||| Print failures if any
+printFailures : List TestResult -> IO ()
+printFailures [] = pure ()
+printFailures fs = do
+  putStrLn "\nFailures:"
+  for_ fs (\res => putStrLn $ "  " ++ res.name ++ ": " ++ res.message)
+
+||| Run tests and print results
+runTests : Options -> List (String, List TestResult) -> IO ()
+runTests opts groups =
+  let allResults = concatMap snd groups in
+  let numTotal = length allResults in
+  let failures = filter (not . passed) allResults in
+  let numFailed = length failures in
+  do for_ allResults (printResult opts)
+     if opts.verbose then pure () else putStrLn ""
+     putStrLn $ "\n" ++ show (minus numTotal numFailed) ++ "/" ++ show numTotal ++ " tests passed"
+     printFailures failures
+     if numFailed > 0 then exitWith (ExitFailure 1) else pure ()
+
+--------------------------------------------------------------------------------
+-- Test: Lexer
+--------------------------------------------------------------------------------
+
+testLexer : List TestResult
+testLexer =
   let input = "1 #NS 0 Nat\n2 #NS 0 zero\n"
-  case lexToTokens input of
-    Left err => putStrLn $ "Lexer error: " ++ err
-    Right toks => do
-      putStrLn $ "Tokens: " ++ show (length toks) ++ " tokens"
-      for_ toks $ \tok => putStrLn $ "  " ++ show tok
+  in case lexToTokens input of
+       Left err => [MkTestResult "lexer: basic input" False $ "Lexer error: " ++ err]
+       Right toks => [assert "lexer: produces tokens" (length toks > 0)]
 
-||| Test parser on simple input
-testParser : IO ()
-testParser = do
-  putStrLn "\n=== Testing Parser ==="
-  -- Sample export with version, names, levels, and expressions
+--------------------------------------------------------------------------------
+-- Test: Parser
+--------------------------------------------------------------------------------
+
+testParser : List TestResult
+testParser =
   let input = "0.0.0\n1 #NS 0 Nat\n2 #NS 0 zero\n3 #NS 1 succ\n1 #US 0\n1 #ES 1\n2 #EC 1\n3 #EC 2\n"
-  case parseExport input of
-    Left err => putStrLn $ "Parser error: " ++ err
-    Right st => do
-      putStrLn "Parsed successfully!"
-      putStrLn "\nNames:"
-      for_ (getNames st) $ \(idx, name) =>
-        putStrLn $ "  " ++ show idx ++ " => " ++ show name
-      putStrLn "\nLevels:"
-      for_ (getLevels st) $ \(idx, lvl) =>
-        putStrLn $ "  " ++ show idx ++ " => " ++ ppLevel lvl
-      putStrLn "\nExpressions:"
-      for_ (getExprs st) $ \(idx, expr) =>
-        putStrLn $ "  " ++ show idx ++ " => " ++ ppClosedExpr expr
+  in case parseExport input of
+       Left err => [MkTestResult "parser: basic input" False $ "Parse error: " ++ err]
+       Right st =>
+         [ assert "parser: parses names" (length (getNames st) > 0)
+         , assert "parser: parses levels" (length (getLevels st) > 0)
+         , assert "parser: parses exprs" (length (getExprs st) > 0)
+         ]
 
-||| Test expression construction
-testExpr : IO ()
-testExpr = do
-  putStrLn "\n=== Testing Expression Construction ==="
-  -- Build: Sort 1 (Type 1)
+--------------------------------------------------------------------------------
+-- Test: Expression Construction
+--------------------------------------------------------------------------------
+
+testExpr : List TestResult
+testExpr =
   let ty : ClosedExpr = Sort (Succ Zero)
-  putStrLn $ "Sort 1: " ++ ppClosedExpr ty
+      nat : ClosedExpr = Const (Str "Nat" Anonymous) []
+      succName = Str "succ" (Str "Nat" Anonymous)
+      zeroName = Str "zero" (Str "Nat" Anonymous)
+      succZero : ClosedExpr = App (Const succName []) (Const zeroName [])
+  in [ assert "expr: Sort 1 pretty prints" (ppClosedExpr ty == "Sort 1")
+     , assert "expr: Nat pretty prints" (ppClosedExpr nat == "Nat")
+     , assert "expr: App pretty prints" (length (ppClosedExpr succZero) > 0)
+     ]
 
-  -- Build: Const Nat []
-  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
-  putStrLn $ "Nat: " ++ ppClosedExpr nat
+--------------------------------------------------------------------------------
+-- Test: WHNF Reduction
+--------------------------------------------------------------------------------
 
-  -- Build: App (Const succ) (Const zero)
-  let succName = Str "succ" (Str "Nat" Anonymous)
-  let zeroName = Str "zero" (Str "Nat" Anonymous)
-  let succZero : ClosedExpr = App (Const succName []) (Const zeroName [])
-  putStrLn $ "Nat.succ Nat.zero: " ++ ppClosedExpr succZero
-
-||| Test WHNF reduction (beta and let)
-testWhnf : IO ()
-testWhnf = do
-  putStrLn "\n=== Testing WHNF ==="
+testWhnf : List TestResult
+testWhnf =
   let env = emptyEnv
+      sort1 : ClosedExpr = Sort (Succ Zero)
+      nat : ClosedExpr = Const (Str "Nat" Anonymous) []
+      zeroName = Str "zero" (Str "Nat" Anonymous)
+      zero : ClosedExpr = Const zeroName []
+      idBody : Expr 1 = BVar FZ
+      idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+      app : ClosedExpr = App idLam zero
+      letExpr : ClosedExpr = Let (Str "x" Anonymous) nat zero (BVar FZ)
+  in [ assertRightEq "whnf: Sort is WHNF" (whnf env sort1) sort1
+     , assertRightEq "whnf: beta reduction (λx.x) zero => zero" (whnf env app) zero
+     , assertRightEq "whnf: let substitution" (whnf env letExpr) zero
+     ]
 
-  -- Test 1: Sort is already in WHNF
-  let sort1 : ClosedExpr = Sort (Succ Zero)
-  putStrLn $ "Sort 1 reduces to: " ++ show (whnf env sort1)
+--------------------------------------------------------------------------------
+-- Test: Type Inference
+--------------------------------------------------------------------------------
 
-  -- Test 2: Beta reduction - (λx:T. x) v → v
-  -- Build: (\x : Nat. x) Nat.zero
-  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
-  let zeroName = Str "zero" (Str "Nat" Anonymous)
-  let zero : ClosedExpr = Const zeroName []
-  -- Identity lambda: λ(x : Nat). x
-  -- Body is BVar FZ which refers to x (index 0)
-  let idBody : Expr 1 = BVar FZ
-  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
-  let app : ClosedExpr = App idLam zero
-  putStrLn $ "Before: " ++ ppClosedExpr app
-  case whnf env app of
-    Left err => putStrLn $ "Error: " ++ show err
-    Right result => putStrLn $ "After:  " ++ ppClosedExpr result
-
-  -- Test 3: Let substitution
-  -- let x = zero in x → zero
-  let letExpr : ClosedExpr = Let (Str "x" Anonymous) nat zero (BVar FZ)
-  putStrLn $ "\nBefore: let x = zero in x"
-  case whnf env letExpr of
-    Left err => putStrLn $ "Error: " ++ show err
-    Right result => putStrLn $ "After:  " ++ ppClosedExpr result
-
-||| Test type inference
-testInferType : IO ()
-testInferType = do
-  putStrLn "\n=== Testing Type Inference ==="
+testInferType : List TestResult
+testInferType =
   let env = emptyEnv
+      sort0 : ClosedExpr = Sort Zero
+      sort1 : ClosedExpr = Sort (Succ Zero)
+      sort2 : ClosedExpr = Sort (Succ (Succ Zero))
+      natLit : ClosedExpr = NatLit 42
+      natConst : ClosedExpr = Const (Str "Nat" Anonymous) []
+  in [ assertRightEq "infer: Sort 0 : Sort 1" (inferType env sort0) sort1
+     , assertRightEq "infer: Sort 1 : Sort 2" (inferType env sort1) sort2
+     , assertRightEq "infer: 42 : Nat" (inferType env natLit) natConst
+     ]
 
-  -- Test 1: Type of Sort 0 is Sort 1
-  let sort0 : ClosedExpr = Sort Zero
-  putStrLn $ "Type of Sort 0: " ++ show (inferType env sort0)
+--------------------------------------------------------------------------------
+-- Test: Definitional Equality
+--------------------------------------------------------------------------------
 
-  -- Test 2: Type of Sort u is Sort (u+1)
-  let sort1 : ClosedExpr = Sort (Succ Zero)
-  putStrLn $ "Type of Sort 1: " ++ show (inferType env sort1)
-
-  -- Test 3: Type of a nat literal is Nat
-  let natLit : ClosedExpr = NatLit 42
-  putStrLn $ "Type of 42: " ++ show (inferType env natLit)
-
-||| Test definitional equality
-testIsDefEq : IO ()
-testIsDefEq = do
-  putStrLn "\n=== Testing Definitional Equality ==="
-  let env = emptyEnv
-
-  -- Test 1: Syntactically equal expressions
-  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
-  putStrLn $ "Nat == Nat: " ++ show (isDefEq env nat nat)
-
-  -- Test 2: Same Sort
-  let sort1 : ClosedExpr = Sort (Succ Zero)
-  let sort1' : ClosedExpr = Sort (Succ Zero)
-  putStrLn $ "Sort 1 == Sort 1: " ++ show (isDefEq env sort1 sort1')
-
-  -- Test 3: Different Sorts
-  let sort0 : ClosedExpr = Sort Zero
-  putStrLn $ "Sort 0 == Sort 1: " ++ show (isDefEq env sort0 sort1)
-
-  -- Test 4: Beta-equivalent expressions
-  -- (λx. x) y == y
-  let y : ClosedExpr = Const (Str "y" Anonymous) []
-  let idBody : Expr 1 = BVar FZ
-  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
-  let appIdY : ClosedExpr = App idLam y
-  putStrLn $ "(λx. x) y == y: " ++ show (isDefEq env appIdY y)
-
-||| Test delta reduction (constant unfolding)
-testDelta : IO ()
-testDelta = do
-  putStrLn "\n=== Testing Delta Reduction ==="
-
-  -- Create an environment with a definition:
-  -- def myId : Nat -> Nat := λx. x
-  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
-  let natInBody : Expr 1 = Const (Str "Nat" Anonymous) []  -- Nat lifted to scope depth 1
-  let idBody : Expr 1 = BVar FZ  -- λx. x (body returns the bound var)
-  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
-  let idType : ClosedExpr = Pi (Str "x" Anonymous) Default nat natInBody  -- Nat -> Nat
-
-  let myIdName = Str "myId" Anonymous
-  let myIdDecl = DefDecl myIdName idType idLam Abbrev Safe []
-
-  let env = addDecl myIdDecl emptyEnv
-
-  -- Test 1: myId should unfold to λx. x
-  let myIdRef : ClosedExpr = Const myIdName []
-  putStrLn $ "myId: " ++ ppClosedExpr myIdRef
-  case whnf env myIdRef of
-    Left err => putStrLn $ "Error: " ++ show err
-    Right result => putStrLn $ "whnf(myId): " ++ ppClosedExpr result
-
-  -- Test 2: myId zero should reduce to zero
-  let zeroName = Str "zero" (Str "Nat" Anonymous)
-  let zero : ClosedExpr = Const zeroName []
-  let myIdZero : ClosedExpr = App myIdRef zero
-  putStrLn $ "\nmyId zero: " ++ ppClosedExpr myIdZero
-  case whnf env myIdZero of
-    Left err => putStrLn $ "Error: " ++ show err
-    Right result => putStrLn $ "whnf(myId zero): " ++ ppClosedExpr result
-
-  -- Test 3: myId zero == zero via delta + beta
-  putStrLn $ "\nmyId zero == zero: " ++ show (isDefEq env myIdZero zero)
-
-  -- Test 4: Opaque definitions don't unfold
-  let opaqueIdDecl = DefDecl (Str "opaqueId" Anonymous) idType idLam Opaq Safe []
-  let envWithOpaque = addDecl opaqueIdDecl env
-  let opaqueIdRef : ClosedExpr = Const (Str "opaqueId" Anonymous) []
-  putStrLn $ "\nopaqueId (opaque): " ++ ppClosedExpr opaqueIdRef
-  case whnf envWithOpaque opaqueIdRef of
-    Left err => putStrLn $ "Error: " ++ show err
-    Right result => putStrLn $ "whnf(opaqueId): " ++ ppClosedExpr result ++ " (unchanged)"
-
-||| Test eta expansion
-testEta : IO ()
-testEta = do
-  putStrLn "\n=== Testing Eta Expansion ==="
-
-  -- We need an environment with myId defined so we can get its type
-  let nat : ClosedExpr = Const (Str "Nat" Anonymous) []
-  let natInBody : Expr 1 = Const (Str "Nat" Anonymous) []
-  let idBody : Expr 1 = BVar FZ
-  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
-  let idType : ClosedExpr = Pi (Str "x" Anonymous) Default nat natInBody
-
-  let myIdName = Str "myId" Anonymous
-  let myIdDecl = DefDecl myIdName idType idLam Abbrev Safe []
-  let env = addDecl myIdDecl emptyEnv
-
-  -- Test 1: λx. myId x == myId  (eta equivalence)
-  -- myId has type Nat -> Nat, and λx. myId x should be eta-equivalent to myId
-  let myIdRef : ClosedExpr = Const myIdName []
-  -- Build: λx. myId x
-  let etaExpanded : ClosedExpr = Lam (Str "x" Anonymous) Default nat (App (weaken1 myIdRef) (BVar FZ))
-
-  putStrLn $ "λx. myId x: " ++ ppClosedExpr etaExpanded
-  putStrLn $ "myId:       " ++ ppClosedExpr myIdRef
-  putStrLn $ "λx. myId x == myId: " ++ show (isDefEq env etaExpanded myIdRef)
-
-  -- Test 2: The other direction should also work
-  putStrLn $ "myId == λx. myId x: " ++ show (isDefEq env myIdRef etaExpanded)
-
-  -- Test 3: λx. f x == f for an axiom f : Nat -> Nat
-  let fName = Str "f" Anonymous
-  let fDecl = AxiomDecl fName idType []  -- f : Nat -> Nat (axiom, no value)
-  let envWithF = addDecl fDecl emptyEnv
-
-  let fRef : ClosedExpr = Const fName []
-  let fEtaExpanded : ClosedExpr = Lam (Str "x" Anonymous) Default nat (App (weaken1 fRef) (BVar FZ))
-
-  putStrLn $ "\nλx. f x == f (axiom): " ++ show (isDefEq envWithF fEtaExpanded fRef)
-
-||| Test iota reduction (recursor reduction)
-testIota : IO ()
-testIota = do
-  putStrLn "\n=== Testing Iota Reduction ==="
-
-  -- Set up a simple inductive type: Nat
-  -- inductive Nat : Type where
-  --   | zero : Nat
-  --   | succ : Nat → Nat
-
+testIsDefEq : List TestResult
+testIsDefEq =
   let natName = Str "Nat" Anonymous
-  let zeroName = Str "zero" (Str "Nat" Anonymous)
-  let succName = Str "succ" (Str "Nat" Anonymous)
-  let recName = Str "rec" (Str "Nat" Anonymous)
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      yName = Str "y" Anonymous
+      y : ClosedExpr = Const yName []
+      yDecl = AxiomDecl yName nat []
+      env = addDecl yDecl (addDecl natDecl emptyEnv)
+      sort1 : ClosedExpr = Sort (Succ Zero)
+      sort1' : ClosedExpr = Sort (Succ Zero)
+      sort0 : ClosedExpr = Sort Zero
+      idBody : Expr 1 = BVar FZ
+      idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+      appIdY : ClosedExpr = App idLam y
+  in [ assertRightEq "defEq: Nat == Nat" (isDefEq env nat nat) True
+     , assertRightEq "defEq: Sort 1 == Sort 1" (isDefEq env sort1 sort1') True
+     , assertRightEq "defEq: Sort 0 != Sort 1" (isDefEq env sort0 sort1) False
+     , assertRightEq "defEq: (λx.x) y == y" (isDefEq env appIdY y) True
+     ]
 
-  -- Nat : Type 0
-  let natType : ClosedExpr = Sort (Succ Zero)
-  let natConst : ClosedExpr = Const natName []
+--------------------------------------------------------------------------------
+-- Test: Delta Reduction
+--------------------------------------------------------------------------------
 
-  -- zero : Nat
-  let zeroType : ClosedExpr = natConst
+testDelta : List TestResult
+testDelta =
+  let natName = Str "Nat" Anonymous
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      natInBody : Expr 1 = Const natName []
+      zeroName = Str "zero" (Str "Nat" Anonymous)
+      zero : ClosedExpr = Const zeroName []
+      zeroDecl = AxiomDecl zeroName nat []
+      idBody : Expr 1 = BVar FZ
+      idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+      idType : ClosedExpr = Pi (Str "x" Anonymous) Default nat natInBody
+      myIdName = Str "myId" Anonymous
+      myIdDecl = DefDecl myIdName idType idLam Abbrev Safe []
+      env = addDecl myIdDecl (addDecl zeroDecl (addDecl natDecl emptyEnv))
+      myIdRef : ClosedExpr = Const myIdName []
+      myIdZero : ClosedExpr = App myIdRef zero
+      opaqueIdDecl = DefDecl (Str "opaqueId" Anonymous) idType idLam Opaq Safe []
+      envWithOpaque = addDecl opaqueIdDecl env
+      opaqueIdRef : ClosedExpr = Const (Str "opaqueId" Anonymous) []
+  in [ assertRightEq "delta: myId unfolds to λx.x" (whnf env myIdRef) idLam
+     , assertRightEq "delta: myId zero => zero" (whnf env myIdZero) zero
+     , assertRightEq "delta: myId zero == zero" (isDefEq env myIdZero zero) True
+     , assertRightEq "delta: opaque doesn't unfold" (whnf envWithOpaque opaqueIdRef) opaqueIdRef
+     ]
 
-  -- succ : Nat → Nat
-  let natInBody : Expr 1 = Const natName []
-  let succType : ClosedExpr = Pi (Str "n" Anonymous) Default natConst natInBody
+--------------------------------------------------------------------------------
+-- Test: Eta Expansion
+--------------------------------------------------------------------------------
 
-  -- Create the inductive info
-  let natIndInfo = MkInductiveInfo
-        natName
-        natType
-        0  -- numParams
-        0  -- numIndices
-        [ MkConstructorInfo zeroName zeroType
-        , MkConstructorInfo succName succType ]
-        True   -- isRecursive
-        False  -- isReflexive
+testEta : List TestResult
+testEta =
+  let natName = Str "Nat" Anonymous
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      natInBody : Expr 1 = Const natName []
+      idBody : Expr 1 = BVar FZ
+      idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat idBody
+      idType : ClosedExpr = Pi (Str "x" Anonymous) Default nat natInBody
+      myIdName = Str "myId" Anonymous
+      myIdDecl = DefDecl myIdName idType idLam Abbrev Safe []
+      env = addDecl myIdDecl (addDecl natDecl emptyEnv)
+      myIdRef : ClosedExpr = Const myIdName []
+      etaExpanded : ClosedExpr = Lam (Str "x" Anonymous) Default nat (App (weaken1 myIdRef) (BVar FZ))
+      fName = Str "f" Anonymous
+      fDecl = AxiomDecl fName idType []
+      envWithF = addDecl fDecl (addDecl natDecl emptyEnv)
+      fRef : ClosedExpr = Const fName []
+      fEtaExpanded : ClosedExpr = Lam (Str "x" Anonymous) Default nat (App (weaken1 fRef) (BVar FZ))
+  in [ assertRightEq "eta: λx. myId x == myId" (isDefEq env etaExpanded myIdRef) True
+     , assertRightEq "eta: myId == λx. myId x" (isDefEq env myIdRef etaExpanded) True
+     , assertRightEq "eta: λx. f x == f (axiom)" (isDefEq envWithF fEtaExpanded fRef) True
+     ]
 
-  -- Recursor: Nat.rec
-  -- Type: (motive : Nat → Sort u) → motive Nat.zero → ((n : Nat) → motive n → motive (Nat.succ n)) → (t : Nat) → motive t
-  --
-  -- Reduction rules:
-  --   Nat.rec motive hz hs Nat.zero => hz
-  --   Nat.rec motive hz hs (Nat.succ n) => hs n (Nat.rec motive hz hs n)
-  --
-  -- The rhs in each rule is already abstracted over params, motives, minors, and ctor fields
+--------------------------------------------------------------------------------
+-- Test: Iota Reduction
+--------------------------------------------------------------------------------
 
-  -- For zero rule: no ctor fields, rhs should be λmotive.λhz.λhs. hz
-  -- In de Bruijn: λ.λ.λ. BVar 1  (hz is at index 1)
-  -- Actually, looking at lean4lean, the rhs is already abstracted but when applied,
-  -- we apply: (params, motives, minors) then (ctor fields) then (remaining args)
-  -- So rhs for zero: should evaluate to hz when given motive, hz, hs
-
-  -- Build: λmotive.λhz.λhs. hz
-  let zeroRhs : ClosedExpr =
-        let motiveTy : ClosedExpr = Pi (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
-            motive1 : Expr 1 = BVar FZ
-            hzTy1 : Expr 1 = App motive1 (Const zeroName [])
-        in Lam (Str "motive" Anonymous) Default motiveTy
-             (Lam (Str "hz" Anonymous) Default hzTy1
-               (Lam (Str "hs" Anonymous) Default (Sort Zero)  -- placeholder type
-                 (BVar (FS FZ))))  -- hz
-
-  let zeroRule = MkRecursorRule zeroName 0 zeroRhs
-
-  -- Recursor type (simplified for testing)
-  let recType : ClosedExpr = Sort Zero  -- placeholder, not used in iota reduction
-
-  let natRecInfo = MkRecursorInfo
-        recName
-        recType
-        0  -- numParams
-        0  -- numIndices
-        1  -- numMotives
-        2  -- numMinors (zero case and succ case)
-        [zeroRule]
-        False  -- isK
-
-  -- Create environment with Nat, zero, succ, and rec
-  let env0 = emptyEnv
-  let env1 = addDecl (IndDecl natIndInfo []) env0
-  let env2 = addDecl (CtorDecl zeroName zeroType natName 0 0 0 []) env1
-  let env3 = addDecl (CtorDecl succName succType natName 1 0 1 []) env2
-  let env4 = addDecl (RecDecl natRecInfo []) env3
-
-  putStrLn $ "Environment set up with Nat, zero, succ, rec"
-
-  -- Test: Nat.rec motive hz hs Nat.zero should reduce to hz
-  -- Build: rec motive hz hs zero
-  let motive : ClosedExpr = Lam (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
-  let hz : ClosedExpr = Sort Zero  -- our "zero result"
-  let hs : ClosedExpr = Lam (Str "n" Anonymous) Default natConst
+testIota : List TestResult
+testIota =
+  let natName = Str "Nat" Anonymous
+      zeroName = Str "zero" (Str "Nat" Anonymous)
+      succName = Str "succ" (Str "Nat" Anonymous)
+      recName = Str "rec" (Str "Nat" Anonymous)
+      natType : ClosedExpr = Sort (Succ Zero)
+      natConst : ClosedExpr = Const natName []
+      zeroType : ClosedExpr = natConst
+      natInBody : Expr 1 = Const natName []
+      succType : ClosedExpr = Pi (Str "n" Anonymous) Default natConst natInBody
+      natIndInfo = MkInductiveInfo natName natType 0 0
+                     [ MkConstructorInfo zeroName zeroType
+                     , MkConstructorInfo succName succType ]
+                     True False
+      motiveTy : ClosedExpr = Pi (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
+      motive1 : Expr 1 = BVar FZ
+      hzTy1 : Expr 1 = App motive1 (Const zeroName [])
+      zeroRhs : ClosedExpr =
+        Lam (Str "motive" Anonymous) Default motiveTy
+          (Lam (Str "hz" Anonymous) Default hzTy1
+            (Lam (Str "hs" Anonymous) Default (Sort Zero)
+              (BVar (FS FZ))))
+      zeroRule = MkRecursorRule zeroName 0 zeroRhs
+      recType : ClosedExpr = Sort Zero
+      natRecInfo = MkRecursorInfo recName recType 0 0 1 2 [zeroRule] False
+      env0 = emptyEnv
+      env1 = addDecl (IndDecl natIndInfo []) env0
+      env2 = addDecl (CtorDecl zeroName zeroType natName 0 0 0 []) env1
+      env3 = addDecl (CtorDecl succName succType natName 1 0 1 []) env2
+      env4 = addDecl (RecDecl natRecInfo []) env3
+      motive : ClosedExpr = Lam (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
+      hz : ClosedExpr = Sort Zero
+      hs : ClosedExpr = Lam (Str "n" Anonymous) Default natConst
                           (Lam (Str "ih" Anonymous) Default (Sort (Succ Zero)) (BVar FZ))
-  let zero : ClosedExpr = Const zeroName []
+      zero : ClosedExpr = Const zeroName []
+      recApp = App (App (App (App (Const recName []) motive) hz) hs) zero
+  in [ assertRightEq "iota: rec motive hz hs zero => hz" (whnf env4 recApp) hz
+     ]
 
-  let recApp = App (App (App (App (Const recName []) motive) hz) hs) zero
+--------------------------------------------------------------------------------
+-- Test: Open Term Type Inference
+--------------------------------------------------------------------------------
 
-  putStrLn $ "Test 1: rec motive hz hs zero => hz"
-  putStrLn $ "  before: " ++ ppClosedExpr recApp
-  case whnf env4 recApp of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right result => do
-      putStrLn $ "  after:  " ++ ppClosedExpr result
-      putStrLn $ "  correct: " ++ show (result == hz)
-
-  -- Test 2: Add succ rule and test succ case
-  -- For succ rule: ctor has 1 field (n : Nat), rhs should be λmotive.λhz.λhs.λn.λih. hs n ih
-  -- where ih is the recursive call result
-  -- But for simplicity, let's just test the structure is right by having hs return a known value
-
-  -- Create succ rule: λmotive.λhz.λhs.λn. hs n (placeholder for ih)
-  -- For testing, let's make rhs = λmotive.λhz.λhs.λn. Sort 1  (always returns Sort 1)
-  let succRhs : ClosedExpr =
-        let motiveTy : ClosedExpr = Pi (Str "_" Anonymous) Default natConst (Sort (Succ Zero))
-            motive1 : Expr 1 = BVar FZ
-            hzTy1 : Expr 1 = App motive1 (Const zeroName [])
-        in Lam (Str "motive" Anonymous) Default motiveTy
-             (Lam (Str "hz" Anonymous) Default hzTy1
-               (Lam (Str "hs" Anonymous) Default (Sort Zero)
-                 (Lam (Str "n" Anonymous) Default (weaken1 (weaken1 (weaken1 natConst)))
-                   (Sort (Succ Zero)))))  -- always returns Sort 1
-
-  let succRule = MkRecursorRule succName 1 succRhs  -- 1 field (n)
-
-  let natRecInfoWithSucc = MkRecursorInfo
-        recName
-        recType
-        0  -- numParams
-        0  -- numIndices
-        1  -- numMotives
-        2  -- numMinors
-        [zeroRule, succRule]
-        False  -- isK
-
-  let env5 = addDecl (RecDecl natRecInfoWithSucc []) env3  -- override recursor
-
-  -- Build: rec motive hz hs (succ zero)
-  let one : ClosedExpr = App (Const succName []) (Const zeroName [])
-  let recAppSucc = App (App (App (App (Const recName []) motive) hz) hs) one
-
-  putStrLn $ "\nTest 2: rec motive hz hs (succ zero) => Sort 1"
-  putStrLn $ "  before: " ++ ppClosedExpr recAppSucc
-  case whnf env5 recAppSucc of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right result => do
-      putStrLn $ "  after:  " ++ ppClosedExpr result
-      putStrLn $ "  correct: " ++ show (result == Sort (Succ Zero))
-
-||| Test open term type inference with local context
-testOpenInfer : IO ()
-testOpenInfer = do
-  putStrLn "\n=== Testing Open Term Type Inference ==="
-
-  -- Create an environment with Nat
+testOpenInfer : List TestResult
+testOpenInfer =
   let natName = Str "Nat" Anonymous
-  let nat : ClosedExpr = Const natName []
-  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
-  let env = addDecl natDecl emptyEnv
-
-  -- Test 1: BVar in a context
-  -- With context [x : Nat], infer type of x (BVar FZ)
-  putStrLn "\nTest 1: With ctx [x : Nat], infer type of 'x'"
-  let ctx1 : LocalCtx 1 = extendCtx (Str "x" Anonymous) nat emptyCtx
-  let bvar0 : Expr 1 = BVar FZ
-  case inferTypeOpen env ctx1 bvar0 of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty ++ " (expected: Nat)"
-
-  -- Test 2: Lambda identity function
-  -- λ(x : Nat). x should have type Nat -> Nat
-  putStrLn "\nTest 2: infer type of λ(x : Nat). x"
-  let idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat (BVar FZ)
-  case inferTypeOpen env emptyCtx idLam of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
-
-  -- Test 3: Pi type
-  -- (x : Nat) -> Nat should have type Type 1
-  putStrLn "\nTest 3: infer type of (x : Nat) -> Nat"
-  let piTy : ClosedExpr = Pi (Str "x" Anonymous) Default nat (weaken1 nat)
-  case inferTypeOpen env emptyCtx piTy of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
-
-  -- Test 4: Nested binders
-  -- λ(x : Nat). λ(y : Nat). x
-  putStrLn "\nTest 4: infer type of λ(x : Nat). λ(y : Nat). x"
-  let constLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      env = addDecl natDecl emptyEnv
+      ctx1 : LocalCtx 1 = extendCtx (Str "x" Anonymous) nat emptyCtx
+      bvar0 : Expr 1 = BVar FZ
+      idLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat (BVar FZ)
+      piTy : ClosedExpr = Pi (Str "x" Anonymous) Default nat (weaken1 nat)
+      constLam : ClosedExpr = Lam (Str "x" Anonymous) Default nat
                                 (Lam (Str "y" Anonymous) Default (weaken1 nat) (BVar (FS FZ)))
-  case inferTypeOpen env emptyCtx constLam of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right ty => putStrLn $ "  type: " ++ ppClosedExpr ty
+  in [ assertRightEq "openInfer: BVar in ctx has correct type" (inferTypeOpen env ctx1 bvar0) nat
+     , assertRightEq "openInfer: λ(x:Nat).x : Nat -> Nat" (inferTypeOpen env emptyCtx idLam) piTy
+     , assertRight "openInfer: Pi type has Sort type" (inferTypeOpen env emptyCtx piTy) (\ty => case ty of Sort _ => True; _ => False)
+     , assertRight "openInfer: nested lambda infers" (inferTypeOpen env emptyCtx constLam) (const True)
+     ]
 
-||| Test proof irrelevance
-testProofIrrelevance : IO ()
-testProofIrrelevance = do
-  putStrLn "\n=== Testing Proof Irrelevance ==="
+--------------------------------------------------------------------------------
+-- Test: Proof Irrelevance
+--------------------------------------------------------------------------------
 
-  -- Set up an environment with:
-  -- - Prop (Sort 0)
-  -- - A proposition P : Prop
-  -- - Two proofs p1, p2 : P
-  let propName = Str "Prop" Anonymous
-  let prop : ClosedExpr = Sort Zero  -- Prop = Sort 0
-
-  let pName = Str "P" Anonymous
-  let p : ClosedExpr = Const pName []
-
-  -- P is a Prop (an axiom with type Prop)
-  let pDecl = AxiomDecl pName prop []
-
-  -- Two different proofs of P
-  let p1Name = Str "p1" Anonymous
-  let p2Name = Str "p2" Anonymous
-  let p1 : ClosedExpr = Const p1Name []
-  let p2 : ClosedExpr = Const p2Name []
-  let p1Decl = AxiomDecl p1Name p []  -- p1 : P
-  let p2Decl = AxiomDecl p2Name p []  -- p2 : P
-
-  let env = addDecl p2Decl $ addDecl p1Decl $ addDecl pDecl emptyEnv
-
-  -- Test 1: p1 and p2 should be definitionally equal (proof irrelevance)
-  putStrLn "\nTest 1: p1 == p2 (both proofs of P : Prop)"
-  case isDefEq env p1 p2 of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: True)"
-
-  -- Test 2: isProp p1 should be True
-  putStrLn "\nTest 2: isProp(p1)"
-  case isProp env p1 of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: True)"
-
-  -- Test 3: A term of Type should NOT be proof irrelevant
-  -- Add Nat : Type 1 and n1, n2 : Nat
-  let natName = Str "Nat" Anonymous
-  let nat : ClosedExpr = Const natName []
-  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
-
-  let n1Name = Str "n1" Anonymous
-  let n2Name = Str "n2" Anonymous
-  let n1 : ClosedExpr = Const n1Name []
-  let n2 : ClosedExpr = Const n2Name []
-  let n1Decl = AxiomDecl n1Name nat []
-  let n2Decl = AxiomDecl n2Name nat []
-
-  let env2 = addDecl n2Decl $ addDecl n1Decl $ addDecl natDecl env
-
-  putStrLn "\nTest 3: n1 == n2 (both of type Nat : Type, NOT Prop)"
-  case isDefEq env2 n1 n2 of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: False)"
-
-  putStrLn "\nTest 4: isProp(n1)"
-  case isProp env2 n1 of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right b => putStrLn $ "  result: " ++ show b ++ " (expected: False)"
-
-||| Test quotient type reduction
-testQuotient : IO ()
-testQuotient = do
-  putStrLn "\n=== Testing Quotient Reduction ==="
-
-  -- Set up environment with quotient types enabled
-  -- We need:
-  -- - A type α (e.g., Nat)
-  -- - A relation r : α → α → Prop
-  -- - A type β (result type)
-  -- - A function f : α → β
-  -- - A proof h that f respects r
-
-  let natName = Str "Nat" Anonymous
-  let nat : ClosedExpr = Const natName []
-  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
-
-  -- r : Nat → Nat → Prop (just an axiom for testing)
-  let rName = Str "r" Anonymous
-  let rType : ClosedExpr = Pi (Str "_" Anonymous) Default nat
-                             (Pi (Str "_" Anonymous) Default (weaken1 nat)
-                               (Sort Zero))
-  let r : ClosedExpr = Const rName []
-  let rDecl = AxiomDecl rName rType []
-
-  -- β : Type
-  let betaName = Str "β" Anonymous
-  let beta : ClosedExpr = Const betaName []
-  let betaDecl = AxiomDecl betaName (Sort (Succ Zero)) []
-
-  -- f : Nat → β
-  let fName = Str "f" Anonymous
-  let fType : ClosedExpr = Pi (Str "_" Anonymous) Default nat (weaken1 beta)
-  let f : ClosedExpr = Const fName []
-  let fDecl = AxiomDecl fName fType []
-
-  -- h : ∀ a b, r a b → f a = f b (proof that f respects r)
-  -- We don't need the actual type, just a proof term
-  let hName = Str "h" Anonymous
-  let h : ClosedExpr = Const hName []
-  let hDecl = AxiomDecl hName (Sort Zero) []  -- placeholder type
-
-  -- a : Nat (a value to quotient)
-  let aName = Str "a" Anonymous
-  let a : ClosedExpr = Const aName []
-  let aDecl = AxiomDecl aName nat []
-
-  -- Build the environment with quotient enabled
-  let env0 = enableQuot emptyEnv
-  let env = addDecl aDecl $ addDecl hDecl $ addDecl fDecl $
-            addDecl betaDecl $ addDecl rDecl $ addDecl natDecl env0
-
-  -- Test 1: Quot.lift f h (Quot.mk r a) should reduce to f a
-  --
-  -- Quot.lift has signature: {α} {r} {β} f h q
-  -- So: Quot.lift nat r beta f h (Quot.mk nat r a)
-  --                 0   1   2  3 4         5
-  let quotMk : ClosedExpr = mkApp (Const (Str "mk" (Str "Quot" Anonymous)) [Succ Zero])
-                                  [nat, r, a]
-  let quotLift : ClosedExpr = mkApp (Const (Str "lift" (Str "Quot" Anonymous)) [Succ Zero, Succ Zero])
-                                    [nat, r, beta, f, h, quotMk]
-
-  putStrLn "Test 1: Quot.lift f h (Quot.mk r a) => f a"
-  putStrLn $ "  before: " ++ ppClosedExpr quotLift
-  case whnf env quotLift of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right result => do
-      let expected = App f a
-      putStrLn $ "  after:  " ++ ppClosedExpr result
-      putStrLn $ "  expected: " ++ ppClosedExpr expected
-      putStrLn $ "  correct: " ++ show (result == expected)
-
-  -- Test 2: Without quotInit, reduction should NOT happen
-  let envNoQuot = addDecl aDecl $ addDecl hDecl $ addDecl fDecl $
-                  addDecl betaDecl $ addDecl rDecl $ addDecl natDecl emptyEnv
-
-  putStrLn "\nTest 2: Without quotInit, Quot.lift should NOT reduce"
-  case whnf envNoQuot quotLift of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right result => do
-      putStrLn $ "  result: " ++ ppClosedExpr result
-      -- Should be unchanged (not reduced)
-      putStrLn $ "  unchanged: " ++ show (result == quotLift)
-
-  -- Test 3: Quot.ind reduction
-  -- Quot.ind has signature: {α} {r} {β : Quot r → Prop} h q
-  -- So: Quot.ind nat r motive h (Quot.mk nat r a)
-  --                 0   1     2 3         4
-  let motiveType : ClosedExpr = Sort Zero  -- placeholder for β
-  let indH : ClosedExpr = Const (Str "indH" Anonymous) []
-  let indHDecl = AxiomDecl (Str "indH" Anonymous) (Sort Zero) []
-  let envWithIndH = addDecl indHDecl env
-
-  let quotInd : ClosedExpr = mkApp (Const (Str "ind" (Str "Quot" Anonymous)) [Succ Zero])
-                                   [nat, r, motiveType, indH, quotMk]
-
-  putStrLn "\nTest 3: Quot.ind h (Quot.mk r a) => h a"
-  putStrLn $ "  before: " ++ ppClosedExpr quotInd
-  case whnf envWithIndH quotInd of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right result => do
-      let expected = App indH a
-      putStrLn $ "  after:  " ++ ppClosedExpr result
-      putStrLn $ "  expected: " ++ ppClosedExpr expected
-      putStrLn $ "  correct: " ++ show (result == expected)
-
-||| Test declaration validation
-testDeclValidation : IO ()
-testDeclValidation = do
-  putStrLn "\n=== Testing Declaration Validation ==="
-
-  -- Set up a base environment with Nat and Prop
-  let natName = Str "Nat" Anonymous
-  let nat : ClosedExpr = Const natName []
-  let natDecl = AxiomDecl natName (Sort (Succ Zero)) []
-
-  let propName = Str "Prop" Anonymous
+testProofIrrelevance : List TestResult
+testProofIrrelevance =
   let prop : ClosedExpr = Sort Zero
+      pName = Str "P" Anonymous
+      p : ClosedExpr = Const pName []
+      pDecl = AxiomDecl pName prop []
+      p1Name = Str "p1" Anonymous
+      p2Name = Str "p2" Anonymous
+      p1 : ClosedExpr = Const p1Name []
+      p2 : ClosedExpr = Const p2Name []
+      p1Decl = AxiomDecl p1Name p []
+      p2Decl = AxiomDecl p2Name p []
+      env = addDecl p2Decl $ addDecl p1Decl $ addDecl pDecl emptyEnv
+      natName = Str "Nat" Anonymous
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      n1Name = Str "n1" Anonymous
+      n2Name = Str "n2" Anonymous
+      n1 : ClosedExpr = Const n1Name []
+      n2 : ClosedExpr = Const n2Name []
+      n1Decl = AxiomDecl n1Name nat []
+      n2Decl = AxiomDecl n2Name nat []
+      env2 = addDecl n2Decl $ addDecl n1Decl $ addDecl natDecl env
+  in [ assertRightEq "proofIrr: p1 == p2 (both proofs of Prop)" (isDefEq env p1 p2) True
+     , assertRightEq "proofIrr: isProp(p1)" (isProp env p1) True
+     , assertRightEq "proofIrr: n1 != n2 (Type, not Prop)" (isDefEq env2 n1 n2) False
+     , assertRightEq "proofIrr: isProp(n1) = False" (isProp env2 n1) False
+     ]
 
-  -- Test 1: Valid axiom declaration
-  putStrLn "\nTest 1: Valid axiom (Nat : Type)"
-  case addAxiomChecked emptyEnv natName (Sort (Succ Zero)) [] of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right env => putStrLn $ "  success: Nat added to environment"
+--------------------------------------------------------------------------------
+-- Test: Quotient Reduction
+--------------------------------------------------------------------------------
 
-  -- Test 2: Duplicate declaration should fail
-  putStrLn "\nTest 2: Duplicate declaration should fail"
-  let env1 = addDecl natDecl emptyEnv
-  case addAxiomChecked env1 natName (Sort (Succ Zero)) [] of
-    Left err => putStrLn $ "  correctly rejected: " ++ show err
-    Right _ => putStrLn $ "  ERROR: should have failed!"
+testQuotient : List TestResult
+testQuotient =
+  let natName = Str "Nat" Anonymous
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      rName = Str "r" Anonymous
+      rType : ClosedExpr = Pi (Str "_" Anonymous) Default nat
+                             (Pi (Str "_" Anonymous) Default (weaken1 nat) (Sort Zero))
+      r : ClosedExpr = Const rName []
+      rDecl = AxiomDecl rName rType []
+      betaName = Str "β" Anonymous
+      beta : ClosedExpr = Const betaName []
+      betaDecl = AxiomDecl betaName (Sort (Succ Zero)) []
+      fName = Str "f" Anonymous
+      fType : ClosedExpr = Pi (Str "_" Anonymous) Default nat (weaken1 beta)
+      f : ClosedExpr = Const fName []
+      fDecl = AxiomDecl fName fType []
+      hName = Str "h" Anonymous
+      h : ClosedExpr = Const hName []
+      hDecl = AxiomDecl hName (Sort Zero) []
+      aName = Str "a" Anonymous
+      a : ClosedExpr = Const aName []
+      aDecl = AxiomDecl aName nat []
+      env0 = enableQuot emptyEnv
+      env = addDecl aDecl $ addDecl hDecl $ addDecl fDecl $
+            addDecl betaDecl $ addDecl rDecl $ addDecl natDecl env0
+      quotMk : ClosedExpr = mkApp (Const (Str "mk" (Str "Quot" Anonymous)) [Succ Zero]) [nat, r, a]
+      quotLift : ClosedExpr = mkApp (Const (Str "lift" (Str "Quot" Anonymous)) [Succ Zero, Succ Zero])
+                                    [nat, r, beta, f, h, quotMk]
+      expected = App f a
+      envNoQuot = addDecl aDecl $ addDecl hDecl $ addDecl fDecl $
+                  addDecl betaDecl $ addDecl rDecl $ addDecl natDecl emptyEnv
+      motiveType : ClosedExpr = Sort Zero
+      indH : ClosedExpr = Const (Str "indH" Anonymous) []
+      indHDecl = AxiomDecl (Str "indH" Anonymous) (Sort Zero) []
+      envWithIndH = addDecl indHDecl env
+      quotInd : ClosedExpr = mkApp (Const (Str "ind" (Str "Quot" Anonymous)) [Succ Zero])
+                                   [nat, r, motiveType, indH, quotMk]
+      expectedInd = App indH a
+  in [ assertRightEq "quot: Quot.lift f h (Quot.mk r a) => f a" (whnf env quotLift) expected
+     , assertRightEq "quot: without quotInit, no reduction" (whnf envNoQuot quotLift) quotLift
+     , assertRightEq "quot: Quot.ind h (Quot.mk r a) => h a" (whnf envWithIndH quotInd) expectedInd
+     ]
 
-  -- Test 3: Duplicate universe params should fail
-  putStrLn "\nTest 3: Duplicate universe params should fail"
-  let uName = Str "u" Anonymous
-  case checkNoDuplicateUnivParams [uName, uName] of
-    Left err => putStrLn $ "  correctly rejected: " ++ show err
-    Right _ => putStrLn $ "  ERROR: should have failed!"
+--------------------------------------------------------------------------------
+-- Test: Declaration Validation
+--------------------------------------------------------------------------------
 
-  -- Test 4: Valid definition (simpler: just check Sort types work)
-  putStrLn "\nTest 4: Valid definition (T : Type := Type)"
-  let env2 = addDecl natDecl emptyEnv
-  let tName = Str "T" Anonymous
-  let tType : ClosedExpr = Sort (Succ Zero)  -- Type 1
-  let tValue : ClosedExpr = Sort Zero  -- Type 0
-  case addDefChecked env2 tName tType tValue Abbrev Safe [] of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right env => putStrLn $ "  success: T added to environment"
+testDeclValidation : List TestResult
+testDeclValidation =
+  let natName = Str "Nat" Anonymous
+      nat : ClosedExpr = Const natName []
+      natDecl = AxiomDecl natName (Sort (Succ Zero)) []
+      prop : ClosedExpr = Sort Zero
+      env1 = addDecl natDecl emptyEnv
+      uName = Str "u" Anonymous
+      env2 = addDecl natDecl emptyEnv
+      tName = Str "T" Anonymous
+      tType : ClosedExpr = Sort (Succ Zero)
+      tValue : ClosedExpr = Sort Zero
+      wrongName = Str "wrong" Anonymous
+      wrongType : ClosedExpr = Sort (Succ (Succ Zero))
+      wrongValue : ClosedExpr = Sort Zero
+      pName = Str "P" Anonymous
+      p : ClosedExpr = Const pName []
+      pDecl = AxiomDecl pName prop []
+      env3 = addDecl pDecl emptyEnv
+      proofName = Str "proofAxiom" Anonymous
+      proofDecl = AxiomDecl proofName p []
+      env4 = addDecl proofDecl env3
+      proofConst : ClosedExpr = Const proofName []
+      thmName = Str "myThm" Anonymous
+  in [ assertRight "declValid: valid axiom" (addAxiomChecked emptyEnv natName (Sort (Succ Zero)) []) (const True)
+     , assertLeft "declValid: duplicate decl fails" (addAxiomChecked env1 natName (Sort (Succ Zero)) [])
+     , assertLeft "declValid: duplicate univ params fails" (checkNoDuplicateUnivParams [uName, uName])
+     , assertRight "declValid: valid definition" (addDefChecked env2 tName tType tValue Abbrev Safe []) (const True)
+     , assertLeft "declValid: wrong value type fails" (addDefChecked env2 wrongName wrongType wrongValue Abbrev Safe [])
+     , assertRight "declValid: valid theorem" (addThmChecked env4 thmName p proofConst []) (const True)
+     , assertLeft "declValid: theorem with non-Prop fails" (addThmChecked env2 (Str "badThm" Anonymous) nat (Const (Str "zero" Anonymous) []) [])
+     , assertRight "declValid: addDeclChecked works" (addDeclChecked emptyEnv (AxiomDecl (Str "X" Anonymous) (Sort (Succ Zero)) [])) (const True)
+     ]
 
-  -- Test 5: Definition with wrong type should fail
-  putStrLn "\nTest 5: Definition with wrong value type should fail"
-  let wrongName = Str "wrong" Anonymous
-  let wrongType : ClosedExpr = Sort (Succ (Succ Zero))  -- Type 2
-  let wrongValue : ClosedExpr = Sort Zero  -- Type 0, which has type Type 1 not Type 2
-  case addDefChecked env2 wrongName wrongType wrongValue Abbrev Safe [] of
-    Left err => putStrLn $ "  correctly rejected: " ++ show err
-    Right _ => putStrLn $ "  ERROR: should have failed!"
+--------------------------------------------------------------------------------
+-- Test: Real Export File (IO-based)
+--------------------------------------------------------------------------------
 
-  -- Test 6: Valid theorem (P : Prop axiom, p : P axiom used as "proof")
-  putStrLn "\nTest 6: Valid theorem"
-  let pName = Str "P" Anonymous
-  let p : ClosedExpr = Const pName []
-  let pDecl = AxiomDecl pName prop []  -- P : Prop
-  let env3 = addDecl pDecl emptyEnv
-
-  let proofName = Str "proofAxiom" Anonymous
-  let proofDecl = AxiomDecl proofName p []  -- proofAxiom : P
-  let env4 = addDecl proofDecl env3
-  let proofConst : ClosedExpr = Const proofName []
-
-  let thmName = Str "myThm" Anonymous
-  case addThmChecked env4 thmName p proofConst [] of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right env => putStrLn $ "  success: theorem added"
-
-  -- Test 7: Theorem with non-Prop type should fail
-  putStrLn "\nTest 7: Theorem with non-Prop type should fail"
-  case addThmChecked env2 (Str "badThm" Anonymous) nat (Const (Str "zero" Anonymous) []) [] of
-    Left err => putStrLn $ "  correctly rejected: " ++ show err
-    Right _ => putStrLn $ "  ERROR: should have failed!"
-
-  -- Test 8: addDeclChecked dispatches correctly
-  putStrLn "\nTest 8: addDeclChecked for axiom"
-  case addDeclChecked emptyEnv (AxiomDecl (Str "X" Anonymous) (Sort (Succ Zero)) []) of
-    Left err => putStrLn $ "  error: " ++ show err
-    Right env => putStrLn $ "  success: X added via addDeclChecked"
-
-||| Test parsing a real Lean export file
-testRealExport : IO ()
+testRealExport : IO (List TestResult)
 testRealExport = do
-  putStrLn "\n=== Testing Real Export File ==="
+  result <- readFile "lean4export/examples/Nat.gcd_self.export"
+  case result of
+    Left err => pure [MkTestResult "realExport: read file" False $ "Error reading file: " ++ show err]
+    Right content => do
+      case parseExport content of
+        Left err => pure [MkTestResult "realExport: parse" False $ "Parse error: " ++ err]
+        Right st => pure
+          [ assert "realExport: parses names" (length (getNames st) > 0)
+          , assert "realExport: parses levels" (length (getLevels st) > 0)
+          , assert "realExport: parses exprs" (length (getExprs st) > 0)
+          , assert "realExport: parses decls" (length (getDecls st) > 0)
+          ]
 
-  -- Read the Nat.gcd_self.export file
-  Right content <- readFile "lean4export/examples/Nat.gcd_self.export"
-    | Left err => putStrLn $ "Error reading file: " ++ show err
-
-  putStrLn $ "Read " ++ show (length content) ++ " bytes"
-
-  case parseExport content of
-    Left err => putStrLn $ "Parse error: " ++ err
-    Right st => do
-      putStrLn "Parsed successfully!"
-      putStrLn $ "Names: " ++ show (length (getNames st))
-      putStrLn $ "Levels: " ++ show (length (getLevels st))
-      putStrLn $ "Expressions: " ++ show (length (getExprs st))
-      putStrLn $ "Declarations: " ++ show (length (getDecls st))
-
-      -- Show first few declarations
-      putStrLn "\nFirst declarations:"
-      showDecls (getDecls st) 10
-  where
-    showDecls : List Declaration -> Nat -> IO ()
-    showDecls [] _ = pure ()
-    showDecls _ Z = pure ()
-    showDecls (d :: ds) (S n) = do
-      putStrLn $ "  " ++ show d
-      showDecls ds n
+--------------------------------------------------------------------------------
+-- Main
+--------------------------------------------------------------------------------
 
 main : IO ()
 main = do
-  putStrLn "Lean4Idris Test Suite"
-  putStrLn "=====================\n"
+  args <- getArgs
+  let opts = parseArgs args
 
-  testLexer
-  testParser
-  testExpr
-  testWhnf
-  testInferType
-  testIsDefEq
-  testDelta
-  testEta
-  testIota
-  testOpenInfer
-  testProofIrrelevance
-  testQuotient
-  testDeclValidation
-  testRealExport
+  -- Collect IO-based test results
+  realExportResults <- testRealExport
 
-  putStrLn "\n\nAll tests completed!"
+  -- All test groups
+  let groups =
+        [ ("Lexer", testLexer)
+        , ("Parser", testParser)
+        , ("Expr", testExpr)
+        , ("WHNF", testWhnf)
+        , ("InferType", testInferType)
+        , ("IsDefEq", testIsDefEq)
+        , ("Delta", testDelta)
+        , ("Eta", testEta)
+        , ("Iota", testIota)
+        , ("OpenInfer", testOpenInfer)
+        , ("ProofIrrelevance", testProofIrrelevance)
+        , ("Quotient", testQuotient)
+        , ("DeclValidation", testDeclValidation)
+        , ("RealExport", realExportResults)
+        ]
+
+  runTests opts groups

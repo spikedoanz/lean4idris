@@ -1,6 +1,6 @@
-lean4lean/
-lean4export/
-lean-type-theory/
+.DS_Store
+*.claude*/
+reference/
 build/
 results/
 # Large Lean exports (use scripts to regenerate)

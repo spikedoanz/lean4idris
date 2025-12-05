@@ -1,8 +1,11 @@
-||| Simple file-based caching for type checker results
+||| Global file-based caching for type checker results
+|||
+||| Cache is shared across all export files. Declarations are assumed to have
+||| globally unique names (which is true in Lean). Cache is invalidated when
+||| the type checker version changes.
 module Lean4Idris.Cache
 
 import Data.SortedSet
-import Data.SortedMap
 import Data.String
 import Data.List
 import System.File
@@ -11,17 +14,23 @@ import System
 
 %default total
 
+||| Type checker version - change this when the type checker changes
+||| to invalidate all caches
+export
+tcVersion : String
+tcVersion = "lean4idris-v1"
+
 ||| Cache state tracking which declarations have passed
 public export
 record CacheState where
   constructor MkCacheState
-  exportHash : String
+  version : String
   passedDecls : SortedSet String
 
-||| Create an empty cache with the given export hash
+||| Create an empty cache
 export
-initCache : String -> CacheState
-initCache h = MkCacheState h empty
+initCache : CacheState
+initCache = MkCacheState tcVersion empty
 
 ||| Check if a declaration is in the cache
 export
@@ -38,19 +47,6 @@ export
 cacheSize : CacheState -> Nat
 cacheSize st = length (Prelude.toList st.passedDecls)
 
-||| Simple string hash (FNV-1a variant)
-||| Good distribution, fast, no dependencies
-export
-covering
-simpleHash : String -> String
-simpleHash s =
-  let fnvOffset : Integer = 2166136261
-      fnvPrime : Integer = 16777619
-      modVal : Integer = 4294967296  -- 2^32
-      bytes = unpack s
-      hash = foldl (\h, c => ((h `mod` modVal) * fnvPrime + cast (ord c)) `mod` modVal) fnvOffset bytes
-  in show hash
-
 ||| Get the cache directory path (~/.cache/lean4idris/)
 export
 covering
@@ -61,14 +57,13 @@ getCacheDir = do
     Just h => pure (h ++ "/.cache/lean4idris")
     Nothing => pure "/tmp/lean4idris-cache"
 
-||| Get the cache file path for a given export file
+||| Get the global cache file path
 export
 covering
-getCachePath : String -> IO String
-getCachePath exportPath = do
+getGlobalCachePath : IO String
+getGlobalCachePath = do
   cacheDir <- getCacheDir
-  let pathHash = simpleHash exportPath
-  pure (cacheDir ++ "/" ++ pathHash ++ ".cache")
+  pure (cacheDir ++ "/global.cache")
 
 ||| Ensure the cache directory exists
 export
@@ -84,49 +79,49 @@ ensureCacheDir = do
 
 ||| Parse cache file content
 ||| Format:
-|||   HASH <hash>
+|||   VERSION <version>
 |||   <decl1>
 |||   <decl2>
 |||   ...
-parseCacheContent : String -> String -> Maybe CacheState
-parseCacheContent expectedHash content =
+parseCacheContent : String -> Maybe CacheState
+parseCacheContent content =
   let ls = lines content
   in case ls of
     [] => Nothing
     (firstLine :: rest) =>
       case words firstLine of
-        ["HASH", h] =>
-          if h == expectedHash
-            then Just $ MkCacheState h (fromList rest)
-            else Nothing  -- Hash mismatch, cache invalid
+        ["VERSION", v] =>
+          if v == tcVersion
+            then Just $ MkCacheState v (fromList rest)
+            else Nothing  -- Version mismatch, cache invalid
         _ => Nothing  -- Invalid format
 
 ||| Serialize cache state to string
 serializeCache : CacheState -> String
 serializeCache st =
-  let header = "HASH " ++ st.exportHash
+  let header = "VERSION " ++ st.version
       decls = Prelude.toList st.passedDecls
   in unlines (header :: decls)
 
-||| Load cache from disk if it exists and hash matches
+||| Load global cache from disk if it exists and version matches
 export
 covering
-loadCache : (exportPath : String) -> (exportHash : String) -> IO (Maybe CacheState)
-loadCache exportPath exportHash = do
-  cachePath <- getCachePath exportPath
+loadCache : IO (Maybe CacheState)
+loadCache = do
+  cachePath <- getGlobalCachePath
   result <- readFile cachePath
   case result of
     Left _ => pure Nothing  -- File doesn't exist or can't be read
-    Right content => pure (parseCacheContent exportHash content)
+    Right content => pure (parseCacheContent content)
 
 ||| Save cache to disk
 export
 covering
-saveCache : (exportPath : String) -> CacheState -> IO ()
-saveCache exportPath st = do
+saveCache : CacheState -> IO ()
+saveCache st = do
   ok <- ensureCacheDir
   when ok $ do
-    cachePath <- getCachePath exportPath
+    cachePath <- getGlobalCachePath
     let content = serializeCache st
     _ <- writeFile cachePath content
     pure ()

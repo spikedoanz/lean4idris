@@ -133,20 +133,18 @@ main = do
           putStrLn $ "Error: Failed to read file: " ++ show err
           exitWith (ExitFailure 1)
         Right content => do
-          -- Compute export file hash for caching
-          let exportHash = simpleHash content
-          -- Load cache if caching is enabled
+          -- Load global cache if caching is enabled
           cache <- if opts.noCache
-                     then pure (initCache exportHash)
+                     then pure initCache
                      else do
-                       maybeCache <- loadCache path exportHash
+                       maybeCache <- loadCache
                        case maybeCache of
                          Just c => do
-                           putStrLn $ "Cache loaded: " ++ show (cacheSize c) ++ " declarations"
+                           putStrLn $ "Global cache loaded: " ++ show (cacheSize c) ++ " declarations (version: " ++ tcVersion ++ ")"
                            pure c
                          Nothing => do
-                           putStrLn "No cache found or hash mismatch, starting fresh"
-                           pure (initCache exportHash)
+                           putStrLn $ "No cache found or version mismatch, starting fresh (version: " ++ tcVersion ++ ")"
+                           pure initCache
           case parseExport content of
             Left err => do
               putStrLn $ "Parse error: " ++ err
@@ -163,7 +161,7 @@ main = do
               (result, finalCache) <- checkAllDeclsIO fuel continueOnError opts.verbose emptyEnv decls cache 0 0 0 0 []
               -- Save cache unless disabled
               unless opts.noCache $ do
-                saveCache path finalCache
+                saveCache finalCache
                 putStrLn $ "Cache saved: " ++ show (cacheSize finalCache) ++ " declarations"
               case result of
                 Left err => do

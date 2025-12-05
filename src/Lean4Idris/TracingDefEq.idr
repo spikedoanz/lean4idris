@@ -95,8 +95,8 @@ isDefEqTraced env e1 e2 = do
       (tyRes, tyNode) <- isDefEqTraced env ty1 ty2
       if tyRes
         then do
-          -- Use placeholder substitution for body comparison
-          bodyResult <- isDefEqBody (\e, a, b => Right True) env body1 body2
+          -- Use real isDefEq for body comparison (placeholder substitution happens there)
+          bodyResult <- isDefEqBodyWithNameAndType name1 ty1 isDefEq env body1 body2
           Right (bodyResult, [tyNode])
         else Right (False, [tyNode])
 
@@ -105,8 +105,8 @@ isDefEqTraced env e1 e2 = do
       (domRes, domNode) <- isDefEqTraced env dom1 dom2
       if domRes
         then do
-          -- Use placeholder substitution for codomain comparison
-          codResult <- isDefEqBody (\e, a, b => Right True) env cod1 cod2
+          -- Use real isDefEq for codomain comparison
+          codResult <- isDefEqBodyWithNameAndType name1 dom1 isDefEq env cod1 cod2
           Right (codResult, [domNode])
         else Right (False, [domNode])
 
@@ -116,7 +116,8 @@ isDefEqTraced env e1 e2 = do
       (vRes, vNode) <- isDefEqTraced env v1 v2
       if tyRes && vRes
         then do
-          bodyResult <- isDefEqBody (\e, a, b => Right True) env b1 b2
+          -- Use real isDefEq for body comparison
+          bodyResult <- isDefEqBodyWithNameAndType name1 ty1 isDefEq env b1 b2
           Right (bodyResult, [tyNode, vNode])
         else Right (False, [tyNode, vNode])
 

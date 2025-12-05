@@ -1970,6 +1970,7 @@ substAndReplacePlaceholders binderName phName e =
 ||| We compare them by substituting a fresh variable placeholder.
 ||| Also registers a binder alias so that inference placeholders (like `α.0._local`)
 ||| are treated as equal to the comparison placeholder during isDefEq.
+export
 covering
 isDefEqBodyWithNameAndType : Name -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
 isDefEqBodyWithNameAndType binderName binderType recur env b1 b2 =

@@ -39,19 +39,25 @@ flushStdout = do
 
 ||| Check all declarations in IO (with progress output)
 ||| If continueOnError is True, continues checking after failures and reports summary
-checkAllDeclsIO : (fuel : Nat) -> (continueOnError : Bool) -> (verbose : Bool) -> TCEnv -> List Declaration -> (passed : Nat) -> (failed : Nat) -> (errors : List String) -> IO (Either String TCEnv)
-checkAllDeclsIO _ _ verbose env [] passed failed errors =
-  if failed > 0
-    then do
+checkAllDeclsIO : (fuel : Nat) -> (continueOnError : Bool) -> (verbose : Bool) -> TCEnv -> List Declaration -> (passed : Nat) -> (failed : Nat) -> (timedOut : Nat) -> (errors : List String) -> IO (Either String TCEnv)
+checkAllDeclsIO _ _ verbose env [] passed failed timedOut errors =
+  let totalDecls : Nat = passed + failed + timedOut
+      pct : Double = if totalDecls == 0 then 100.0
+                       else (cast passed / cast totalDecls) * 100.0
+      -- Round to 1 decimal place
+      pctRounded : Double = (fromInteger $ cast {to=Integer} (pct * 10.0)) / 10.0
+  in do
       when verbose $ do
         putStrLn ""
         putStrLn "=== Errors encountered ==="
         traverse_ putStrLn (reverse errors)
       putStrLn ""
-      putStrLn $ "Summary: " ++ show passed ++ " passed, " ++ show failed ++ " failed"
-      pure (Left $ show failed ++ " declarations failed")
-    else pure (Right env)
-checkAllDeclsIO fuel cont verbose env (d :: ds) passed failed errors = do
+      -- Parsable format: TOTAL n OK n FAIL n TIMEOUT n OK% pct
+      putStrLn $ "TOTAL " ++ show totalDecls ++ " OK " ++ show passed ++ " FAIL " ++ show failed ++ " TIMEOUT " ++ show timedOut ++ " OK% " ++ show pctRounded
+      if failed > 0 || timedOut > 0
+        then pure (Left $ show (failed + timedOut) ++ " declarations failed")
+        else pure (Right env)
+checkAllDeclsIO fuel cont verbose env (d :: ds) passed failed timedOut errors = do
   let name = show (declName d)
   putStr $ "Checking: " ++ name ++ "... "
   flushStdout
@@ -60,22 +66,22 @@ checkAllDeclsIO fuel cont verbose env (d :: ds) passed failed errors = do
       putStrLn "TIMEOUT"
       let errMsg = "fuel exhausted (in " ++ name ++ ")"
       if cont
-        then checkAllDeclsIO fuel cont verbose env ds passed (S failed) (errMsg :: errors)
+        then checkAllDeclsIO fuel cont verbose env ds passed failed (S timedOut) (errMsg :: errors)
         else pure (Left errMsg)
     Left err => do
       putStrLn "FAIL"
       let errMsg = show err ++ " (in " ++ name ++ ")"
       if cont
-        then checkAllDeclsIO fuel cont verbose env ds passed (S failed) (errMsg :: errors)
+        then checkAllDeclsIO fuel cont verbose env ds passed (S failed) timedOut (errMsg :: errors)
         else pure (Left errMsg)
     Right env' => do
       putStrLn "ok"
-      checkAllDeclsIO fuel cont verbose env' ds (S passed) failed errors
+      checkAllDeclsIO fuel cont verbose env' ds (S passed) failed timedOut errors
 
 ||| CLI options
 record Options where
   constructor MkOptions
-  continueOnError : Bool
+  eager : Bool  -- Stop on first error (default: continue)
   verbose : Bool
   fuel : Maybe Nat
   files : List String
@@ -86,8 +92,8 @@ defaultOptions = MkOptions False False Nothing []
 ||| Parse command line arguments
 parseArgs : List String -> Options
 parseArgs [] = defaultOptions
-parseArgs ("--continue-on-error" :: rest) = { continueOnError := True } (parseArgs rest)
-parseArgs ("-c" :: rest) = { continueOnError := True } (parseArgs rest)
+parseArgs ("--eager" :: rest) = { eager := True } (parseArgs rest)
+parseArgs ("-e" :: rest) = { eager := True } (parseArgs rest)
 parseArgs ("--fuel" :: n :: rest) = { fuel := parsePositive n } (parseArgs rest)
 parseArgs ("-f" :: n :: rest) = { fuel := parsePositive n } (parseArgs rest)
 parseArgs ("--verbose" :: rest) = { verbose := True } (parseArgs rest)
@@ -118,9 +124,10 @@ main = do
               flushStdout
               let decls = getDecls st
               putStrLn $ show (length decls) ++ " found"
-              when opts.continueOnError $ putStrLn "(continuing on errors)"
+              when opts.eager $ putStrLn "(eager mode: stopping on first error)"
               when (isJust opts.fuel) $ putStrLn $ "(fuel: " ++ show fuel ++ ")"
-              result <- checkAllDeclsIO fuel opts.continueOnError opts.verbose emptyEnv decls 0 0 []
+              let continueOnError = not opts.eager
+              result <- checkAllDeclsIO fuel continueOnError opts.verbose emptyEnv decls 0 0 0 []
               case result of
                 Left err => do
                   when opts.verbose $ putStrLn $ "Type error: " ++ err
@@ -135,9 +142,9 @@ main = do
       putStrLn "Usage: lean4idris [OPTIONS] <export-file>"
       putStrLn ""
       putStrLn "Options:"
-      putStrLn "  -c, --continue-on-error  Continue checking after failures"
-      putStrLn "  -f, --fuel <amount>      Set fuel limit per declaration (default: 100000)"
-      putStrLn "  -v, --verbose            Print full error details"
+      putStrLn "  -e, --eager          Stop on first error (default: continue all)"
+      putStrLn "  -f, --fuel <amount>  Set fuel limit per declaration (default: 100000)"
+      putStrLn "  -v, --verbose        Print full error details"
       putStrLn ""
       putStrLn "Exit codes:"
       putStrLn "  0 - All declarations type-checked successfully"

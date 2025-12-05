@@ -1832,20 +1832,45 @@ tryProofIrrelevance recurEq env t s = do
 
 ||| Normalize and compare levels for equality
 ||| Uses simplification to bring levels to a canonical form before comparison
+
+||| Flatten a Max tree into a list of non-Max terms
+||| e.g., Max (Max a b) c -> [a, b, c]
+flattenMax : Level -> List Level
+flattenMax (Max a b) = flattenMax a ++ flattenMax b
+flattenMax l = [l]
+
+||| Sort levels using the levelLt ordering from Level.idr
+sortLevels : List Level -> List Level
+sortLevels = sortBy (\a, b => if levelLt a b then LT else if a == b then EQ else GT)
+
+||| Core level equality comparison (after simplification)
+covering
+levelEqCore : Level -> Level -> Bool
+
+||| Compare two lists of levels element-wise
+covering
+levelListEqCore : List Level -> List Level -> Bool
+levelListEqCore [] [] = True
+levelListEqCore (x :: xs) (y :: ys) = levelEqCore x y && levelListEqCore xs ys
+levelListEqCore _ _ = False
+
+levelEqCore Zero Zero = True
+levelEqCore (Succ l1) (Succ l2) = levelEqCore l1 l2
+-- For Max, flatten both sides and compare as sorted lists (handles commutativity)
+levelEqCore l1@(Max _ _) l2@(Max _ _) =
+  let terms1 = sortLevels (flattenMax l1)
+      terms2 = sortLevels (flattenMax l2)
+  in levelListEqCore terms1 terms2
+levelEqCore (IMax a1 b1) (IMax a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
+levelEqCore (Param n1) (Param n2) = n1 == n2
+levelEqCore _ _ = False
+
 covering
 levelEq : Level -> Level -> Bool
 levelEq l1 l2 =
   let l1' = simplify l1
       l2' = simplify l2
   in levelEqCore l1' l2'
-  where
-    levelEqCore : Level -> Level -> Bool
-    levelEqCore Zero Zero = True
-    levelEqCore (Succ l1) (Succ l2) = levelEqCore l1 l2
-    levelEqCore (Max a1 b1) (Max a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
-    levelEqCore (IMax a1 b1) (IMax a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
-    levelEqCore (Param n1) (Param n2) = n1 == n2
-    levelEqCore _ _ = False
 
 ||| Check syntactic equality of level lists
 covering

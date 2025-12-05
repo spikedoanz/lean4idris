@@ -134,12 +134,10 @@ checkAxiomDecl env name ty levelParams = do
 export covering
 checkDefDecl : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC ()
 checkDefDecl env name ty value levelParams = do
-  debugPrint ("checkDefDecl: " ++ show name) $ pure ()
   checkNameNotDeclared env name
   checkNoDuplicateUnivParams levelParams
   _ <- checkIsType env ty
-  (env', valueTy) <- debugPrint ("checkDefDecl: about to infer value type for " ++ show name) $ inferTypeE env value
-  debugPrint ("checkDefDecl: inferTypeE done\n  valueTy=" ++ show valueTy ++ "\n  ty=" ++ show ty) $ pure ()
+  (env', valueTy) <- inferTypeE env value
   eq <- isDefEq env' valueTy ty
   if eq
     then pure ()
@@ -160,7 +158,9 @@ checkThmDecl env name ty value levelParams = do
       eq <- isDefEq env' valueTy ty
       if eq
         then pure ()
-        else throw (OtherError $ "theorem proof type mismatch for " ++ show name)
+        else throw (OtherError $ "theorem proof type mismatch for " ++ show name
+                   ++ "\n  inferred: " ++ show valueTy
+                   ++ "\n  declared: " ++ show ty)
 
 ------------------------------------------------------------------------
 -- Add Validated Declarations

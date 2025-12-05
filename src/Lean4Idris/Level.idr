@@ -111,8 +111,8 @@ dominates a b =
 
 ||| Simplify a level expression
 ||| Applies basic normalization rules
--- Compare levels for canonical ordering
--- Uses a lexicographic ordering to ensure deterministic Max canonicalization
+-- Compare levels for canonical ordering (atoms only, not nested Max)
+-- Uses a lexicographic ordering to ensure deterministic canonicalization
 public export
 levelLt : Level -> Level -> Bool
 levelLt Zero Zero = False
@@ -129,6 +129,38 @@ levelLt (IMax _ _) _ = True
 levelLt _ (IMax _ _) = False
 levelLt (Param n1) (Param n2) = show n1 < show n2
 
+||| Flatten nested Max into a list of non-Max terms (atoms)
+||| e.g., Max a (Max b c) => [a, b, c]
+covering
+flattenMax : Level -> List Level
+flattenMax (Max l1 l2) = flattenMax l1 ++ flattenMax l2
+flattenMax l = [l]
+
+||| Insert a level into a sorted list, maintaining sorted order
+||| and removing duplicates and dominated terms
+covering
+insertSorted : Level -> List Level -> List Level
+insertSorted l [] = [l]
+insertSorted l (x :: xs) =
+  if l == x then x :: xs  -- duplicate
+  else if dominates l x then insertSorted l xs  -- l dominates x, drop x
+  else if dominates x l then x :: xs  -- x dominates l, drop l
+  else if levelLt l x then l :: x :: xs
+  else x :: insertSorted l xs
+
+||| Sort a list of levels, removing duplicates and dominated terms
+covering
+sortLevels : List Level -> List Level
+sortLevels [] = []
+sortLevels (x :: xs) = insertSorted x (sortLevels xs)
+
+||| Build a right-associative Max tree from a sorted list
+||| [a, b, c] => Max a (Max b c)
+buildMax : List Level -> Level
+buildMax [] = Zero
+buildMax [x] = x
+buildMax (x :: xs) = Max x (buildMax xs)
+
 export covering
 simplify : Level -> Level
 simplify Zero = Zero
@@ -136,31 +168,13 @@ simplify (Succ l) = Succ (simplify l)
 simplify (Max l1 l2) =
   let l1' = simplify l1
       l2' = simplify l2
-  in simplifyMax l1' l2'
-  where
-    -- Check if l is contained in maxLevels
-    containedIn : Level -> Level -> Bool
-    containedIn l l' = l == l' || case l' of
-      Max a b => containedIn l a || containedIn l b
-      _ => False
-
-    -- Simplify Max handling nested Max and duplicates
-    -- Canonicalizes by putting smaller argument first
-    simplifyMax : Level -> Level -> Level
-    simplifyMax l1 l2 = case (l1, l2) of
-       (Zero, _) => l2
-       (_, Zero) => l1
-       _ => if l1 == l2 then l1
-            -- Check if l2 dominates l1 (e.g., max 1 (u+1) = u+1)
-            else if dominates l2 l1 then l2
-            -- Check if l1 dominates l2
-            else if dominates l1 l2 then l1
-            -- Check if l1 is contained in l2 (e.g., Max u (Max u v) = Max u v)
-            else if containedIn l1 l2 then l2
-            -- Check if l2 is contained in l1
-            else if containedIn l2 l1 then l1
-            -- Canonicalize order: put smaller first
-            else if levelLt l1 l2 then Max l1 l2 else Max l2 l1
+      -- Flatten all nested Max into atoms
+      atoms = flattenMax l1' ++ flattenMax l2'
+      -- Filter out Zero (max 0 x = x)
+      nonZero = filter (\x => not (isZero x)) atoms
+      -- Sort and deduplicate
+      sorted = sortLevels nonZero
+  in buildMax sorted
 simplify (IMax l1 l2) =
   let l1' = simplify l1
       l2' = simplify l2

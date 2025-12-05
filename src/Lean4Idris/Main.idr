@@ -60,9 +60,10 @@ checkAllDeclsIO _ _ verbose env [] cache passed failed timedOut cached errors =
         then pure (Left $ show (failed + timedOut) ++ " declarations failed", cache)
         else pure (Right env, cache)
 checkAllDeclsIO fuel cont verbose env (d :: ds) cache passed failed timedOut cached errors = do
-  let name = maybe "<anonymous>" show (declName d)
-  -- Check if declaration is cached
-  if isCached name cache
+  let maybeName = declName d
+  let name = maybe "<anonymous>" show maybeName
+  -- Check if declaration is cached (skip anonymous declarations)
+  if isJust maybeName && isCached name cache
     then do
       putStr $ "Checking: " ++ name ++ "... "
       flushStdout
@@ -88,8 +89,8 @@ checkAllDeclsIO fuel cont verbose env (d :: ds) cache passed failed timedOut cac
             else pure (Left errMsg, cache)
         Right env' => do
           putStrLn "ok"
-          -- Add to cache on success
-          let cache' = addPassed name cache
+          -- Add to cache on success (skip anonymous declarations)
+          let cache' = if isJust maybeName then addPassed name cache else cache
           checkAllDeclsIO fuel cont verbose env' ds cache' (S passed) failed timedOut cached errors
 
 ||| CLI options

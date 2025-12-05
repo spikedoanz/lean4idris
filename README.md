@@ -54,7 +54,7 @@ Type checking coverage on Lean 4 export files:
 tested on 564756727e377e7fe640b0932dcd690e027cb72d
 test/exports/tier01-init/
 test/exports/tier01-init/Init.Classical.export
-    > timeout
+    > 6739 passed, 1305 failed
 test/exports/tier01-init/Init.Core.export
     > 3465 passed, 283 failed
 test/exports/tier01-init/Init.Data.Array.Basic.export
@@ -73,8 +73,9 @@ test/exports/tier01-init/Init.Data.Nat.Basic.export
 test/exports/tier01-init/Init.Data.Nat.Lemmas.export
     > 8555 passed, 2488 failed
 test/exports/tier01-init/Init.Data.Option.Basic.export
-    > 
+    > 3851 passed, 337 failed
 test/exports/tier01-init/Init.Data.String.Basic.export
+
 test/exports/tier01-init/Init.Data.UInt.Basic.export
 test/exports/tier01-init/Init.Prelude.export
     > 1891 passed, 145 failed

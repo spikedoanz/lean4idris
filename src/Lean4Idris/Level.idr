@@ -181,10 +181,11 @@ simplify (IMax l1 l2) =
        -- This distributes IMax over the inner IMax
        (IMax v w) =>
          simplify (Max (IMax l1' w) (IMax v w))
-       -- When l2' is a Param, check if l1' is an IMax with l2' as second arg
-       -- IMax (IMax x u) u = IMax x u when u is non-zero (and params are assumed positive)
-       -- This handles cases like IMax (IMax 0 u) u = u
+       -- When l2' is a Param, check various simplification rules
        (Param n) => case l1' of
+                      -- Key rule: imax 1 u = u for all u
+                      -- Proof: if u=0, imax 1 0 = 0 = u; if u>=1, imax 1 u = max 1 u = u
+                      Succ Zero => l2'
                       -- IMax (IMax x u) u = max (imax x u) u = max x u (when u > 0)
                       -- And max x u = u when x <= u or more specifically when x = 0 or x = u
                       IMax innerL (Param m) =>
@@ -194,6 +195,8 @@ simplify (IMax l1 l2) =
                                  Param p => if p == n then l2' else IMax l1' l2'  -- IMax (IMax u u) u = u
                                  _ => IMax l1' l2'
                           else if l1' == l2' then l1' else IMax l1' l2'
+                      -- imax 0 u = u (since if u=0 result is 0=u, if u>0 result is max 0 u = u)
+                      Zero => l2'
                       _ => if l1' == l2' then l1' else IMax l1' l2'
        _ => if l1' == l2' then l1' else IMax l1' l2'
 simplify (Param n) = Param n

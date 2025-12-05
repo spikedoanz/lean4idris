@@ -54,11 +54,6 @@ record TCEnv where
   ||| like `Const "_local_x" []`. This map tracks their types so we can
   ||| properly type-check expressions containing them.
   placeholders : SortedMap Name ClosedExpr
-  ||| Maps binder names to comparison placeholder names.
-  ||| Used during isDefEq to recognize that inference placeholders
-  ||| (like `α.0._local`) should be treated as equal to comparison placeholders
-  ||| (like `_x._isDefEqBody`) when comparing body types.
-  binderAliases : SortedMap Name Name
   ||| Global counter for placeholder names to ensure uniqueness across context depths.
   ||| This ensures that even when closeWithPlaceholders is called at different depths,
   ||| each variable gets a unique placeholder that persists.
@@ -67,7 +62,7 @@ record TCEnv where
 ||| Empty environment
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False empty empty 0
+emptyEnv = MkTCEnv empty False empty 0
 
 ||| Add a placeholder constant with its type (as an axiom in the environment)
 ||| This allows regular constant lookup to find placeholder types.
@@ -86,19 +81,7 @@ lookupPlaceholder name env = lookup name env.placeholders
 ||| Clear all placeholders (for fresh type checking context)
 public export
 clearPlaceholders : TCEnv -> TCEnv
-clearPlaceholders env = { placeholders := empty, binderAliases := empty } env
-
-||| Register a binder alias: inference placeholders with this binder name
-||| should be treated as equal to the comparison placeholder
-public export
-addBinderAlias : Name -> Name -> TCEnv -> TCEnv
-addBinderAlias binderName comparisonPh env =
-  { binderAliases $= insert binderName comparisonPh } env
-
-||| Look up what placeholder name a binder maps to
-public export
-lookupBinderAlias : Name -> TCEnv -> Maybe Name
-lookupBinderAlias binderName env = lookup binderName env.binderAliases
+clearPlaceholders env = { placeholders := empty } env
 
 ||| Enable quotient types in the environment
 public export
@@ -974,9 +957,17 @@ extractPlaceholderBase _ = Nothing
 ||| Extract the binder name from a comparison placeholder
 ||| Returns Just binderName if this is a comparison placeholder, Nothing otherwise
 ||| Comparison placeholders have the form: Str "_isDefEqBody" (Str counter binderName)
-extractComparisonPlaceholderBinder : Name -> Maybe Name
-extractComparisonPlaceholderBinder (Str "_isDefEqBody" (Str _ binderName)) = Just binderName
-extractComparisonPlaceholderBinder _ = Nothing
+||| Extract the depth from a comparison placeholder.
+||| Comparison placeholders use de Bruijn depth: Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+||| Returns Just depth if this is a comparison placeholder, Nothing otherwise.
+extractComparisonPlaceholderDepth : Name -> Maybe Nat
+extractComparisonPlaceholderDepth (Str "_isDefEqBody" (Num _ (Num depth Anonymous))) = Just depth
+extractComparisonPlaceholderDepth _ = Nothing
+
+||| Check if a name is a comparison placeholder (for backwards compatibility checks)
+isComparisonPlaceholderName : Name -> Bool
+isComparisonPlaceholderName (Str "_isDefEqBody" (Num _ (Num _ Anonymous))) = True
+isComparisonPlaceholderName _ = False
 
 ||| Build a vector of placeholder constants for all context entries
 ||| Returns the updated environment, updated context with placeholders assigned, and the vector of placeholders.
@@ -1412,27 +1403,22 @@ alphaEq = alphaEqWithEnv [] []
       if n1 == n2 && map simplify ls1 == map simplify ls2
         then True
         else
-          -- Check if both are placeholder constants at the same level
-          -- Extract base names from placeholder format (both inference and comparison)
-          let base1 = extractPlaceholderBase n1 <|> extractComparisonPlaceholderBinder n1
-              base2 = extractPlaceholderBase n2 <|> extractComparisonPlaceholderBinder n2
-              -- Use base name for lookup if available, otherwise use raw name
-              lookupName1 = fromMaybe n1 base1
-              lookupName2 = fromMaybe n2 base2
-              level1 = findLevelNat lookupName1 env1 0
-              level2 = findLevelNat lookupName2 env2 0
-          in case (level1, level2) of
-                (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
-                (Nothing, Nothing) =>
-                  -- If not in environment, check if both are placeholders for the same binder
-                  case (base1, base2) of
-                    (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
-                    _ => False  -- Already checked n1 == n2 above
-                -- One found, one not: check if both are placeholders for same base
-                -- This handles cases where binder names differ but placeholder base is same
-                _ => case (base1, base2) of
-                       (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
-                       _ => False
+          -- Check if both are placeholder constants
+          -- For comparison placeholders (de Bruijn): same depth = equivalent
+          -- For inference placeholders: same base name = equivalent
+          case (extractComparisonPlaceholderDepth n1, extractComparisonPlaceholderDepth n2) of
+            (Just d1, Just d2) => d1 == d2 && map simplify ls1 == map simplify ls2
+            _ => -- Fall back to inference placeholder comparison
+                 let base1 = extractPlaceholderBase n1
+                     base2 = extractPlaceholderBase n2
+                 in case (base1, base2) of
+                      (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
+                      -- Also check if both are in the binder environment at same position
+                      _ => let level1 = findLevelNat n1 env1 0
+                               level2 = findLevelNat n2 env2 0
+                           in case (level1, level2) of
+                                (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
+                                _ => False
       where
         findLevelNat : Name -> List Name -> Nat -> Maybe Nat
         findLevelNat _ [] _ = Nothing
@@ -1963,38 +1949,47 @@ substAndReplacePlaceholders binderName phName e =
                               else e'
   in result
 
-||| Helper for comparing bodies (Expr 1) with binder name and type for placeholder matching
+||| Helper for comparing bodies (Expr 1) with depth-based placeholder naming.
 ||| We compare them by substituting a fresh variable placeholder.
-||| Also registers a binder alias so that inference placeholders (like `α.0._local`)
-||| are treated as equal to the comparison placeholder during isDefEq.
+|||
+||| Uses de Bruijn depth for placeholder names: Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+||| This ensures that shadowed binders (same name, different depths) get different placeholders.
+||| The depth parameter indicates how many binders we've descended into (0 = outermost).
+covering
+isDefEqBodyWithDepth : Nat -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBodyWithDepth depth binderType recur env b1 b2 =
+  -- Create a placeholder for var 0 using depth-based naming
+  -- Format: Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+  let counter = env.nextPlaceholder
+      phName = Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+      -- Increment counter, add placeholder type for proper type inference
+      env' = addPlaceholder phName binderType ({ nextPlaceholder := S counter } env)
+      -- Substitute BVar 0 with the comparison placeholder (simple substitution)
+      e1' : ClosedExpr = instantiate1 (believe_me b1) (Const phName [])
+      e2' : ClosedExpr = instantiate1 (believe_me b2) (Const phName [])
+  in debugPrint ("isDefEqBodyWithDepth: depth=" ++ show depth ++ " phName=" ++ show phName ++ "\n  e1'=" ++ show e1' ++ "\n  e2'=" ++ show e2') $
+     recur env' e1' e2'
+
+||| Helper for comparing bodies (Expr 1) - uses depth 0 as default
+||| For backwards compatibility with call sites that don't track depth
 covering
 isDefEqBodyWithNameAndType : Name -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
 isDefEqBodyWithNameAndType binderName binderType recur env b1 b2 =
-  -- Create a placeholder for var 0 - use a fresh constant
-  -- Register it with the binder's actual type for proper type inference
-  -- Use counter to make placeholder unique (avoids confusion when same binder name appears multiple times)
-  let counter = env.nextPlaceholder
-      phName = Str "_isDefEqBody" (Str (show counter) binderName)
-      -- Increment counter, add placeholder type for proper type inference
-      env' = addPlaceholder phName binderType ({ nextPlaceholder := S counter } env)
-      -- Register binder alias: inference placeholders with this binder name
-      -- should be treated as equal to phName during comparison
-      env'' = addBinderAlias binderName phName env'
-      -- Substitute BVar 0 with the comparison placeholder
-      e1' = substAndReplacePlaceholders binderName phName b1
-      e2' = substAndReplacePlaceholders binderName phName b2
-  in debugPrint ("isDefEqBodyWithNameAndType: binderName=" ++ show binderName ++ "\n  e1'=" ++ show e1' ++ "\n  e2'=" ++ show e2') $
-     recur env'' e1' e2'
+  -- binderName is ignored - we use depth-based placeholders now
+  isDefEqBodyWithDepth 0 binderType recur env b1 b2
 
 ||| Helper for comparing bodies (Expr 1) - fallback for cases without domain type info
 covering
 isDefEqBodyWithName : Name -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
-isDefEqBodyWithName binderName = isDefEqBodyWithNameAndType binderName (Sort Zero)
+isDefEqBodyWithName binderName recur env b1 b2 =
+  -- binderName is ignored - we use depth-based placeholders now
+  isDefEqBodyWithDepth 0 (Sort Zero) recur env b1 b2
 
 ||| Helper for comparing bodies (Expr 1) - fallback for cases without binder name
 covering
 isDefEqBody : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
-isDefEqBody = isDefEqBodyWithName Anonymous
+isDefEqBody recur env b1 b2 =
+  isDefEqBodyWithDepth 0 (Sort Zero) recur env b1 b2
 
 ||| Try eta expansion: if t is λx.body and s is not a lambda,
 ||| eta-expand s to λx:A. s x where A is the domain of s's type.
@@ -2076,45 +2071,29 @@ isDefEq env e1 e2 = do
       debugPrint ("isDefEqWhnf Const: n1=" ++ show n1 ++ " n2=" ++ show n2) $
       if n1 == n2 && levelListEq ls1 ls2
         then Right True
-        else -- Check if one is an inference placeholder that aliases to the other
-             -- Only applies to placeholders with no level arguments
+        else -- Check if both are comparison placeholders at the same depth
+             -- With de Bruijn indices, same depth = same variable (regardless of counter)
              case (ls1, ls2) of
                ([], []) => Right (areEquivalentPlaceholders n1 n2)
                _ => Right False
       where
-        -- Check if two constant names are equivalent via binder alias or same binder
-        -- This handles:
-        -- 1. n1 is `α.0._local` and n2 is `α.8._isDefEqBody` (via alias lookup)
-        -- 2. n1 is `α.8._isDefEqBody` and n2 is `α.10._isDefEqBody` (same binder, different counters)
+        -- Check if two constant names are equivalent placeholders.
+        -- With de Bruijn depth-based naming, comparison placeholders are equivalent
+        -- if they have the same depth (different counters are fine - they represent
+        -- the same binder at the same nesting level).
         areEquivalentPlaceholders : Name -> Name -> Bool
         areEquivalentPlaceholders c1 c2 =
-          -- Case 1: Both are comparison placeholders with the same binder name
-          case (extractComparisonPlaceholderBinder c1, extractComparisonPlaceholderBinder c2) of
-            (Just binder1, Just binder2) =>
-              let result = binder1 == binder2
-              in debugPrint ("comparison placeholder match: " ++ show binder1 ++ " vs " ++ show binder2 ++ " = " ++ show result) result
-            _ =>
-              -- Case 2: c1 is inference placeholder, c2 is comparison placeholder
-              case extractInferencePlaceholderBinder c1 of
-                Just binderName =>
-                  case lookupBinderAlias binderName env of
-                    Just aliasTarget =>
-                      let result = aliasTarget == c2
-                      in debugPrint ("alias lookup: " ++ show binderName ++ " -> " ++ show aliasTarget ++ " vs " ++ show c2 ++ " = " ++ show result) result
-                    Nothing =>
-                      debugPrint ("no alias for " ++ show binderName) False
-                Nothing =>
-                  -- Case 3: c2 is inference placeholder, c1 is comparison placeholder
-                  case extractInferencePlaceholderBinder c2 of
-                    Just binderName =>
-                      case lookupBinderAlias binderName env of
-                        Just aliasTarget =>
-                          let result = aliasTarget == c1
-                          in debugPrint ("alias lookup (reverse): " ++ show binderName ++ " -> " ++ show aliasTarget ++ " vs " ++ show c1 ++ " = " ++ show result) result
-                        Nothing =>
-                          debugPrint ("no alias (reverse) for " ++ show binderName) False
-                    Nothing =>
-                      debugPrint ("neither is inference placeholder: " ++ show c1 ++ " vs " ++ show c2) False
+          case (extractComparisonPlaceholderDepth c1, extractComparisonPlaceholderDepth c2) of
+            (Just depth1, Just depth2) =>
+              let result = depth1 == depth2
+              in debugPrint ("comparison placeholder depth match: " ++ show depth1 ++ " vs " ++ show depth2 ++ " = " ++ show result) result
+            -- Inference placeholders (from closeWithPlaceholders) use binder names.
+            -- Two inference placeholders with the same base name are equivalent.
+            _ => case (extractPlaceholderBase c1, extractPlaceholderBase c2) of
+                   (Just base1, Just base2) =>
+                     let result = base1 == base2
+                     in debugPrint ("inference placeholder match: " ++ show base1 ++ " vs " ++ show base2 ++ " = " ++ show result) result
+                   _ => debugPrint ("not equivalent placeholders: " ++ show c1 ++ " vs " ++ show c2) False
 
     -- App: check function and arg
     isDefEqWhnf (App f1 a1) (App f2 a2) = do

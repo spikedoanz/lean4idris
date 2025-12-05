@@ -161,6 +161,28 @@ buildMax [] = Zero
 buildMax [x] = x
 buildMax (x :: xs) = Max x (buildMax xs)
 
+||| Add n Succ wrappers to a level
+||| e.g., addOffset 2 (Param u) = Succ (Succ (Param u))
+addOffset : Nat -> Level -> Level
+addOffset Z l = l
+addOffset (S n) l = Succ (addOffset n l)
+
+||| Subtract n Succ wrappers from a level
+||| Uses getOffsetBase to extract offset, then rebuilds with reduced offset
+||| e.g., subtractOffset 1 (Succ (Succ (Param u))) = Succ (Param u)
+subtractOffset : Nat -> Level -> Level
+subtractOffset n l =
+  let (offset, base) = getOffsetBase l
+  in addOffset (minus offset n) base
+
+||| Find the minimum offset (Succ count) across a list of levels
+||| Returns 0 for empty list or if any atom has no Succ wrapper
+findMinOffset : List Level -> Nat
+findMinOffset [] = 0
+findMinOffset (x :: xs) =
+  let (offset, _) = getOffsetBase x
+  in foldl (\acc, l => let (o, _) = getOffsetBase l in min acc o) offset xs
+
 export covering
 simplify : Level -> Level
 simplify Zero = Zero
@@ -174,7 +196,13 @@ simplify (Max l1 l2) =
       nonZero = filter (\x => not (isZero x)) atoms
       -- Sort and deduplicate
       sorted = sortLevels nonZero
-  in buildMax sorted
+      -- Factor out common Succ prefix: max (a+n) (b+n) = (max a b) + n
+      minOff = findMinOffset sorted
+      stripped = if minOff > 0
+                 then map (subtractOffset minOff) sorted
+                 else sorted
+      base = buildMax stripped
+  in addOffset minOff base
 simplify (IMax l1 l2) =
   let l1' = simplify l1
       l2' = simplify l2

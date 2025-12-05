@@ -113,6 +113,7 @@ dominates a b =
 ||| Applies basic normalization rules
 -- Compare levels for canonical ordering
 -- Uses a lexicographic ordering to ensure deterministic Max canonicalization
+public export
 levelLt : Level -> Level -> Bool
 levelLt Zero Zero = False
 levelLt Zero _ = True

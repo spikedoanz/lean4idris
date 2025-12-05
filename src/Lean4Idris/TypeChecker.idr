@@ -215,7 +215,7 @@ Show TCError where
       showExprHead (StringLit _) = "StringLit"
   show (FunctionExpected e) = "function expected: " ++ show e
   show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ show dom ++ ", got " ++ show argTy
-  show (LetTypeMismatch _ _) = "let binding type mismatch"
+  show (LetTypeMismatch expected actual) = "let binding type mismatch: expected " ++ show expected ++ ", got " ++ show actual
   show (UnknownConst n) = "XXXUNKNOWN constant: " ++ show n
   show (WrongNumLevels exp act n) =
     "wrong number of universe levels for " ++ show n ++
@@ -409,8 +409,8 @@ getNthPiDomSubst (S k) [] (Pi _ _ _ cod) =
   -- No more args to substitute, but we still need to continue
   getNthPiDomSubst k [] (believe_me cod)
 getNthPiDomSubst (S k) (arg :: args) (Pi _ _ _ cod) =
-  -- Use subst0Single to substitute the bound variable at ALL depths
-  let result = subst0Single (believe_me cod) (believe_me arg) in
+  -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+  let result = instantiate1 (believe_me cod) (believe_me arg) in
   getNthPiDomSubst k args (believe_me result)
 getNthPiDomSubst _ _ _ = Nothing
 
@@ -564,18 +564,16 @@ whnf env e = whnfFuel 20 e
     ||| For nested applications like (((λ...) a) b), we reduce the innermost
     ||| beta-redex first.
     |||
-    ||| Note: Uses subst0Single instead of subst0 to correctly handle substitution
-    ||| into bodies that contain nested binders. subst0 incorrectly substitutes
-    ||| BVar 0 inside nested lambdas (which refers to the inner binder, not the
-    ||| outer free variable being substituted).
+    ||| Beta reduction: substitute argument for BVar 0 in body, shifting higher indices down.
+    ||| Uses instantiate1 which correctly tracks depth when going under binders.
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
-    whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0Single body arg)
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
     whnfStepCore (App f arg) =
       -- If f is reducible, reduce it and reconstruct
       case whnfStepCore f of
         Just f' => Just (App f' arg)
         Nothing => Nothing
-    whnfStepCore (Let _ _ val body) = Just (subst0Single body val)
+    whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
     whnfStepCore _ = Nothing
 
     ||| Combined step including delta
@@ -585,6 +583,22 @@ whnf env e = whnfFuel 20 e
         Just e' => Just e'
         Nothing => unfoldHead env e
 
+    -- Try reducing the head of an application
+    -- Returns Just if the head reduced, Nothing otherwise
+    reduceAppHead : ClosedExpr -> Maybe ClosedExpr
+    reduceAppHead (App f arg) =
+      case reduceAppHead f of
+        Just f' => Just (App f' arg)
+        Nothing =>
+          -- f didn't reduce via recursion, try all reduction strategies on f
+          case tryProjReduction env f whnfStepWithDelta of
+            Just f' => Just (App f' arg)
+            Nothing =>
+              case unfoldHead env f of
+                Just f' => Just (App f' arg)
+                Nothing => Nothing
+    reduceAppHead _ = Nothing
+
     whnfFuel : Nat -> ClosedExpr -> TC ClosedExpr
     whnfFuel 0 e = Right e  -- out of fuel, return as-is
     whnfFuel (S k) e =
@@ -592,22 +606,26 @@ whnf env e = whnfFuel 20 e
       case whnfStepCore e of
         Just e' => whnfFuel k e'
         Nothing =>
-          -- Then try projection reduction
-          case tryProjReduction env e whnfStepWithDelta of
+          -- Then try reducing the head of an application (for Proj inside App)
+          case reduceAppHead e of
             Just e' => whnfFuel k e'
             Nothing =>
-              -- Then try quotient reduction (if enabled)
-              case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+              -- Then try projection reduction
+              case tryProjReduction env e whnfStepWithDelta of
                 Just e' => whnfFuel k e'
                 Nothing =>
-                  -- Then try iota reduction (recursors)
-                  case tryIotaReduction env e whnfStepWithDelta of
+                  -- Then try quotient reduction (if enabled)
+                  case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
                     Just e' => whnfFuel k e'
                     Nothing =>
-                      -- Then try delta reduction
-                      case unfoldHead env e of
+                      -- Then try iota reduction (recursors)
+                      case tryIotaReduction env e whnfStepWithDelta of
                         Just e' => whnfFuel k e'
-                        Nothing => Right e
+                        Nothing =>
+                          -- Then try delta reduction
+                          case unfoldHead env e of
+                            Just e' => whnfFuel k e'
+                            Nothing => Right e
 
 ||| WHNF without delta reduction (for internal use)
 ||| Used when we want to reduce but not unfold definitions
@@ -617,8 +635,8 @@ whnfCore : ClosedExpr -> TC ClosedExpr
 whnfCore e = whnfCoreFuel 1000 e
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
-    whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0Single body arg)
-    whnfStepCore (Let _ _ val body) = Just (subst0Single body val)
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
+    whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
     whnfStepCore _ = Nothing
 
     whnfCoreFuel : Nat -> ClosedExpr -> TC ClosedExpr
@@ -643,7 +661,8 @@ mutual
   ensureSortOfApp : TCEnv -> ClosedExpr -> List ClosedExpr -> TC Level
   ensureSortOfApp env' ty [] = ensureSortWhnf env' ty
   ensureSortOfApp env' (Pi _ _ dom cod) (arg :: args) =
-    ensureSortOfApp env' (subst0Single cod arg) args
+    -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+    ensureSortOfApp env' (instantiate1 (believe_me cod) arg) args
   ensureSortOfApp env' ty args =
     -- ty is not a Pi but we have more args (or args are empty)
     -- This can happen with type variables - just return a universe level
@@ -725,8 +744,8 @@ mutual
   ensurePiOfApp env' ty [] = ensurePiWhnf env' ty  -- No more args, check if ty is Pi
   ensurePiOfApp env' (Pi _ _ dom cod) (arg :: args) = do
     -- Apply arg to get result type, then reduce and continue
-    -- Use subst0Single to correctly handle nested binders in the codomain
-    let resultTy = subst0Single cod arg
+    -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+    let resultTy = instantiate1 (believe_me cod) arg
     resultTy' <- whnf env' resultTy
     ensurePiOfApp env' resultTy' args
   ensurePiOfApp env' ty args =
@@ -760,8 +779,17 @@ mutual
           -- Try recursively - the type might itself reduce to something useful
           ensurePiWhnf env' ty
         Nothing =>
-          -- Not a placeholder - might be a regular constant that's a type synonym
-          Left (OtherError $ "ensurePiWhnf Const: " ++ show name ++ " not in placeholders")
+          -- Not a placeholder - check if it's a known constant with a definition
+          case lookupDecl name env' of
+            Just decl => case getDeclValue decl of
+              Just val =>
+                -- Unfold the definition and try again
+                let unfolded = instantiateLevelParams (declLevelParams decl) levels val
+                in ensurePiWhnf env' unfolded
+              Nothing =>
+                -- No definition (axiom, inductive, opaque) - this constant cannot be a Pi
+                Left (FunctionExpected expr)
+            Nothing => Left (OtherError $ "ensurePiWhnf Const: " ++ show name ++ " not in placeholders or declarations")
     App _ _ =>
       -- Application that didn't reduce - might be placeholder application
       -- If the head is a placeholder or known constant with a Pi type
@@ -795,7 +823,9 @@ covering
 ensurePi : TCEnv -> ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
 ensurePi env e = do
   e' <- whnf env e
-  ensurePiWhnf env e'
+  case ensurePiWhnf env e' of
+    Left err => debugPrint ("ensurePi failed: original=" ++ show e ++ " whnf=" ++ show e') $ Left err
+    Right result => Right result
 
 ------------------------------------------------------------------------
 -- Type Inference
@@ -805,6 +835,12 @@ ensurePi env e = do
 ||| Uses a unique counter to avoid name collisions
 placeholderName : Name -> Nat -> Name
 placeholderName n counter = Str "_local" (Num counter n)
+
+||| Extract the base binder name from a placeholder constant name
+||| Returns Just the base name if it's a placeholder, Nothing otherwise
+extractPlaceholderBase : Name -> Maybe Name
+extractPlaceholderBase (Str "_local" (Num _ base)) = Just base
+extractPlaceholderBase _ = Nothing
 
 ||| Build a vector of placeholder constants for all context entries
 ||| Returns the updated environment, updated context with placeholders assigned, and the vector of placeholders.
@@ -1021,9 +1057,10 @@ getProjType env structName idx structParams = do
 |||
 ||| Uses a generic version that works on any expression with n free variables.
 -- Beta reduce an application if possible (works on any Expr n)
+-- Uses instantiate1N for proper substitution (shifts outer variables down)
 covering
 betaReduceN : {n : Nat} -> Expr n -> Maybe (Expr n)
-betaReduceN (App (Lam _ _ _ body) arg) = Just (subst0SingleN body arg)
+betaReduceN (App (Lam _ _ _ body) arg) = Just (instantiate1N body arg)
 betaReduceN _ = Nothing
 
 -- Helper functions for normalizeTypeOpenWithEnv
@@ -1060,6 +1097,21 @@ tryDeltaOpenN env e =
       unfolded <- unfoldConstN env name levels
       Just (mkAppN unfolded args)
     _ => Nothing
+
+-- Try projection reduction on an open expression
+-- Works when the struct is a constructor application
+tryProjReductionN : TCEnv -> {n : Nat} -> Expr n -> Maybe (Expr n)
+tryProjReductionN env (Proj structName idx struct) = do
+  -- Get the spine of the struct (after any delta reduction)
+  let (head, args) = getAppSpineN struct
+  -- Check if head is a constructor
+  case head of
+    Const ctorName _ => do
+      (_, _, numParams, numFields) <- getConstructorInfo env ctorName
+      guard (idx < numFields)
+      listNth args (numParams + idx)
+    _ => Nothing
+tryProjReductionN _ _ = Nothing
 
 -- Try iota reduction for Nat.rec when the major premise is a constructor
 -- Nat.rec.{u} motive zeroCase succCase Nat.zero = zeroCase
@@ -1120,11 +1172,19 @@ normalizeTypeOpenWithEnv env e = case betaReduceN e of
               -- Try delta reduction if f' is a constant
               case tryDeltaOpenN env app of
                 Just reduced => normalizeTypeOpenWithEnv env reduced
-                Nothing => Right app
-    Let name ty val body => normalizeTypeOpenWithEnv env (subst0SingleN body val)
+                Nothing =>
+                  -- Try projection reduction if f' is a Proj
+                  case tryProjReductionN env f' of
+                    Just fReduced => normalizeTypeOpenWithEnv env (App fReduced arg')
+                    Nothing => Right app
+    Let name ty val body => normalizeTypeOpenWithEnv env (instantiate1N body val)
     Proj n i e => do
       e' <- normalizeTypeOpenWithEnv env e
-      Right (Proj n i e')
+      let proj = Proj n i e'
+      -- Try to reduce the projection if e' is a constructor application
+      case tryProjReductionN env proj of
+        Just reduced => normalizeTypeOpenWithEnv env reduced
+        Nothing => Right proj
     Sort l => Right (Sort (simplify l))
     -- For constants, try delta reduction
     Const name levels => case unfoldConstN env name levels of
@@ -1153,7 +1213,7 @@ normalizeTypeOpen e = case betaReduceN e of
       case betaReduceN app of
         Just reduced => normalizeTypeOpen reduced
         Nothing => Right app
-    Let name ty val body => normalizeTypeOpen (subst0SingleN body val)
+    Let name ty val body => normalizeTypeOpen (instantiate1N body val)
     Proj n i e => do
       e' <- normalizeTypeOpen e
       Right (Proj n i e')
@@ -1199,6 +1259,56 @@ normalizeType env e = do
     normalizeDeep (Sort l) = Right (Sort (simplify l))
     normalizeDeep e = Right e  -- Const, BVar, NatLit, StringLit
 
+||| Quick alpha-equivalence check for closed expressions.
+||| Compares expressions structurally but ignores binder names.
+||| This is simpler than full isDefEq but handles the common case
+||| where two normalized types differ only in binder names.
+||| Uses a de Bruijn level (counting from outer) to track equivalent placeholders.
+covering export
+alphaEq : ClosedExpr -> ClosedExpr -> Bool
+alphaEq = alphaEqWithEnv [] []
+  where
+    covering
+    alphaEqWithEnv : List Name -> List Name -> ClosedExpr -> ClosedExpr -> Bool
+    alphaEqWithEnv env1 env2 (Sort l1) (Sort l2) = simplify l1 == simplify l2
+    alphaEqWithEnv env1 env2 (Const n1 ls1) (Const n2 ls2) =
+      -- Check if both are placeholder constants at the same level
+      -- First try to extract base names from placeholder format
+      let base1 = extractPlaceholderBase n1
+          base2 = extractPlaceholderBase n2
+          -- Use base name for lookup if available, otherwise use raw name
+          lookupName1 = fromMaybe n1 base1
+          lookupName2 = fromMaybe n2 base2
+          level1 = findLevelNat lookupName1 env1 0
+          level2 = findLevelNat lookupName2 env2 0
+      in case (level1, level2) of
+            (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
+            (Nothing, Nothing) => n1 == n2 && map simplify ls1 == map simplify ls2
+            _ => False
+      where
+        findLevelNat : Name -> List Name -> Nat -> Maybe Nat
+        findLevelNat _ [] _ = Nothing
+        findLevelNat n (x :: xs) idx = if n == x then Just idx else findLevelNat n xs (S idx)
+    alphaEqWithEnv env1 env2 (BVar i1) (BVar i2) = i1 == i2
+    alphaEqWithEnv env1 env2 (App f1 a1) (App f2 a2) =
+      alphaEqWithEnv env1 env2 f1 f2 && alphaEqWithEnv env1 env2 a1 a2
+    -- Lam: ignore binder info (like isDefEqWhnf does) since it's not part of type equality in Lean
+    alphaEqWithEnv env1 env2 (Lam name1 _ ty1 body1) (Lam name2 _ ty2 body2) =
+      alphaEqWithEnv env1 env2 ty1 ty2 &&
+      alphaEqWithEnv (name1 :: env1) (name2 :: env2) (believe_me body1) (believe_me body2)
+    -- Pi: ignore binder info (like isDefEqWhnf does) since it's not part of type equality in Lean
+    alphaEqWithEnv env1 env2 (Pi name1 _ dom1 cod1) (Pi name2 _ dom2 cod2) =
+      alphaEqWithEnv env1 env2 dom1 dom2 &&
+      alphaEqWithEnv (name1 :: env1) (name2 :: env2) (believe_me cod1) (believe_me cod2)
+    alphaEqWithEnv env1 env2 (Let name1 ty1 v1 b1) (Let name2 ty2 v2 b2) =
+      alphaEqWithEnv env1 env2 ty1 ty2 && alphaEqWithEnv env1 env2 v1 v2 &&
+      alphaEqWithEnv (name1 :: env1) (name2 :: env2) (believe_me b1) (believe_me b2)
+    alphaEqWithEnv env1 env2 (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
+      sn1 == sn2 && i1 == i2 && alphaEqWithEnv env1 env2 s1 s2
+    alphaEqWithEnv _ _ (NatLit n1) (NatLit n2) = n1 == n2
+    alphaEqWithEnv _ _ (StringLit s1) (StringLit s2) = s1 == s2
+    alphaEqWithEnv _ _ _ _ = False
+
 mutual
   ||| Infer the type of a closed expression.
   ||| Returns the updated environment (with any new placeholders) and the type.
@@ -1240,23 +1350,27 @@ mutual
   -- App: infer function type, check it's Pi, verify arg type, instantiate with arg
   inferTypeE env (App f arg) = do
     (env1, fTy) <- inferTypeE env f
-    (_, _, dom, cod) <- ensurePi env1 fTy
-    -- Verify argument type matches domain
-    (env2, argTy) <- inferTypeE env1 arg
-    -- First whnf to unfold constants like outParam, then normalizeType for nested beta
-    argTy1 <- whnf env2 argTy
-    argTy' <- normalizeType env2 argTy1
-    dom1 <- whnf env2 dom
-    dom' <- normalizeType env2 dom1
-    if argTy' == dom'
-      then do
-        let resultTy = subst0Single cod arg
-        -- Reduce the result type to handle beta redexes like ((fun _ => C x) y)
-        resultTy' <- whnf env2 resultTy
-        Right (env2, resultTy')
-      else do
-        debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  dom1 (after whnf)=" ++ show dom1 ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTy1 (after whnf)=" ++ show argTy1 ++ "\n  argTy' (after normalize)=" ++ show argTy') $
-          Left (AppTypeMismatch dom' argTy')
+    case ensurePi env1 fTy of
+      Left err => debugPrint ("inferTypeE App: ensurePi failed for f=" ++ show f ++ " arg=" ++ show arg ++ " fTy=" ++ show fTy) $ Left err
+      Right (_, _, dom, cod) => do
+        -- Verify argument type matches domain
+        (env2, argTy) <- inferTypeE env1 arg
+        -- First whnf to unfold constants like outParam, then normalizeType for nested beta
+        argTy1 <- whnf env2 argTy
+        argTy' <- normalizeType env2 argTy1
+        dom1 <- whnf env2 dom
+        dom' <- normalizeType env2 dom1
+        -- Use alphaEq for proper alpha-equivalence (handles different binder names)
+        if alphaEq argTy' dom'
+          then do
+            -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+            let resultTy = instantiate1 (believe_me cod) arg
+            -- Reduce the result type to handle beta redexes like ((fun _ => C x) y)
+            resultTy' <- whnf env2 resultTy
+            Right (env2, resultTy')
+          else do
+            debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  dom1 (after whnf)=" ++ show dom1 ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTy1 (after whnf)=" ++ show argTy1 ++ "\n  argTy' (after normalize)=" ++ show argTy') $
+              Left (AppTypeMismatch dom' argTy')
 
   -- Lam: delegate to inferTypeOpenE which properly handles the body
   inferTypeE env (Lam name bi ty body) = do
@@ -1283,6 +1397,12 @@ mutual
 
   -- StringLit: type is String
   inferTypeE env (StringLit _) = Right (env, Const (Str "String" Anonymous) [])
+
+  -- BVar: should not appear in closed expressions but can occur due to believe_me casts
+  -- This indicates a bug somewhere in the code - we shouldn't be type-checking open expressions
+  -- with inferTypeE
+  inferTypeE env (BVar i) =
+    Left (OtherError $ "inferTypeE: unexpected BVar " ++ show (finToNat i) ++ " in closed expression (should use inferTypeOpenE)")
 
   ||| Convenience wrapper that discards the environment
   export
@@ -1350,23 +1470,24 @@ mutual
   -- App: infer function type, ensure it's Pi, instantiate codomain
   inferTypeOpenE env ctx (App f arg) = do
     (env1, ctx1, fTy) <- inferTypeOpenE env ctx f
-    (_, _, dom, cod) <- ensurePi env1 fTy
-    -- Substitute the argument into the codomain
-    -- We close the argument to get a ClosedExpr for substitution
-    -- Use ctx1 which has placeholders from inferring f's type
-    let (env2, ctx2, argClosed) = closeWithPlaceholders env1 ctx1 arg
-    -- Use subst0Single instead of subst0 to correctly substitute under nested binders
-    -- subst0 only substitutes at the outermost level, but nested Pis need depth tracking
-    let resultTy = subst0Single cod argClosed
-    -- Reduce the result type to handle cases like ((fun _ => C x) y)
-    resultTy' <- whnf env2 resultTy
-    -- Debug: trace Fin.rec applications
-    let _ = case getAppHead f of
-              Just headName => if isFinRecName headName
-                then debugPrint ("App Fin.rec:\n  fTy=" ++ show fTy ++ "\n  dom=" ++ show dom ++ "\n  cod=" ++ show cod ++ "\n  argClosed=" ++ show argClosed ++ "\n  resultTy=" ++ show resultTy ++ "\n  resultTy'=" ++ show resultTy') ()
-                else ()
-              Nothing => ()
-    Right (env2, ctx2, resultTy')
+    case ensurePi env1 fTy of
+      Left err => debugPrint ("inferTypeOpenE App: ensurePi failed for f=" ++ show f ++ " arg=" ++ show arg ++ " fTy=" ++ show fTy ++ " ctxLen=" ++ show (length ctx)) $ Left err
+      Right (_, _, dom, cod) => do
+        -- Substitute the argument into the codomain
+        -- We close the argument to get a ClosedExpr for substitution
+        -- Use ctx1 which has placeholders from inferring f's type
+        let (env2, ctx2, argClosed) = closeWithPlaceholders env1 ctx1 arg
+        -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+        let resultTy = instantiate1 (believe_me cod) argClosed
+        -- Reduce the result type to handle cases like ((fun _ => C x) y)
+        resultTy' <- whnf env2 resultTy
+        -- Debug: trace Fin.rec applications
+        let _ = case getAppHead f of
+                  Just headName => if isFinRecName headName
+                    then debugPrint ("App Fin.rec:\n  fTy=" ++ show fTy ++ "\n  dom=" ++ show dom ++ "\n  cod=" ++ show cod ++ "\n  argClosed=" ++ show argClosed ++ "\n  resultTy=" ++ show resultTy ++ "\n  resultTy'=" ++ show resultTy') ()
+                    else ()
+                  Nothing => ()
+        Right (env2, ctx2, resultTy')
   where
     getAppHead : Expr n -> Maybe Name
     getAppHead (Const n _) = Just n
@@ -1452,9 +1573,16 @@ mutual
     let (env3, ctx3, valClosed) = closeWithPlaceholders env2 ctx2 valExpr
     -- Check value has the declared type
     (env4, ctx4, valTy) <- inferTypeOpenE env3 ctx3 valExpr
+    -- Normalize both types
     tyClosed' <- whnf env4 tyClosed
     valTy' <- whnf env4 valTy
-    if tyClosed' == valTy'
+    tyClosed'' <- normalizeType env4 tyClosed'
+    valTy'' <- normalizeType env4 valTy'
+    -- Convert tyClosed's placeholders to BVars using ctx4 so comparison works
+    -- valTy has BVars from Lam inference, tyClosed has placeholders from closing
+    -- Converting tyClosed to BVars makes them comparable
+    let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed''
+    if alphaEq tyWithBVars valTy''
       then do
         -- Extend context with let binding
         let ctx' = extendCtxLet name tyClosed valClosed ctx4
@@ -1462,7 +1590,7 @@ mutual
         (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
         -- Return ctx4 (not ctx') since ctx' has the extended context entry
         Right (env5, ctx4, bodyTy)
-      else Left (LetTypeMismatch tyClosed valTy)
+      else Left (LetTypeMismatch tyClosed'' valTy'')
 
   -- Proj: infer structure type and get field type
   inferTypeOpenE env ctx (Proj structName idx structExpr) = do
@@ -1653,18 +1781,19 @@ replacePlaceholdersForBinder : Name -> ClosedExpr -> Name -> ClosedExpr
 replacePlaceholdersForBinder targetBinder e sharedName = replacePlaceholdersForBinderN targetBinder e sharedName
 
 ||| Combined substitution and placeholder replacement
-||| Substitutes BVar 0 (at ALL depths) with the comparison placeholder, and replaces any
-||| inference placeholders for the given binder with the comparison placeholder
+||| Substitutes BVar 0 with the comparison placeholder (using instantiate1 for proper
+||| depth tracking), and replaces any inference placeholders for the given binder
+||| with the comparison placeholder
 covering
 substAndReplacePlaceholders : Name -> Name -> Expr 1 -> ClosedExpr
 substAndReplacePlaceholders binderName phName e =
-  -- Use subst0Single instead of subst0 to handle all depths correctly
-  let e' : ClosedExpr = subst0Single e (Const phName [])
+  -- Use instantiate1 for proper beta reduction (shifts outer BVars down)
+  let e' : ClosedExpr = instantiate1 (believe_me e) (Const phName [])
       hasPlaceholder : Bool = containsPlaceholderForBinder binderName e'
       result : ClosedExpr = if hasPlaceholder
                               then replacePlaceholdersForBinder binderName e' phName
                               else e'
-  in result  -- Disable debug output for now
+  in result
 
 ||| Helper for comparing bodies (Expr 1) with binder name and type for placeholder matching
 ||| We compare them by substituting a fresh variable placeholder.
@@ -1675,10 +1804,11 @@ isDefEqBodyWithNameAndType : Name -> ClosedExpr -> (TCEnv -> ClosedExpr -> Close
 isDefEqBodyWithNameAndType binderName binderType recur env b1 b2 =
   -- Create a placeholder for var 0 - use a fresh constant
   -- Register it with the binder's actual type for proper type inference
-  -- Use binder name to make it unique per binding level
-  let phName = Str "_isDefEqBody" binderName
-      -- Add placeholder type for proper type inference
-      env' = addPlaceholder phName binderType env
+  -- Use counter to make placeholder unique (avoids confusion when same binder name appears multiple times)
+  let counter = env.nextPlaceholder
+      phName = Str "_isDefEqBody" (Str (show counter) binderName)
+      -- Increment counter, add placeholder type for proper type inference
+      env' = addPlaceholder phName binderType ({ nextPlaceholder := S counter } env)
       -- Register binder alias: inference placeholders with this binder name
       -- should be treated as equal to phName during comparison
       env'' = addBinderAlias binderName phName env'

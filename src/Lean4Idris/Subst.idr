@@ -20,10 +20,14 @@ import Data.Vect
 ||| Substitute the outermost bound variable (index 0) with the given expression.
 ||| This is the key operation for beta reduction: (λx.body) arg → body[0 := arg]
 |||
+||| NOTE: This simple version does NOT track depth when going under binders.
+||| It should only be used on expressions that don't contain nested binders
+||| referencing the substituted variable. For general use, see instantiate1.
+|||
 ||| The implementation:
 ||| - BVar FZ (index 0): replace with the argument
 ||| - BVar (FS i): shift down by 1 (since we're removing a binder)
-||| - Everything else: recurse, incrementing depth when entering binders
+||| - Everything else: recurse, weakening the argument when entering binders
 public export
 subst0 : Expr (S n) -> Expr n -> Expr n
 subst0 (BVar FZ) arg = arg
@@ -40,6 +44,70 @@ subst0 (Let name ty val body) arg =
 subst0 (Proj sname idx s) arg = Proj sname idx (subst0 s arg)
 subst0 (NatLit k) _ = NatLit k
 subst0 (StringLit s) _ = StringLit s
+
+------------------------------------------------------------------------
+-- Instantiate (proper beta reduction with depth tracking)
+------------------------------------------------------------------------
+
+||| Lift loose bound variables by `n` starting at depth `s`.
+||| Variables with index >= s get increased by n.
+||| This is used to adjust the substitution argument when going under binders.
+covering
+liftLooseBVars : (s : Nat) -> (n : Nat) -> ClosedExpr -> ClosedExpr
+liftLooseBVars s n e = go s e
+  where
+    go : Nat -> ClosedExpr -> ClosedExpr
+    go s (BVar idx) =
+      let i = finToNat idx
+      in if i < s
+           then BVar (believe_me i)  -- Below cutoff, keep same
+           else BVar (believe_me (i + n))  -- At or above cutoff, lift
+    go s (Sort l) = Sort l
+    go s (Const name lvls) = Const name lvls
+    go s (App f x) = App (go s f) (go s x)
+    go s (Lam name bi ty body) =
+      Lam name bi (go s ty) (believe_me (go (S s) (believe_me body)))
+    go s (Pi name bi ty body) =
+      Pi name bi (go s ty) (believe_me (go (S s) (believe_me body)))
+    go s (Let name ty val body) =
+      Let name (go s ty) (go s val) (believe_me (go (S s) (believe_me body)))
+    go s (Proj sname fieldIdx x) = Proj sname fieldIdx (go s x)
+    go s (NatLit k) = NatLit k
+    go s (StringLit str) = StringLit str
+
+||| Instantiate a single variable at depth `d` with the substitution `subst`.
+||| This is the correct operation for beta reduction, tracking depth properly.
+|||
+||| For BVar i:
+||| - If i < d: local variable bound by inner lambda, keep unchanged
+||| - If i = d: the variable being substituted, replace with subst lifted by d
+||| - If i > d: outer free variable, shift down by 1 (i.e., i-1)
+|||
+||| Following lean4lean's instantiate1' implementation.
+covering export
+instantiate1 : ClosedExpr -> ClosedExpr -> ClosedExpr
+instantiate1 e subst = go 0 e
+  where
+    go : Nat -> ClosedExpr -> ClosedExpr
+    go d (BVar idx) =
+      let i = finToNat idx
+      in if i < d
+           then BVar (believe_me i)  -- Local variable, keep unchanged
+           else if i == d
+             then liftLooseBVars 0 d subst  -- The variable being substituted
+             else BVar (believe_me (minus i 1))  -- Outer free variable, shift down
+    go d (Sort l) = Sort l
+    go d (Const name lvls) = Const name lvls
+    go d (App f x) = App (go d f) (go d x)
+    go d (Lam name bi ty body) =
+      Lam name bi (go d ty) (believe_me (go (S d) (believe_me body)))
+    go d (Pi name bi ty body) =
+      Pi name bi (go d ty) (believe_me (go (S d) (believe_me body)))
+    go d (Let name ty val body) =
+      Let name (go d ty) (go d val) (believe_me (go (S d) (believe_me body)))
+    go d (Proj sname fieldIdx x) = Proj sname fieldIdx (go d x)
+    go d (NatLit k) = NatLit k
+    go d (StringLit str) = StringLit str
 
 ||| Substitute universe level parameters in an expression
 public export covering
@@ -158,6 +226,20 @@ subst0Single e arg = goSubstAll 0 [arg] (believe_me e)
 |||
 ||| Uses believe_me internally since we just need to substitute BVar 0
 ||| (at all depths) with the argument, treating all other vars as free.
+|||
+||| NOTE: This does NOT shift outer variables down. Use instantiate1N for
+||| proper beta reduction where variables i > d should become (i-1).
 covering export
 subst0SingleN : {n : Nat} -> Expr (S n) -> Expr n -> Expr n
 subst0SingleN body arg = believe_me (goSubstAll 0 [believe_me arg] (believe_me body))
+
+||| Generalized version of instantiate1 that works at any scope depth.
+||| Given (Expr (S n)) and (Expr n), substitutes variable 0 and shifts outer
+||| variables down by 1.
+|||
+||| This is the correct operation for beta reduction: (λx.body) arg → body[0:=arg]
+||| where variables referring to outer binders are shifted down since we removed
+||| one binder level.
+covering export
+instantiate1N : {n : Nat} -> Expr (S n) -> Expr n -> Expr n
+instantiate1N body arg = believe_me (instantiate1 (believe_me body) (believe_me arg))

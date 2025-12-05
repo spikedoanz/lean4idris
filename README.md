@@ -4,21 +4,23 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Status
 
-- [x] Parser for names, levels, expressions, declarations
-- [x] Well-scoped expressions (indexed by depth)
-- [x] Type inference (`inferType`) for closed terms
-- [x] Type inference (`inferTypeOpen`) for open terms with local context
-- [x] Reduction (`whnf`) - beta, let, delta, iota, projection, and quotient reduction
-- [x] Definitional equality (`isDefEq`) - structural + beta + delta + eta
-- [x] Delta reduction with reducibility hints (abbrev unfolds, opaque doesn't)
-- [x] Eta expansion (λx. f x = f) [x] Iota reduction (recursor computation when major premise is a constructor)
-- [x] Projection reduction (struct.field when struct is a constructor)
-- [x] Quotient reduction (Quot.lift f h (Quot.mk r a) → f a)
-- [x] Universe level normalization (simplify imax, max)
-- [x] Local context for typing under binders
-- [x] Proof irrelevance (proofs of Prop are definitionally equal)
-- [x] Declaration validation (axioms, definitions, theorems)
-- [ ] Completeness.
+- [x] Core features
+  - [x] Parser for names, levels, expressions, declarations
+  - [x] Well-scoped expressions (indexed by depth)
+  - [x] Type inference (`inferType`) for closed terms
+  - [x] Type inference (`inferTypeOpen`) for open terms with local context
+  - [x] Reduction (`whnf`) - beta, let, delta, iota, projection, and quotient reduction
+  - [x] Definitional equality (`isDefEq`) - structural + beta + delta + eta
+  - [x] Delta reduction with reducibility hints (abbrev unfolds, opaque doesn't)
+  - [x] Eta expansion (λx. f x = f) [x] Iota reduction (recursor computation when major premise is a constructor)
+  - [x] Projection reduction (struct.field when struct is a constructor)
+  - [x] Quotient reduction (Quot.lift f h (Quot.mk r a) → f a)
+  - [x] Universe level normalization (simplify imax, max)
+  - [x] Local context for typing under binders
+  - [x] Proof irrelevance (proofs of Prop are definitionally equal)
+  - [x] Declaration validation (axioms, definitions, theorems)
+- [ ] Soundness
+- [ ] Completeness wrt lean4lean.
   - [ ] tier 1
   - [ ] tier 2
   - [ ] tier 3
@@ -32,18 +34,6 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 
 ## Coverage
-
-Type checking coverage on Lean 4 export files:
-
-| Export File       | Decls | Passed | Failed | Coverage |
-|-------------      |--------------|--------|--------|----------|
-| Init.Prelude      | 2036  | 1832 | 204 | 90.0% |
-| Init.Core         | 3748  | 3402 | 346 | 90.8% |
-| Init.Classical    | 8044  | 6577 | 1467 | 81.8% |
-| Init.Data.Nat.Basic | 4586 | 4050 | 536 | 88.3% |
-
-
-## tier 1
 
 ```
 > TODO: this should be automated in CI

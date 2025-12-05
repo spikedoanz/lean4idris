@@ -2,102 +2,212 @@
 
 A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://github.com/leanprover/lean4export) format.
 
-## Goals
-
-### Primary: Soundness
-- [ ] Prove that if lean4idris accepts a declaration, Lean 4 kernel also accepts it
-- [ ] No false positives (accepting invalid proofs)
-
-### Secondary: Completeness
-- [ ] Match lean4lean's acceptance rate on standard library exports
-- [ ] Track coverage across tiers (see below)
-
-### Non-goals (for now)
-- Performance optimization
-- Full Lean 4 toolchain compatibility
-- IDE integration
-
 ## Status
 
-### Implemented Features
 - [x] Parser for names, levels, expressions, declarations
 - [x] Well-scoped expressions (indexed by depth)
 - [x] Type inference (`inferType`) for closed terms
 - [x] Type inference (`inferTypeOpen`) for open terms with local context
-- [x] Reduction (`whnf`) - beta, let, delta, iota, projection, quotient
+- [x] Reduction (`whnf`) - beta, let, delta, iota, projection, and quotient reduction
 - [x] Definitional equality (`isDefEq`) - structural + beta + delta + eta
-- [x] Delta reduction with reducibility hints
-- [x] Eta expansion (λx. f x = f)
-- [x] Iota reduction (recursor computation)
-- [x] Projection reduction (struct.field)
-- [x] Quotient reduction (Quot.lift/ind)
-- [x] Universe level normalization
+- [x] Delta reduction with reducibility hints (abbrev unfolds, opaque doesn't)
+- [x] Eta expansion (λx. f x = f) [x] Iota reduction (recursor computation when major premise is a constructor)
+- [x] Projection reduction (struct.field when struct is a constructor)
+- [x] Quotient reduction (Quot.lift f h (Quot.mk r a) → f a)
+- [x] Universe level normalization (simplify imax, max)
 - [x] Local context for typing under binders
 - [x] Proof irrelevance (proofs of Prop are definitionally equal)
 - [x] Declaration validation (axioms, definitions, theorems)
-- [x] Fuel-based timeout (per declaration)
+- [ ] Completeness.
+  - [ ] tier 1
+  - [ ] tier 2
+  - [ ] tier 3
+  - [ ] tier 4
+  - [ ] tier 5
+  - [ ] tier 6
+  - [ ] tier 7
+  - [ ] tier 8
+  - [ ] tier 9
+  - [ ] tier 10
 
-### Known Limitations
-- Some complex recursive definitions timeout
-- Not all edge cases in universe polymorphism handled
-- See [GitHub Issues](https://github.com/spikedoanz/lean4idris/issues) for blockers
 
 ## Coverage
 
-Tested on lean4idris commit `564756727e377e7fe640b0932dcd690e027cb72d`
+Type checking coverage on Lean 4 export files:
 
-### Tier 1: Init (Core Lean library)
-| File | OK | Fail | Timeout | OK% |
-|------|-----|------|---------|-----|
-| Init.Prelude | 1891 | 145 | 0 | 92.8% |
-| Init.Core | 3465 | 283 | 0 | 92.4% |
-| Init.Classical | 6739 | 1305 | 0 | 83.8% |
-| Init.PropLemmas | 6688 | 1297 | 0 | 83.8% |
-| Init.Data.Nat.Basic | 4164 | 422 | 0 | 90.8% |
-| Init.Data.Nat.Lemmas | 8555 | 2488 | 0 | 77.5% |
-| Init.Data.Int.Basic | 4692 | 516 | 0 | 90.1% |
-| Init.Data.List.Basic | 4897 | 765 | 0 | 86.5% |
-| Init.Data.Array.Basic | 5930 | 1195 | 0 | 83.2% |
-| Init.Data.Char.Basic | 4736 | 584 | 0 | 89.0% |
-| Init.Data.Fin.Basic | 4661 | 548 | 0 | 89.5% |
-| Init.Data.Option.Basic | 3851 | 337 | 0 | 91.9% |
+| Export File       | Decls | Passed | Failed | Coverage |
+|-------------      |--------------|--------|--------|----------|
+| Init.Prelude      | 2036  | 1832 | 204 | 90.0% |
+| Init.Core         | 3748  | 3402 | 346 | 90.8% |
+| Init.Classical    | 8044  | 6577 | 1467 | 81.8% |
+| Init.Data.Nat.Basic | 4586 | 4050 | 536 | 88.3% |
 
-### Tier 2-10: Not yet systematically tested
-See `test/exports/` for available export files.
+
+## tier 1
+
+```
+> TODO: this should be automated in CI
+> should just export it to {githash}_{pathtoexport}.log
+```
+
+```
+tested on 564756727e377e7fe640b0932dcd690e027cb72d
+test/exports/tier01-init/
+test/exports/tier01-init/Init.Classical.export
+    > 6739 passed, 1305 failed
+test/exports/tier01-init/Init.Core.export
+    > 3465 passed, 283 failed
+test/exports/tier01-init/Init.Data.Array.Basic.export
+    > 5930 passed, 1195 failed
+test/exports/tier01-init/Init.Data.Char.Basic.export
+    > 4736 passed, 584 failed
+test/exports/tier01-init/Init.Data.Fin.Basic.export
+    > 4661 passed, 548 failed
+test/exports/tier01-init/Init.Data.Int.Basic.export
+    > 4692 passed, 516 failed
+test/exports/tier01-init/Init.Data.List.Basic.export
+    > 4897 passed, 765 failed
+test/exports/tier01-init/Init.Data.List.Lemmas.export
+test/exports/tier01-init/Init.Data.Nat.Basic.export
+    > 4164 passed, 422 failed
+test/exports/tier01-init/Init.Data.Nat.Lemmas.export
+    > 8555 passed, 2488 failed
+test/exports/tier01-init/Init.Data.Option.Basic.export
+    > 3851 passed, 337 failed
+test/exports/tier01-init/Init.Data.String.Basic.export
+
+test/exports/tier01-init/Init.Data.UInt.Basic.export
+test/exports/tier01-init/Init.Prelude.export
+    > 1891 passed, 145 failed
+test/exports/tier01-init/Init.PropLemmas.export
+    > 6688 passed, 1297 failed
+
+test/exports/tier02-std
+test/exports/tier02-std/Std.Data.DHashMap.export
+test/exports/tier02-std/Std.Data.DTreeMap.export
+test/exports/tier02-std/Std.Data.HashMap.export
+test/exports/tier02-std/Std.Data.HashSet.export
+test/exports/tier02-std/Std.Data.TreeMap.export
+test/exports/tier02-std/Std.Data.TreeSet.export
+test/exports/tier02-std/Std.Sat.CNF.export
+test/exports/tier02-std/Std.Tactic.BVDecide.export
+
+test/exports/tier03-lean
+test/exports/tier03-lean/Lean.Data.Name.export
+test/exports/tier03-lean/Lean.Data.PersistentHashMap.export
+test/exports/tier03-lean/Lean.Data.RBMap.export
+test/exports/tier03-lean/Lean.Declaration.export
+test/exports/tier03-lean/Lean.Elab.Command.export
+test/exports/tier03-lean/Lean.Elab.Term.export
+test/exports/tier03-lean/Lean.Environment.export
+test/exports/tier03-lean/Lean.Expr.export
+test/exports/tier03-lean/Lean.Level.export
+test/exports/tier03-lean/Lean.LocalContext.export
+test/exports/tier03-lean/Lean.Meta.Basic.export
+test/exports/tier03-lean/Lean.Meta.InferType.export
+test/exports/tier03-lean/Lean.Meta.Reduce.export
+test/exports/tier03-lean/Lean.Meta.WHNF.export
+
+test/exports/tier04-batteries-data
+test/exports/tier04-batteries-data/Batteries.Data.Array.Basic.export
+
+test/exports/tier04-batteries-data/Batteries.Data.Array.Lemmas.export
+test/exports/tier04-batteries-data/Batteries.Data.BitVec.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.Fin.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.Fin.Lemmas.export
+test/exports/tier04-batteries-data/Batteries.Data.HashMap.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.Int.export
+test/exports/tier04-batteries-data/Batteries.Data.List.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.List.Lemmas.export
+test/exports/tier04-batteries-data/Batteries.Data.Nat.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.Nat.Lemmas.export
+test/exports/tier04-batteries-data/Batteries.Data.RBMap.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.String.Basic.export
+test/exports/tier04-batteries-data/Batteries.Data.Vector.Basic.export
+
+test/exports/tier05-batteries-tactic
+test/exports/tier05-batteries-tactic/Batteries.Lean.HashMap.export
+test/exports/tier05-batteries-tactic/Batteries.Lean.Meta.Basic.export
+test/exports/tier05-batteries-tactic/Batteries.Lean.Meta.Expr.export
+test/exports/tier05-batteries-tactic/Batteries.Lean.Syntax.export
+test/exports/tier05-batteries-tactic/Batteries.Tactic.Alias.export
+test/exports/tier05-batteries-tactic/Batteries.Tactic.Basic.export
+test/exports/tier05-batteries-tactic/Batteries.Tactic.Exact.export
+test/exports/tier05-batteries-tactic/Batteries.Tactic.Lint.Basic.export
+
+test/exports/tier06-mathlib-data
+test/exports/tier06-mathlib-data/Mathlib.Data.Bool.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.Fin.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.Int.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.Int.Order.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.List.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.Nat.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.Nat.Prime.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Data.Option.Basic.export
+test/exports/tier06-mathlib-data/Mathlib.Logic.Basic.export
+
+test/exports/tier07-mathlib-algebra
+test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Field.Basic.export
+test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Group.Basic.export
+test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Group.Defs.export
+test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Order.Monoid.Basic.export
+test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Ring.Basic.export
+test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Ring.Defs.export
+test/exports/tier07-mathlib-algebra/Mathlib.GroupTheory.Perm.Basic.export
+
+test/exports/tier08-mathlib-analysis
+test/exports/tier08-mathlib-analysis/Mathlib.Analysis.Normed.Field.Basic.export
+test/exports/tier08-mathlib-analysis/Mathlib.Analysis.SpecialFunctions.Pow.Real.export
+test/exports/tier08-mathlib-analysis/Mathlib.Order.Filter.Basic.export
+test/exports/tier08-mathlib-analysis/Mathlib.Topology.Basic.export
+test/exports/tier08-mathlib-analysis/Mathlib.Topology.MetricSpace.Basic.export
+test/exports/tier08-mathlib-analysis/Mathlib.Topology.Order.export
+
+test/exports/tier09-mathlib-category
+test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Category.Basic.export
+test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Functor.Basic.export
+test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Iso.export
+test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Limits.Shapes.Terminal.export
+test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.NatTrans.export
+test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Yoneda.export
+
+test/exports/tier10-mathlib-advanced
+test/exports/tier10-mathlib-advanced/Mathlib.Data.Tree.Basic.export
+test/exports/tier01-init/Init.Data.UInt.Basic.export
+test/exports/tier10-mathlib-advanced/Mathlib.Data.W.Basic.export
+test/exports/tier10-mathlib-advanced/Mathlib.GroupTheory.QuotientGroup.Basic.export
+test/exports/tier10-mathlib-advanced/Mathlib.Logic.Equiv.Basic.export
+test/exports/tier10-mathlib-advanced/Mathlib.SetTheory.Cardinal.Basic.export
+test/exports/tier10-mathlib-advanced/Mathlib.SetTheory.Ordinal.Basic.export
+```
+
+
+Known blocking issues tracked in [GitHub Issues](https://github.com/spikedoanz/lean4idris/issues).
+
+### Running coverage tests
+
+```bash
+# Type check an export file, continue on errors, save full output
+pack run lean4idris -c test/exports/tier01-init/Init.Prelude.export 2>&1 | tee results/Init.Prelude.txt
+
+# Just see the summary
+grep "Summary:" results/Init.Prelude.txt
+
+# See all failures
+grep "FAIL" results/Init.Prelude.txt
+```
 
 ## Build
 
 Requires [pack](https://github.com/stefan-hoeck/idris2-pack).
 
 ```bash
-pack build lean4idris        # build
+pack build lean4idris        # build library
+pack build lean4idris-test   # build tests
 pack run lean4idris-test     # run tests
 ```
 
 ## Usage
-
-### CLI
-
-```bash
-# Default: check all declarations, continue on errors
-lean4idris file.export
-
-# Stop on first error
-lean4idris -e file.export
-
-# Custom fuel limit per declaration (default: 100000)
-lean4idris -f 1000000 file.export
-
-# Verbose error output
-lean4idris -v file.export
-```
-
-Output format (parsable):
-```
-TOTAL 2036 OK 1891 FAIL 145 TIMEOUT 0 OK% 92.8
-```
-
-### Library
 
 ```idris
 import Lean4Idris.Export.Parser
@@ -124,7 +234,6 @@ src/Lean4Idris/
   Subst.idr         -- Substitution operations
   TypeChecker.idr   -- Core type checking (inferType, whnf, isDefEq)
   Pretty.idr        -- Pretty printing
-  Main.idr          -- CLI entry point
   Export/
     Token.idr       -- Export format tokens
     Lexer.idr       -- Tokenizer

@@ -28,8 +28,8 @@ Type checking coverage on Lean 4 export files:
 
 | Export File | Declarations | Passed | Failed | Coverage |
 |-------------|--------------|--------|--------|----------|
-| Init.Prelude | 2036 | 1788 | 248 | 87.8% |
-| Init.Core | 3748 | 3353 | 395 | 89.5% |
+| Init.Prelude | 2036 | 1832 | 204 | 90.0% |
+| Init.Core | 3748 | 3402 | 346 | 90.8% |
 | Init.Classical | 8044 | 6577 | 1467 | 81.8% |
 | Init.Data.Nat.Basic | 4586 | 4050 | 536 | 88.3% |
 

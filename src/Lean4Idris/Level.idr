@@ -212,7 +212,6 @@ simplify (IMax l1 l2) =
                       -- imax 0 u = u (since if u=0 result is 0=u, if u>0 result is max 0 u = u)
                       Zero => l2'
                       _ => if l1' == l2' then l1' else IMax l1' l2'
-       _ => if l1' == l2' then l1' else IMax l1' l2'
 simplify (Param n) = Param n
 
 ||| Check if a name occurs in a level (for occur check)

@@ -70,14 +70,34 @@ command = is '#' <+> some alphaNum
 nat : Lexer
 nat = digits
 
-||| Lexer for identifiers (non-space, non-newline characters that aren't commands, numbers, or dots)
-||| In the export format, identifiers are name segments
-ident : Lexer
-ident = some (pred (\c => not (isSpace c) && c /= '#' && c /= '.'))
-
-||| Lexer for a single dot (used in version numbers)
+||| Lexer for a single dot (used in version numbers like 0.0.0)
 dot : Lexer
 dot = is '.'
+
+||| Lexer for identifiers (non-space, non-# at start, non-dot at start)
+||| In the export format, identifiers are name segments that may contain:
+||| - Regular alphanumeric characters
+||| - Special characters like # mid-identifier (e.g., term#[_,])
+||| - Middle dots · (U+00B7) and other Unicode
+|||
+||| The key constraints are:
+||| - Must not start with # (reserved for commands)
+||| - Must not start with . (reserved for version number separator)
+||| - Must not start with digit (reserved for numbers)
+||| - Can contain # and . after the first character
+|||
+||| Note: Identifiers like `grind·._` work because:
+||| - Starts with 'g' (not #, not ., not digit)
+||| - Contains · (middle-dot, U+00B7) which is allowed anywhere
+||| - Contains . (period) which is allowed after first char
+ident : Lexer
+ident = pred isIdentStart <+> many (pred isIdentCont)
+  where
+    isIdentStart : Char -> Bool
+    isIdentStart c = not (isSpace c) && c /= '#' && c /= '.' && not (isDigit c)
+
+    isIdentCont : Char -> Bool
+    isIdentCont c = not (isSpace c)
 
 ||| Lexer for hex-encoded strings (after #ELS)
 hex : Lexer
@@ -92,6 +112,13 @@ eol : Lexer
 eol = is '\n' <|> exact "\r\n"
 
 ||| The complete token map
+||| Order matters:
+||| - ws first to skip whitespace
+||| - eol for line breaks
+||| - command for #NS, #DEF etc.
+||| - nat for numbers
+||| - dot for version number separators (before ident!)
+||| - ident for everything else
 exportTokenMap : TokenMap ExportToken
 exportTokenMap =
   [ (ws, const $ Tok KIgnore "")

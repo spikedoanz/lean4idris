@@ -1,0 +1,8 @@
+package lean4idris-mathlib-check
+version = 0.1.0
+
+depends = lean4idris
+
+main = Main
+executable = "mathlib-check"
+sourcedir = "."

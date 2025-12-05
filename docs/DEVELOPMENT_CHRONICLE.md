@@ -265,12 +265,49 @@ src/Lean4Idris/
 
 ---
 
+## Phase 4: Exporter Validation
+
+The Exporter agent generates real Lean exports from Mathlib and runs them through lean4idris. This provides ground truth validation beyond adversarial testing.
+
+### Export Tiers
+
+Exports are organized by complexity to identify where the capability boundary lies:
+
+| Tier | Category | Examples | What It Tests |
+|------|----------|----------|---------------|
+| 1 | Core Library | `Init.Core`, `Init.Prelude`, `Init.Data.Nat.Basic` | Basic functionality, no Mathlib dependencies |
+| 2 | Simple Mathlib | `Mathlib.Data.Nat.Basic`, `Mathlib.Logic.Basic` | Simple proofs, basic data structures |
+| 3 | Algebraic Structures | `Mathlib.Algebra.Group.Basic`, `Mathlib.Algebra.Ring.Basic` | Typeclasses, universe polymorphism, hierarchies |
+| 4 | Analysis/Topology | `Mathlib.Topology.Basic`, `Mathlib.Order.Filter.Basic` | Deep dependency chains, complex universe constraints |
+| 5 | Category Theory | `Mathlib.CategoryTheory.Yoneda` | Functors, natural transformations (known failure point) |
+| 6 | Adversarial | `Mathlib.Data.W.Basic`, `Mathlib.SetTheory.Ordinal.Basic` | Nested inductives, heavy universe polymorphism, edge cases |
+
+### Validation Results
+
+| Result | Meaning | Action |
+|--------|---------|--------|
+| Pass | Add to regression suite | Track as supported |
+| Parse fail | Parser bug | Red Team issue |
+| Type check fail (valid export) | Soundness or completeness bug | Blue Team fix |
+| Type check fail (known limitation) | Document the boundary | Scope claim |
+
+### Issues Found
+
+Tracking via GitHub Issues:
+
+| Issue | Description | Status |
+|-------|-------------|--------|
+| #1 | False positive: cyclic universe level detection rejects valid Mathlib exports | Open |
+
+---
+
 ## Current Status
 
-**As of end of day 2024-12-03**:
+**As of 2024-12-04**:
 
 - Implementation: Complete through Milestone 8 (Declaration validation)
 - Soundness bugs: 10 found, 10 fixed
 - Proof holes: 7 remaining
 - Red team: Quiet (Round 4 empty, fuzzing clean)
-- Pending: Exporter validation across Mathlib corpus
+- Exporter: Running against Mathlib corpus
+- GitHub Issues: Tracking bugs from Exporter validation

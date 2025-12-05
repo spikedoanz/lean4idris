@@ -11,6 +11,7 @@ Usage: python tools/proof-graph.py [directory] [-o output.html]
 import re
 import sys
 import json
+import math
 from pathlib import Path
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -64,6 +65,7 @@ def parse_module(file_path: Path) -> Module:
     def_pattern = re.compile(r'^(\w+)\s+.*=')
     data_pattern = re.compile(r'^data\s+(\w+)')
     hole_pattern = re.compile(r'\?(\w+)')
+    believe_me_pattern = re.compile(r'\bbelieve_me\b')
 
     # Known function names in our codebase (for dependency tracking)
     known_names = set()
@@ -95,6 +97,10 @@ def parse_module(file_path: Path) -> Module:
 
         # Type signature
         if match := type_sig_pattern.match(line):
+            # Save previous definition before starting a new one
+            if current_def and current_def.name not in [d.name for d in definitions]:
+                definitions.append(current_def)
+
             name = match.group(1)
             type_sig = match.group(2)
 
@@ -114,13 +120,25 @@ def parse_module(file_path: Path) -> Module:
             )
             continue
 
-        # Definition body - look for holes and calls
-        if current_def and (stripped.startswith(current_def.name) or stripped.startswith('=')):
+        # Definition body - look for holes, believe_me, and calls
+        # Include: lines starting with def name, '=', or indented continuation lines
+        in_def_body = current_def and (
+            stripped.startswith(current_def.name) or
+            stripped.startswith('=') or
+            (line and line[0].isspace())  # indented continuation
+        )
+        if in_def_body:
             # Find holes
             for match in hole_pattern.finditer(line):
                 hole_name = match.group(1)
                 current_def.holes.append(hole_name)
                 current_def.has_holes = True
+
+            # Detect believe_me (treated as unproven)
+            if believe_me_pattern.search(line):
+                current_def.has_holes = True
+                if 'believe_me' not in current_def.holes:
+                    current_def.holes.append('believe_me')
 
             # Find calls to known functions
             words = re.findall(r'\b(\w+)\b', line)
@@ -152,19 +170,38 @@ def parse_module(file_path: Path) -> Module:
         holes=all_holes
     )
 
+def compute_depth(node_id: str, links: list[dict], memo: dict) -> int:
+    """Compute depth of a node (0 = leaf/no dependencies, higher = more dependencies)."""
+    if node_id in memo:
+        return memo[node_id]
+
+    # Find all nodes this node depends on (outgoing "calls" or "imports" links)
+    dependencies = [l['target'] for l in links
+                   if l['source'] == node_id and l['type'] in ('calls', 'imports')]
+
+    if not dependencies:
+        memo[node_id] = 0
+        return 0
+
+    max_dep_depth = max(compute_depth(dep, links, memo) for dep in dependencies)
+    memo[node_id] = max_dep_depth + 1
+    return memo[node_id]
+
 def build_dependency_graph(modules: list[Module]) -> dict:
     """Build a graph structure for D3.js visualization."""
     nodes = []
     links = []
     node_ids = {}
 
-    # Color scheme
+    # Color scheme: green = proven, white = unproven/has holes
     colors = {
-        'module': '#e94560',
-        'data': '#4ecca3',
-        'function': '#00adb5',
-        'lemma': '#ffd369',
-        'hole': '#ff6b6b',
+        'module': '#6b7280',      # gray for modules
+        'data': '#8b5cf6',        # purple for data types
+        'function': '#22c55e',    # green for proven functions
+        'function_unproven': '#ffffff',  # white for unproven
+        'lemma': '#22c55e',       # green for proven lemmas
+        'lemma_unproven': '#ffffff',     # white for unproven
+        'hole': '#ef4444',        # red for holes
     }
 
     # Add module nodes
@@ -178,7 +215,7 @@ def build_dependency_graph(modules: list[Module]) -> dict:
             'fullName': mod.name,
             'type': 'module',
             'color': colors['module'],
-            'size': 20 + len(mod.definitions) * 2,
+            'size': 8 + math.sqrt(len(mod.definitions)) * 4,  # sqrt scaling
             'holes': len(mod.holes),
             'file': mod.file,
         })
@@ -190,18 +227,25 @@ def build_dependency_graph(modules: list[Module]) -> dict:
             node_ids[f"{mod.name}.{defn.name}"] = node_id
             node_ids[defn.name] = node_id  # Also index by short name
 
+            # Choose color based on proof status
+            if defn.has_holes:
+                color = colors.get(f'{defn.kind}_unproven', colors['function_unproven'])
+            else:
+                color = colors.get(defn.kind, colors['function'])
+
             nodes.append({
                 'id': node_id,
                 'label': defn.name,
                 'fullName': f"{mod.name}.{defn.name}",
                 'type': defn.kind,
-                'color': colors.get(defn.kind, colors['function']),
-                'size': 8 + len(defn.calls) * 2,
+                'color': color,
+                'size': 4 + math.sqrt(len(defn.calls) + 1) * 3,  # sqrt scaling like Mathlib
                 'hasHoles': defn.has_holes,
                 'holes': defn.holes,
                 'line': defn.line,
                 'file': defn.file,
                 'typeSig': defn.type_sig[:50] + ('...' if len(defn.type_sig) > 50 else ''),
+                'proven': not defn.has_holes,
             })
 
             # Link to parent module
@@ -263,6 +307,20 @@ def build_dependency_graph(modules: list[Module]) -> dict:
                         'type': 'calls',
                     })
 
+    # Compute depth for each node (for hierarchical layout)
+    # Depth = how many layers of dependencies below this node
+    memo = {}
+    # Build simple adjacency for depth computation (using node IDs directly)
+    simple_links = [{'source': l['source'], 'target': l['target'], 'type': l['type']}
+                    for l in links]
+
+    for node in nodes:
+        node['depth'] = compute_depth(node['id'], simple_links, memo)
+
+    max_depth = max((n['depth'] for n in nodes), default=0)
+    for node in nodes:
+        node['maxDepth'] = max_depth
+
     return {'nodes': nodes, 'links': links}
 
 def generate_html(graph: dict, modules: list[Module]) -> str:
@@ -282,14 +340,16 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         :root {{
-            --bg: #1a1a2e;
-            --bg-light: #16213e;
-            --text: #eee;
-            --text-dim: #888;
-            --accent: #e94560;
-            --green: #4ecca3;
-            --yellow: #ffd369;
-            --blue: #00adb5;
+            --bg: #000000;
+            --bg-light: #111111;
+            --bg-card: #1a1a1a;
+            --text: #f0f0f0;
+            --text-dim: #666;
+            --green: #22c55e;
+            --white: #ffffff;
+            --red: #ef4444;
+            --purple: #8b5cf6;
+            --gray: #6b7280;
         }}
 
         * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -310,42 +370,56 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
             position: fixed;
             top: 20px;
             left: 20px;
-            background: var(--bg-light);
-            padding: 15px;
-            border-radius: 8px;
+            background: var(--bg-card);
+            padding: 15px 20px;
+            border-radius: 12px;
+            border: 1px solid #333;
             z-index: 100;
-            max-width: 280px;
+            max-width: 300px;
+            backdrop-filter: blur(10px);
         }}
 
         .controls h1 {{
-            font-size: 1.2em;
-            color: var(--accent);
-            margin-bottom: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 12px;
         }}
 
         .stats {{
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
+            gap: 8px;
             margin-bottom: 15px;
         }}
 
         .stat {{
             text-align: center;
-            padding: 8px;
-            background: var(--bg);
-            border-radius: 4px;
+            padding: 10px 8px;
+            background: var(--bg-light);
+            border-radius: 8px;
+            border: 1px solid #222;
         }}
 
         .stat .num {{
-            font-size: 1.5em;
-            font-weight: bold;
-            color: var(--blue);
+            font-size: 1.4em;
+            font-weight: 600;
+            color: var(--text);
+        }}
+
+        .stat.proven .num {{
+            color: var(--green);
+        }}
+
+        .stat.unproven .num {{
+            color: var(--white);
         }}
 
         .stat .label {{
-            font-size: 0.75em;
+            font-size: 0.7em;
             color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }}
 
         .legend {{
@@ -370,37 +444,54 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
 
         .tooltip {{
             position: fixed;
-            background: var(--bg-light);
-            border: 1px solid var(--accent);
-            padding: 10px 15px;
-            border-radius: 6px;
+            background: var(--bg-card);
+            border: 1px solid #444;
+            padding: 12px 16px;
+            border-radius: 8px;
             pointer-events: none;
             z-index: 200;
-            max-width: 300px;
+            max-width: 320px;
             display: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         }}
 
         .tooltip h3 {{
-            color: var(--yellow);
-            font-family: monospace;
-            margin-bottom: 5px;
+            color: var(--text);
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 0.95em;
+            margin-bottom: 6px;
         }}
 
         .tooltip .type {{
             color: var(--text-dim);
+            font-size: 0.8em;
+        }}
+
+        .tooltip .status {{
+            margin-top: 6px;
             font-size: 0.85em;
         }}
 
+        .tooltip .status.proven {{
+            color: var(--green);
+        }}
+
+        .tooltip .status.unproven {{
+            color: var(--white);
+        }}
+
         .tooltip .holes {{
-            color: var(--accent);
+            color: var(--red);
             margin-top: 5px;
+            font-size: 0.85em;
         }}
 
         .tooltip code {{
             background: var(--bg);
-            padding: 2px 5px;
-            border-radius: 3px;
-            font-size: 0.85em;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            color: var(--text-dim);
         }}
 
         .node {{
@@ -412,24 +503,25 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
         }}
 
         .link {{
-            stroke-opacity: 0.4;
+            stroke-opacity: 0.3;
         }}
 
         .link.imports {{
-            stroke: var(--accent);
-            stroke-dasharray: 5,5;
+            stroke: var(--gray);
+            stroke-dasharray: 4,4;
         }}
 
         .link.contains {{
-            stroke: var(--text-dim);
+            stroke: #333;
         }}
 
         .link.calls {{
-            stroke: var(--blue);
+            stroke: #444;
         }}
 
         .link.has_hole {{
-            stroke: #ff6b6b;
+            stroke: var(--red);
+            stroke-opacity: 0.5;
             stroke-dasharray: 3,3;
         }}
 
@@ -440,23 +532,26 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
         }}
 
         .filter-btn {{
-            background: var(--bg);
-            border: 1px solid var(--text-dim);
-            color: var(--text);
-            padding: 5px 10px;
-            border-radius: 4px;
+            background: var(--bg-light);
+            border: 1px solid #333;
+            color: var(--text-dim);
+            padding: 6px 12px;
+            border-radius: 6px;
             cursor: pointer;
-            font-size: 0.8em;
+            font-size: 0.75em;
             margin: 2px;
+            transition: all 0.15s;
         }}
 
         .filter-btn:hover {{
-            border-color: var(--accent);
+            border-color: #555;
+            color: var(--text);
         }}
 
         .filter-btn.active {{
-            background: var(--accent);
-            border-color: var(--accent);
+            background: var(--green);
+            border-color: var(--green);
+            color: #000;
         }}
 
         .filters {{
@@ -466,52 +561,47 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
 </head>
 <body>
     <div class="controls">
-        <h1>🔗 Proof Dependency Graph</h1>
+        <h1>Proof Dependency Graph</h1>
         <div class="stats">
+            <div class="stat proven">
+                <div class="num" id="proven-count">0</div>
+                <div class="label">Proven</div>
+            </div>
+            <div class="stat unproven">
+                <div class="num" id="unproven-count">0</div>
+                <div class="label">Unproven</div>
+            </div>
             <div class="stat">
                 <div class="num">{len(modules)}</div>
                 <div class="label">Modules</div>
             </div>
             <div class="stat">
-                <div class="num">{total_defs}</div>
-                <div class="label">Definitions</div>
-            </div>
-            <div class="stat">
                 <div class="num">{total_holes}</div>
                 <div class="label">Holes</div>
-            </div>
-            <div class="stat">
-                <div class="num" id="visible-count">{len(graph['nodes'])}</div>
-                <div class="label">Visible</div>
             </div>
         </div>
         <div class="filters">
             <button class="filter-btn active" data-type="all">All</button>
+            <button class="filter-btn" data-type="proven">Proven</button>
+            <button class="filter-btn" data-type="unproven">Unproven</button>
             <button class="filter-btn" data-type="module">Modules</button>
-            <button class="filter-btn" data-type="lemma">Lemmas</button>
-            <button class="filter-btn" data-type="hole">Holes</button>
-            <button class="filter-btn" data-type="with-holes">With Holes</button>
         </div>
         <div class="legend">
             <div class="legend-item">
-                <div class="legend-dot" style="background: #e94560"></div>
-                <span>Module</span>
+                <div class="legend-dot" style="background: #22c55e"></div>
+                <span>Proven</span>
             </div>
             <div class="legend-item">
-                <div class="legend-dot" style="background: #4ecca3"></div>
+                <div class="legend-dot" style="background: #ffffff; border: 1px solid #666"></div>
+                <span>Unproven</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background: #8b5cf6"></div>
                 <span>Data</span>
             </div>
             <div class="legend-item">
-                <div class="legend-dot" style="background: #00adb5"></div>
-                <span>Function</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-dot" style="background: #ffd369"></div>
-                <span>Lemma</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-dot" style="background: #ff6b6b"></div>
-                <span>Hole</span>
+                <div class="legend-dot" style="background: #6b7280"></div>
+                <span>Module</span>
             </div>
         </div>
     </div>
@@ -547,24 +637,45 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
             .attr("viewBox", "0 -5 10 10")
             .attr("refX", 20)
             .attr("refY", 0)
-            .attr("markerWidth", 6)
-            .attr("markerHeight", 6)
+            .attr("markerWidth", 5)
+            .attr("markerHeight", 5)
             .attr("orient", "auto")
             .append("path")
             .attr("fill", d => {{
-                if (d === "imports") return "#e94560";
-                if (d === "calls") return "#00adb5";
-                if (d === "has_hole") return "#ff6b6b";
-                return "#888";
+                if (d === "imports") return "#6b7280";
+                if (d === "calls") return "#444";
+                if (d === "has_hole") return "#ef4444";
+                return "#333";
             }})
             .attr("d", "M0,-5L10,0L0,5");
 
-        // Force simulation
+        // Count proven/unproven
+        const provenCount = graphData.nodes.filter(d => d.proven === true).length;
+        const unprovenCount = graphData.nodes.filter(d => d.proven === false).length;
+        document.getElementById("proven-count").textContent = provenCount;
+        document.getElementById("unproven-count").textContent = unprovenCount;
+
+        // Calculate max depth for vertical spacing
+        const maxDepth = Math.max(...graphData.nodes.map(d => d.depth || 0));
+        const verticalSpacing = height / (maxDepth + 2);
+
+        // Custom force to push nodes to their depth level (top = highest depth)
+        function forceY(alpha) {{
+            for (const node of graphData.nodes) {{
+                // Higher depth = higher on screen (lower y value)
+                // depth 0 (leaves) at bottom, max depth (roots) at top
+                const targetY = 80 + (maxDepth - (node.depth || 0)) * verticalSpacing;
+                node.vy += (targetY - node.y) * alpha * 0.3;
+            }}
+        }}
+
+        // Force simulation with hierarchical Y positioning
         const simulation = d3.forceSimulation(graphData.nodes)
-            .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(80))
-            .force("charge", d3.forceManyBody().strength(-200))
-            .force("center", d3.forceCenter(width / 2, height / 2))
-            .force("collision", d3.forceCollide().radius(d => d.size + 5));
+            .force("link", d3.forceLink(graphData.links).id(d => d.id).distance(100).strength(0.3))
+            .force("charge", d3.forceManyBody().strength(-300))
+            .force("x", d3.forceX(width / 2).strength(0.05))
+            .force("y", forceY)
+            .force("collision", d3.forceCollide().radius(d => d.size + 10));
 
         // Draw links
         const link = g.append("g")
@@ -608,6 +719,11 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
             html += `<div class="type">${{d.type}}</div>`;
             if (d.typeSig) {{
                 html += `<div><code>${{d.typeSig}}</code></div>`;
+            }}
+            if (d.proven !== undefined) {{
+                const statusClass = d.proven ? 'proven' : 'unproven';
+                const statusText = d.proven ? '✓ Proven' : '○ Unproven';
+                html += `<div class="status ${{statusClass}}">${{statusText}}</div>`;
             }}
             if (d.holes && d.holes.length > 0) {{
                 html += `<div class="holes">Holes: ${{d.holes.map(h => '?' + h).join(', ')}}</div>`;
@@ -668,30 +784,16 @@ def generate_html(graph: dict, modules: list[Module]) -> str:
 
                 const filterType = btn.dataset.type;
 
-                node.style("opacity", d => {{
-                    if (filterType === "all") return 1;
-                    if (filterType === "with-holes") return d.hasHoles || d.type === "hole" ? 1 : 0.1;
-                    return d.type === filterType ? 1 : 0.1;
-                }});
-
-                label.style("opacity", d => {{
-                    if (filterType === "all") return 1;
-                    if (filterType === "with-holes") return d.hasHoles || d.type === "hole" ? 1 : 0.1;
-                    return d.type === filterType ? 1 : 0.1;
-                }});
-
-                link.style("opacity", d => {{
-                    if (filterType === "all") return 0.4;
-                    return 0.1;
-                }});
-
-                // Update visible count
-                let count = graphData.nodes.filter(d => {{
+                const isVisible = (d) => {{
                     if (filterType === "all") return true;
-                    if (filterType === "with-holes") return d.hasHoles || d.type === "hole";
+                    if (filterType === "proven") return d.proven === true;
+                    if (filterType === "unproven") return d.proven === false;
                     return d.type === filterType;
-                }}).length;
-                document.getElementById("visible-count").textContent = count;
+                }};
+
+                node.style("opacity", d => isVisible(d) ? 1 : 0.08);
+                label.style("opacity", d => isVisible(d) ? 1 : 0.08);
+                link.style("opacity", filterType === "all" ? 0.3 : 0.05);
             }});
         }});
     </script>

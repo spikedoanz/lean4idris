@@ -1,0 +1,36 @@
+0.0.0
+1 #NS 0 Nat
+2 #NS 1 zero
+3 #NS 1 succ
+4 #NS 1 rec
+5 #NS 0 motive
+6 #NS 0 n
+1 #US 0
+0 #ES 0
+1 #ES 1
+2 #EC 1
+3 #EC 2
+4 #EC 3
+5 #EP #BD 6 2 1
+6 #EV 0
+7 #EA 6 3
+8 #EP #BD 6 2 2
+9 #EV 0
+10 #EV 1
+11 #EA 10 9
+12 #EV 2
+13 #EA 12 4
+14 #EA 13 9
+15 #EP #BD 6 11 14
+16 #EP #BD 6 8 15
+17 #EP #BD 6 7 16
+18 #EP #BD 5 5 17
+19 #EV 0
+20 #EV 1
+21 #EV 2
+#IND 1 1 0 1 0 0 0 1 1 2 2 3
+#CTOR 2 2 1 0 0 0
+#CTOR 3 8 1 1 0 1
+0 #RR 2 0 20
+1 #RR 3 5 21
+#REC 4 18 1 1 0 0 1 2 2 0 1 0

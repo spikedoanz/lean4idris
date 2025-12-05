@@ -1,3 +1,6 @@
 lean4lean/
 lean4export/
 build/
+# Large Lean exports (use scripts to regenerate)
+test/exports/
+tools/mathlib-exporter/

@@ -1,0 +1,33 @@
+0.0.0
+1 #NS 0 klu
+2 #NS 1 lgevufuk
+3 #NS 0 ur
+1 #UIM 0 0
+2 #UP 9
+3 #UP 3
+4 #UIM 1 3
+5 #UIM 4 1
+6 #UIM 0 4
+7 #US 3
+8 #UP 3
+0 #EC 1
+1 #EL #BC 2 0 0
+2 #EC 3
+3 #EL #BC 3 1 1
+4 #EL #BI 3 2 3
+5 #EV 0
+6 #EL #BC 1 5 5
+7 #EP #BS 1 4 4
+8 #EL #BI 3 1 6
+9 #ES 0
+10 #EV 8
+11 #EC 1
+12 #EP #BC 1 10 8
+13 #EV 3
+14 #EV 5
+15 #ES 3
+16 #EP #BI 1 13 6
+17 #EA 9 16
+#IND 1 0 0 0 0 0 0 1 1 0
+#DEF 1 2 1 N 3
+#DEF 2 7 6 O 3

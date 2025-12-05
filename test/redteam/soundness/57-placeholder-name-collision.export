@@ -1,0 +1,16 @@
+0.0.0
+1 #NS 0 _local
+2 #NI 1 0
+3 #NS 2 _local
+4 #NS 0 Nat
+5 #NS 0 bad
+1 #US 0
+0 #ES 0
+1 #ES 1
+2 #EC 4
+3 #EC 3
+4 #EV 0
+5 #EL #BD 0 2 4
+6 #EP #BD 0 2 2
+#AX 4 1
+#DEF 5 6 5 A

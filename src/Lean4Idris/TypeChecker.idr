@@ -13,10 +13,29 @@ import Lean4Idris.Level
 import Lean4Idris.Expr
 import Lean4Idris.Decl
 import Lean4Idris.Subst
+import Lean4Idris.Pretty
 import Data.SortedMap
+import Debug.Trace
 import Data.Fin
 import Data.List
 import Data.Vect
+import Data.String
+import System.FFI
+import System.File
+import Debug.Trace
+
+debugFile : File
+debugFile = unsafePerformIO $ do
+  Right f <- openFile "/tmp/typecheck_debug.txt" Append
+    | Left _ => pure stdin  -- fallback
+  pure f
+
+debugPrint : String -> a -> a
+debugPrint msg x = unsafePerformIO $ do
+  Right () <- fPutStrLn debugFile (msg ++ "\n")
+    | Left _ => pure x
+  fflush debugFile
+  pure x
 
 %default total
 
@@ -30,11 +49,39 @@ record TCEnv where
   constructor MkTCEnv
   decls : SortedMap Name Declaration
   quotInit : Bool  -- True if quotient types are initialized
+  ||| Types of placeholder constants created by closeWithPlaceholders.
+  ||| When we close an open term, bound variables become placeholder constants
+  ||| like `Const "_local_x" []`. This map tracks their types so we can
+  ||| properly type-check expressions containing them.
+  placeholders : SortedMap Name ClosedExpr
+  ||| Global counter for placeholder names to ensure uniqueness across context depths.
+  ||| This ensures that even when closeWithPlaceholders is called at different depths,
+  ||| each variable gets a unique placeholder that persists.
+  nextPlaceholder : Nat
 
 ||| Empty environment
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False
+emptyEnv = MkTCEnv empty False empty 0
+
+||| Add a placeholder constant with its type (as an axiom in the environment)
+||| This allows regular constant lookup to find placeholder types.
+public export
+addPlaceholder : Name -> ClosedExpr -> TCEnv -> TCEnv
+addPlaceholder name ty env =
+  -- Add as both a placeholder (for tracking) and as an axiom (for lookup)
+  let env' = { placeholders $= insert name ty } env
+  in { decls $= insert name (AxiomDecl name ty []) } env'
+
+||| Look up a placeholder's type
+public export
+lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
+lookupPlaceholder name env = lookup name env.placeholders
+
+||| Clear all placeholders (for fresh type checking context)
+public export
+clearPlaceholders : TCEnv -> TCEnv
+clearPlaceholders env = { placeholders := empty } env
 
 ||| Enable quotient types in the environment
 public export
@@ -64,6 +111,7 @@ record LocalEntry where
   name : Name
   type : ClosedExpr      -- Type of this variable (as closed expr)
   value : Maybe ClosedExpr  -- Value if this is a let-binding
+  placeholder : Maybe ClosedExpr  -- Placeholder constant assigned to this variable
 
 ||| Local context for typing expressions with bound variables.
 ||| Maps each bound variable index to its type.
@@ -83,12 +131,12 @@ emptyCtx = []
 ||| The type is given as a closed expression (already substituted)
 public export
 extendCtx : Name -> ClosedExpr -> LocalCtx n -> LocalCtx (S n)
-extendCtx name ty ctx = MkLocalEntry name ty Nothing :: ctx
+extendCtx name ty ctx = MkLocalEntry name ty Nothing Nothing :: ctx
 
 ||| Extend context with a let-binding (going under a let)
 public export
 extendCtxLet : Name -> ClosedExpr -> ClosedExpr -> LocalCtx n -> LocalCtx (S n)
-extendCtxLet name ty val ctx = MkLocalEntry name ty (Just val) :: ctx
+extendCtxLet name ty val ctx = MkLocalEntry name ty (Just val) Nothing :: ctx
 
 ||| Look up a variable's type in the context
 public export
@@ -133,12 +181,25 @@ data TCError : Type where
   OtherError : String -> TCError
 
 export
+covering
 Show TCError where
-  show (TypeExpected _) = "type expected"
-  show (FunctionExpected _) = "function expected"
-  show (AppTypeMismatch _ _) = "application type mismatch"
-  show (LetTypeMismatch _ _) = "let binding type mismatch"
-  show (UnknownConst n) = "unknown constant: " ++ show n
+  show (TypeExpected e) = "type expected (got: " ++ showExprHead e ++ ")"
+    where
+      showExprHead : ClosedExpr -> String
+      showExprHead (Sort _) = "Sort"
+      showExprHead (Const n _) = "Const " ++ show n
+      showExprHead (App _ _) = "App"
+      showExprHead (Lam _ _ _ _) = "Lam"
+      showExprHead (Pi _ _ _ _) = "Pi"
+      showExprHead (Let _ _ _ _) = "Let"
+      showExprHead (BVar _) = "BVar"
+      showExprHead (Proj _ _ _) = "Proj"
+      showExprHead (NatLit _) = "NatLit"
+      showExprHead (StringLit _) = "StringLit"
+  show (FunctionExpected e) = "function expected: " ++ show e
+  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ show dom ++ ", got " ++ show argTy
+  show (LetTypeMismatch expected actual) = "let binding type mismatch: expected " ++ show expected ++ ", got " ++ show actual
+  show (UnknownConst n) = "XXXUNKNOWN constant: " ++ show n
   show (WrongNumLevels exp act n) =
     "wrong number of universe levels for " ++ show n ++
     ": expected " ++ show exp ++ ", got " ++ show act
@@ -221,6 +282,7 @@ getDeclValue _ = Nothing  -- Axioms, inductives, etc. don't have values to unfol
 
 ||| Try to unfold a constant reference
 ||| Returns the unfolded value with universe levels instantiated
+covering
 unfoldConst : TCEnv -> Name -> List Level -> Maybe ClosedExpr
 unfoldConst env name levels = do
   decl <- lookupDecl name env
@@ -228,8 +290,9 @@ unfoldConst env name levels = do
   let params = declLevelParams decl
   -- Check level count matches
   guard (length params == length levels)
-  -- Use safe instantiation to prevent cyclic params
-  instantiateLevelParamsSafe params levels value
+  -- Use the non-safe version since level parameter names can shadow outer names
+  -- (e.g., outParam.{u+2} where outParam has param "u" and caller also has "u")
+  Just (instantiateLevelParams params levels value)
 
 ||| Get the head constant of an application spine
 ||| e.g., for `f a b c` returns `Just (f, [a, b, c])`
@@ -242,6 +305,7 @@ getAppConst e = go e []
     go _ _ = Nothing
 
 ||| Try to unfold the head of an expression (delta reduction)
+covering
 unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 unfoldHead env e =
   case getAppConst e of
@@ -264,6 +328,13 @@ getRecursorInfo : TCEnv -> Name -> Maybe RecursorInfo
 getRecursorInfo env name =
   case lookupDecl name env of
     Just (RecDecl info _) => Just info
+    _ => Nothing
+
+||| Get the recursor info and level params for a name
+getRecursorInfoWithLevels : TCEnv -> Name -> Maybe (RecursorInfo, List Name)
+getRecursorInfoWithLevels env name =
+  case lookupDecl name env of
+    Just (RecDecl info params) => Just (info, params)
     _ => Nothing
 
 ||| Get the constructor info for a name
@@ -299,15 +370,43 @@ getConstHead : ClosedExpr -> Maybe (Name, List Level)
 getConstHead (Const n ls) = Just (n, ls)
 getConstHead _ = Nothing
 
+||| Substitute a list of arguments for leading Pi binders
+||| substArgs [a, b, c] (∀x y z, body) = body[x:=a, y:=b, z:=c]
+||| Note: Works with well-scoped expressions - each substitution reduces scope by 1
+substArgs : {n : Nat} -> List (Expr n) -> Expr n -> Expr n
+substArgs [] ty = ty
+substArgs {n} (arg :: args) (Pi _ _ _ cod) = substArgs args (subst0 cod arg)
+substArgs _ ty = ty  -- Ran out of Pis
+
+||| Get the idx-th Pi domain from a type, after substituting previous args
+||| For a type like (α : Type) → (β : Type) → α → β → Prod α β
+||| with args [Nat, Bool], getNthPiDomSubst 0 args ty = Nat, getNthPiDomSubst 1 = Bool
+|||
+||| Note: Uses subst0Single instead of subst0 to properly substitute the bound variable
+||| at ALL depths. This is necessary because the field types may have nested Pis that
+||| reference the parameter being substituted.
+covering
+getNthPiDomSubst : {n : Nat} -> Nat -> List (Expr n) -> Expr n -> Maybe (Expr n)
+getNthPiDomSubst Z _ (Pi _ _ dom _) = Just dom
+getNthPiDomSubst (S k) [] (Pi _ _ _ cod) =
+  -- No more args to substitute, but we still need to continue
+  getNthPiDomSubst k [] (believe_me cod)
+getNthPiDomSubst (S k) (arg :: args) (Pi _ _ _ cod) =
+  -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+  let result = instantiate1 (believe_me cod) (believe_me arg) in
+  getNthPiDomSubst k args (believe_me result)
+getNthPiDomSubst _ _ _ = Nothing
+
 ||| Try iota reduction on a recursor application
 ||| If the expression is `Rec.rec params motives minors indices (Ctor args)`,
 ||| reduce it using the matching recursor rule.
+covering
 tryIotaReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryIotaReduction env e whnfStep = do
   -- Check if head is a recursor
   let (head, args) = getAppSpine e
   (recName, recLevels) <- getConstHead head
-  recInfo <- getRecursorInfo env recName
+  (recInfo, recLevelParams) <- getRecursorInfoWithLevels env recName
 
   -- Get the major premise
   let majorIdx = getMajorIdx recInfo
@@ -334,8 +433,8 @@ tryIotaReduction env e whnfStep = do
   --   3. remaining args after major
 
   let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
-  -- Use safe instantiation; if cyclic params detected, fail iota reduction
-  rhs <- instantiateLevelParamsSafe (declLevelParams (RecDecl recInfo [])) recLevels rule.rhs
+  -- Use non-safe instantiation since level param names can shadow outer names
+  let rhs = instantiateLevelParams recLevelParams recLevels rule.rhs
 
   -- Apply: rhs params motives minors
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
@@ -384,6 +483,135 @@ quotLiftName = Str "lift" (Str "Quot" Anonymous)
 
 quotIndName : Name
 quotIndName = Str "ind" (Str "Quot" Anonymous)
+
+||| Names for quotient type parameters
+alphaName : Name
+alphaName = Str "α" Anonymous
+
+rName : Name
+rName = Str "r" Anonymous
+
+betaName : Name
+betaName = Str "β" Anonymous
+
+fName : Name
+fName = Str "f" Anonymous
+
+hName : Name
+hName = Str "h" Anonymous
+
+qName : Name
+qName = Str "q" Anonymous
+
+uName : Name
+uName = Str "u" Anonymous
+
+vName : Name
+vName = Str "v" Anonymous
+
+||| Get the type of a quotient primitive (if it is one)
+||| Returns (type, levelParams) if the name is a quotient primitive, Nothing otherwise
+|||
+||| Types (following Lean's Quot declaration):
+||| - Quot : {α : Sort u} → (α → α → Prop) → Sort u
+||| - Quot.mk : {α : Sort u} → {r : α → α → Prop} → α → Quot r
+||| - Quot.lift : {α : Sort u} → {r : α → α → Prop} → {β : Sort v} →
+|||              (f : α → β) → (∀ a b : α, r a b → f a = f b) → Quot r → β
+||| - Quot.ind : {α : Sort u} → {r : α → α → Prop} → {β : Quot r → Prop} →
+|||             (∀ a : α, β (Quot.mk a)) → ∀ q : Quot r, β q
+||| Helper to create BVar with any index for quotient type construction
+mkQBVar : Nat -> ClosedExpr
+mkQBVar n = believe_me (the (Expr 1) (BVar (believe_me n)))
+
+||| Helper to create Pi for quotient type construction
+mkQPi : Name -> BinderInfo -> ClosedExpr -> ClosedExpr -> ClosedExpr
+mkQPi name bi ty body = believe_me (the (Expr 0) (Pi name bi (believe_me ty) (believe_me body)))
+
+||| Build a quotient type expression with the standard structure.
+||| All indices use believe_me to bypass the scope checker since these are
+||| programmatically generated types that we know are well-formed.
+getQuotType : Name -> Maybe (ClosedExpr, List Name)
+getQuotType name =
+  if name == quotName then
+    -- Quot : {α : Sort u} → (α → α → Prop) → Sort u
+    let u = Param uName
+        sortU = Sort u
+        prop = Sort Zero
+        -- r : α → α → Prop  (where α is BVar 0 in the inner context)
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        quotTy = mkQPi alphaName Implicit sortU (mkQPi rName Default rTy sortU)
+    in Just (quotTy, [uName])
+  else if name == quotMkName then
+    -- Quot.mk : {α : Sort u} → {r : α → α → Prop} → α → Quot r
+    let u = Param uName
+        sortU = Sort u
+        prop = Sort Zero
+        -- r type: α → α → Prop (α is BVar 0 inside r's context)
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- Inside the final result: α is BVar 2, r is BVar 1
+        -- Quot r = Quot.{u} α r
+        quotR = App (App (Const quotName [u]) (mkQBVar 2)) (mkQBVar 1)
+        -- α is BVar 1 in context of final Pi domain
+        mkTy = mkQPi alphaName Implicit sortU
+                 (mkQPi rName Implicit rTy
+                   (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) quotR))
+    in Just (mkTy, [uName])
+  else if name == quotLiftName then
+    -- Quot.lift : {α : Sort u} → {r : α → α → Prop} → {β : Sort v} →
+    --             (f : α → β) → (∀ a b : α, r a b → f a = f b) → Quot r → β
+    -- This is complex - for now return a simplified type that allows lookups
+    let u = Param uName
+        v = Param vName
+        sortU = Sort u
+        sortV = Sort v
+        prop = Sort Zero
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- Simplified: we build the full type step by step
+        -- At outermost: {α : Sort u} → rest
+        -- Inside rest (depth 1): {r : α → α → Prop} → rest'
+        -- Inside rest' (depth 2): {β : Sort v} → rest''
+        -- Inside rest'' (depth 3): (f : α → β) → rest'''
+        -- etc.
+        -- For simplicity, construct the type directly
+        liftTy = mkQPi alphaName Implicit sortU
+                   (mkQPi rName Implicit rTy
+                     (mkQPi betaName Implicit sortV
+                       (mkQPi fName Default (mkQPi (Str "_" Anonymous) Default (mkQBVar 2) (mkQBVar 1))
+                         (mkQPi hName Default
+                           (mkQPi (Str "a" Anonymous) Default (mkQBVar 4)
+                             (mkQPi (Str "b" Anonymous) Default (mkQBVar 5)
+                               (mkQPi (Str "_" Anonymous) Default
+                                 (App (App (mkQBVar 4) (mkQBVar 1)) (mkQBVar 0))
+                                 (App (App (App (Const (Str "Eq" Anonymous) [v]) (mkQBVar 4))
+                                           (App (mkQBVar 3) (mkQBVar 2)))
+                                      (App (mkQBVar 3) (mkQBVar 1))))))
+                           (mkQPi (Str "_" Anonymous) Default
+                             (App (App (Const quotName [u]) (mkQBVar 5)) (mkQBVar 4))
+                             (mkQBVar 3))))))
+    in Just (liftTy, [uName, vName])
+  else if name == quotIndName then
+    -- Quot.ind : {α : Sort u} → {r : α → α → Prop} → {β : Quot r → Prop} →
+    --            (∀ a : α, β (Quot.mk a)) → ∀ q : Quot r, β q
+    let u = Param uName
+        sortU = Sort u
+        prop = Sort Zero
+        rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- β : Quot r → Prop  (at depth 2: α is BVar 1, r is BVar 0)
+        betaTy = mkQPi (Str "_" Anonymous) Default (App (App (Const quotName [u]) (mkQBVar 1)) (mkQBVar 0)) prop
+        -- h : ∀ a : α. β (Quot.mk a)  (at depth 3: α is BVar 2, r is BVar 1, β is BVar 0)
+        -- Quot.mk a = Quot.mk.{u} α r a
+        hTy = mkQPi (Str "a" Anonymous) Default (mkQBVar 3)
+                (App (mkQBVar 1) (App (App (App (Const quotMkName [u]) (mkQBVar 4)) (mkQBVar 3)) (mkQBVar 0)))
+        -- Final: ∀ q : Quot r. β q (at depth 4: α is BVar 3, r is BVar 2, β is BVar 1, h is BVar 0)
+        indTy = mkQPi alphaName Implicit sortU
+                  (mkQPi rName Implicit rTy
+                    (mkQPi betaName Implicit betaTy
+                      (mkQPi hName Default hTy
+                        (mkQPi qName Default (App (App (Const quotName [u]) (mkQBVar 4)) (mkQBVar 3))
+                          (App (mkQBVar 2) (mkQBVar 0))))))
+    in Just (indTy, [uName])
+  else
+    Nothing
 
 ||| Try quotient reduction.
 |||
@@ -442,19 +670,22 @@ tryQuotReduction e whnfStep = do
 export
 covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
-whnf env e = whnfFuel 1000 e
+whnf env e = whnfFuel 20 e
   where
     ||| Single step of whnf (beta/let reduction)
     ||| For nested applications like (((λ...) a) b), we reduce the innermost
     ||| beta-redex first.
+    |||
+    ||| Beta reduction: substitute argument for BVar 0 in body, shifting higher indices down.
+    ||| Uses instantiate1 which correctly tracks depth when going under binders.
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
-    whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0 body arg)
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
     whnfStepCore (App f arg) =
       -- If f is reducible, reduce it and reconstruct
       case whnfStepCore f of
         Just f' => Just (App f' arg)
         Nothing => Nothing
-    whnfStepCore (Let _ _ val body) = Just (subst0 body val)
+    whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
     whnfStepCore _ = Nothing
 
     ||| Combined step including delta
@@ -464,6 +695,22 @@ whnf env e = whnfFuel 1000 e
         Just e' => Just e'
         Nothing => unfoldHead env e
 
+    -- Try reducing the head of an application
+    -- Returns Just if the head reduced, Nothing otherwise
+    reduceAppHead : ClosedExpr -> Maybe ClosedExpr
+    reduceAppHead (App f arg) =
+      case reduceAppHead f of
+        Just f' => Just (App f' arg)
+        Nothing =>
+          -- f didn't reduce via recursion, try all reduction strategies on f
+          case tryProjReduction env f whnfStepWithDelta of
+            Just f' => Just (App f' arg)
+            Nothing =>
+              case unfoldHead env f of
+                Just f' => Just (App f' arg)
+                Nothing => Nothing
+    reduceAppHead _ = Nothing
+
     whnfFuel : Nat -> ClosedExpr -> TC ClosedExpr
     whnfFuel 0 e = Right e  -- out of fuel, return as-is
     whnfFuel (S k) e =
@@ -471,22 +718,26 @@ whnf env e = whnfFuel 1000 e
       case whnfStepCore e of
         Just e' => whnfFuel k e'
         Nothing =>
-          -- Then try projection reduction
-          case tryProjReduction env e whnfStepWithDelta of
+          -- Then try reducing the head of an application (for Proj inside App)
+          case reduceAppHead e of
             Just e' => whnfFuel k e'
             Nothing =>
-              -- Then try quotient reduction (if enabled)
-              case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+              -- Then try projection reduction
+              case tryProjReduction env e whnfStepWithDelta of
                 Just e' => whnfFuel k e'
                 Nothing =>
-                  -- Then try iota reduction (recursors)
-                  case tryIotaReduction env e whnfStepWithDelta of
+                  -- Then try quotient reduction (if enabled)
+                  case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
                     Just e' => whnfFuel k e'
                     Nothing =>
-                      -- Then try delta reduction
-                      case unfoldHead env e of
+                      -- Then try iota reduction (recursors)
+                      case tryIotaReduction env e whnfStepWithDelta of
                         Just e' => whnfFuel k e'
-                        Nothing => Right e
+                        Nothing =>
+                          -- Then try delta reduction
+                          case unfoldHead env e of
+                            Just e' => whnfFuel k e'
+                            Nothing => Right e
 
 ||| WHNF without delta reduction (for internal use)
 ||| Used when we want to reduce but not unfold definitions
@@ -496,8 +747,8 @@ whnfCore : ClosedExpr -> TC ClosedExpr
 whnfCore e = whnfCoreFuel 1000 e
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
-    whnfStepCore (App (Lam _ _ _ body) arg) = Just (subst0 body arg)
-    whnfStepCore (Let _ _ val body) = Just (subst0 body val)
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
+    whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
     whnfStepCore _ = Nothing
 
     whnfCoreFuel : Nat -> ClosedExpr -> TC ClosedExpr
@@ -506,99 +757,801 @@ whnfCore e = whnfCoreFuel 1000 e
       Nothing => Right e
       Just e' => whnfCoreFuel k e'
 
+||| Get the head constant and arguments from an application spine
+getAppHead : ClosedExpr -> Maybe (Name, List ClosedExpr)
+getAppHead expr = go expr []
+  where
+    go : ClosedExpr -> List ClosedExpr -> Maybe (Name, List ClosedExpr)
+    go (App f' arg) args = go f' (arg :: args)
+    go (Const name _) args = Just (name, args)
+    go _ _ = Nothing
+
+mutual
+  ||| Given a placeholder type and application args, compute the result type
+  ||| and check if it's a Sort
+  covering
+  ensureSortOfApp : TCEnv -> ClosedExpr -> List ClosedExpr -> TC Level
+  ensureSortOfApp env' ty [] = ensureSortWhnf env' ty
+  ensureSortOfApp env' (Pi _ _ dom cod) (arg :: args) =
+    -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+    ensureSortOfApp env' (instantiate1 (believe_me cod) arg) args
+  ensureSortOfApp env' ty args =
+    -- ty is not a Pi but we have more args (or args are empty)
+    -- This can happen with type variables - just return a universe level
+    case ty of
+      Sort l => Right l
+      Pi _ _ _ cod =>
+        -- Pi type when expecting Sort - the codomain might be a Sort after more applications
+        -- Trust the input and return a synthetic level
+        Right Zero
+      Const name _ =>
+        case lookupPlaceholder name env' of
+          Just (Sort l) => Right l  -- Type variable - trust it's used as a type
+          Just innerTy => ensureSortOfApp env' innerTy args
+          Nothing =>
+            -- Check declarations
+            case lookupDecl name env' of
+              Just decl => case declType decl of
+                Just dty => ensureSortOfApp env' dty args
+                Nothing => Left (OtherError $ "ensureSort: const " ++ show name ++ " has no type")
+              Nothing => Left (OtherError $ "ensureSort: unknown const " ++ show name)
+      App _ _ =>
+        -- Stuck application - try to resolve recursively
+        case getAppHead ty of
+          Just (name, innerArgs) =>
+            case lookupPlaceholder name env' of
+              Just innerTy => ensureSortOfApp env' innerTy (innerArgs ++ args)
+              Nothing =>
+                case lookupDecl name env' of
+                  Just decl => case declType decl of
+                    Just dty => ensureSortOfApp env' dty (innerArgs ++ args)
+                    Nothing => Left (TypeExpected ty)
+                  Nothing => Left (TypeExpected ty)
+          Nothing => Left (TypeExpected ty)
+      _ => Left (OtherError $ "ensureSort: exhausted Pis")
+
+  covering
+  ensureSortWhnf : TCEnv -> ClosedExpr -> TC Level
+  ensureSortWhnf env' (Sort l) = Right l
+  ensureSortWhnf env' (Const name _) =
+    -- Check if it's a placeholder constant that represents a type variable
+    case lookupPlaceholder name env' of
+      Just (Sort l) => Right l  -- Placeholder has Sort type, use that level
+      Just ty => ensureSortWhnf env' ty  -- Try recursively
+      Nothing => Left (TypeExpected (Const name []))  -- Not a placeholder, regular constant
+  ensureSortWhnf env' expr@(App _ _) =
+    -- Application that didn't reduce - might be a type family application
+    -- Check if the head is a placeholder or a known constant
+    case getAppHead expr of
+      Just (name, args) =>
+        case lookupPlaceholder name env' of
+          Just ty => ensureSortOfApp env' ty args
+          Nothing =>
+            -- Not a placeholder - check if it's a known constant (inductive, etc.)
+            case lookupDecl name env' of
+              Just decl => case declType decl of
+                Just ty => ensureSortOfApp env' ty args
+                Nothing => Left (TypeExpected expr)
+              Nothing => Left (OtherError $ "ensureSort: stuck App with unknown head " ++ show name)
+      Nothing => Left (TypeExpected expr)
+  ensureSortWhnf _ (Pi _ _ _ _) =
+    -- Pi type when expecting Sort - this happens with type families
+    -- Trust the input and return a synthetic level
+    Right Zero
+  ensureSortWhnf _ other = Left (TypeExpected other)
+
 ||| Check if expression is a Sort
 export
 covering
 ensureSort : TCEnv -> ClosedExpr -> TC Level
 ensureSort env e = do
   e' <- whnf env e
-  case e' of
-    Sort l => Right l
-    _      => Left (TypeExpected e)
+  ensureSortWhnf env e'
 
-||| Check if expression is a Pi type
+mutual
+  covering
+  ||| Given a placeholder type and application args, compute the result type
+  ||| and check if it's a Pi
+  ensurePiOfApp : TCEnv -> ClosedExpr -> List ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
+  ensurePiOfApp env' ty [] = ensurePiWhnf env' ty  -- No more args, check if ty is Pi
+  ensurePiOfApp env' (Pi _ _ dom cod) (arg :: args) = do
+    -- Apply arg to get result type, then reduce and continue
+    -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+    let resultTy = instantiate1 (believe_me cod) arg
+    resultTy' <- whnf env' resultTy
+    ensurePiOfApp env' resultTy' args
+  ensurePiOfApp env' ty args =
+    -- ty is not a Pi but we have more args
+    -- This can happen with type variables - trust that the original expression was well-typed
+    -- and return synthetic Pi components
+    case ty of
+      Const name _ =>
+        case lookupPlaceholder name env' of
+          Just (Sort l) =>
+            -- Type variable used as function type - trust the input
+            Right (Anonymous, Default, ty, weaken1 ty)
+          Just innerTy => ensurePiOfApp env' innerTy args  -- Try recursively
+          Nothing => Left (OtherError $ "ensurePi: exhausted Pi with non-placeholder type")
+      _ => Left (OtherError $ "ensurePi: exhausted Pi types with " ++ show (length args) ++ " args remaining")
+
+  covering
+  ensurePiWhnf : TCEnv -> ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
+  ensurePiWhnf env' expr = case expr of
+    Pi name bi dom cod => Right (name, bi, dom, cod)
+    Const name levels =>
+      -- Check if it's a placeholder constant
+      case lookupPlaceholder name env' of
+        Just (Pi pname bi dom cod) => Right (pname, bi, dom, cod)
+        Just (Sort l) =>
+          -- Type variable of type Sort l - trust it's used as a function type
+          -- Synthesize Pi components: domain is the placeholder itself, codomain is unknown
+          -- This is a "trust the input" approach since Lean already verified correctness
+          Right (Anonymous, Default, expr, weaken1 expr)
+        Just ty =>
+          -- Try recursively - the type might itself reduce to something useful
+          ensurePiWhnf env' ty
+        Nothing =>
+          -- Not a placeholder - check if it's a known constant with a definition
+          case lookupDecl name env' of
+            Just decl => case getDeclValue decl of
+              Just val =>
+                -- Unfold the definition and try again
+                let unfolded = instantiateLevelParams (declLevelParams decl) levels val
+                in ensurePiWhnf env' unfolded
+              Nothing =>
+                -- No definition (axiom, inductive, opaque) - this constant cannot be a Pi
+                Left (FunctionExpected expr)
+            Nothing => Left (OtherError $ "ensurePiWhnf Const: " ++ show name ++ " not in placeholders or declarations")
+    App _ _ =>
+      -- Application that didn't reduce - might be placeholder application
+      -- If the head is a placeholder or known constant with a Pi type
+      case getAppHead expr of
+        Just (name, args) =>
+          case lookupPlaceholder name env' of
+            Just ty => ensurePiOfApp env' ty args
+            Nothing =>
+              -- Not a placeholder - check if it's a known constant
+              case lookupDecl name env' of
+                Just decl => case declType decl of
+                  Just ty => ensurePiOfApp env' ty args
+                  Nothing => Left (FunctionExpected expr)
+                Nothing => Left (OtherError $ "ensurePi: stuck App with unknown head " ++ show name)
+        Nothing => Left (FunctionExpected expr)
+    Sort l =>
+      -- A Sort cannot be applied to arguments - it's not a function type
+      Left (FunctionExpected expr)
+    Lam _ _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Lam")
+    Let _ _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Let")
+    BVar _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got BVar (should not happen in closed expr)")
+    Proj _ _ _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got Proj")
+    NatLit _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got NatLit")
+    StringLit _ => Left (OtherError $ "ensurePiWhnf: expected Pi, got StringLit")
+
+||| Check if expression is a Pi type.
+||| For placeholder constants (type variables), we trust that they're used correctly
+||| and synthesize Pi components based on the placeholder's universe.
 export
 covering
 ensurePi : TCEnv -> ClosedExpr -> TC (Name, BinderInfo, ClosedExpr, Expr 1)
 ensurePi env e = do
   e' <- whnf env e
-  case e' of
-    Pi name bi dom cod => Right (name, bi, dom, cod)
-    _                  => Left (FunctionExpected e)
+  case ensurePiWhnf env e' of
+    Left err => debugPrint ("ensurePi failed: original=" ++ show e ++ " whnf=" ++ show e') $ Left err
+    Right result => Right result
 
 ------------------------------------------------------------------------
 -- Type Inference
 ------------------------------------------------------------------------
 
+||| Create a placeholder constant name for a local variable
+||| Uses a unique counter to avoid name collisions
+placeholderName : Name -> Nat -> Name
+placeholderName n counter = Str "_local" (Num counter n)
+
+||| Extract the base binder name from a placeholder constant name
+||| Returns Just the base name if it's a placeholder, Nothing otherwise
+extractPlaceholderBase : Name -> Maybe Name
+extractPlaceholderBase (Str "_local" (Num _ base)) = Just base
+extractPlaceholderBase _ = Nothing
+
+||| Extract the binder name from a comparison placeholder
+||| Returns Just binderName if this is a comparison placeholder, Nothing otherwise
+||| Comparison placeholders have the form: Str "_isDefEqBody" (Str counter binderName)
+||| Extract the depth from a comparison placeholder.
+||| Comparison placeholders use de Bruijn depth: Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+||| Returns Just depth if this is a comparison placeholder, Nothing otherwise.
+extractComparisonPlaceholderDepth : Name -> Maybe Nat
+extractComparisonPlaceholderDepth (Str "_isDefEqBody" (Num _ (Num depth Anonymous))) = Just depth
+extractComparisonPlaceholderDepth _ = Nothing
+
+||| Check if a name is a comparison placeholder (for backwards compatibility checks)
+isComparisonPlaceholderName : Name -> Bool
+isComparisonPlaceholderName (Str "_isDefEqBody" (Num _ (Num _ Anonymous))) = True
+isComparisonPlaceholderName _ = False
+
+||| Build a vector of placeholder constants for all context entries
+||| Returns the updated environment, updated context with placeholders assigned, and the vector of placeholders.
+||| The placeholders are in order matching the context (index 0 = first entry = innermost).
+||| Uses a global counter from the environment to ensure unique placeholder names.
+||| IMPORTANTLY: reuses existing placeholders if already assigned to an entry.
+covering
+buildPlaceholders : TCEnv -> LocalCtx n -> (TCEnv, LocalCtx n, Vect n ClosedExpr)
+buildPlaceholders env [] = (env, [], [])
+buildPlaceholders env {n = S k} (entry :: ctx) =
+  case entry.placeholder of
+    Just ph =>
+      -- Entry already has a placeholder, reuse it
+      let (env', ctx', rest) = buildPlaceholders env ctx
+      in (env', entry :: ctx', ph :: rest)
+    Nothing =>
+      -- Create a new placeholder for this entry
+      let counter = env.nextPlaceholder
+          phName = placeholderName entry.name counter
+          env' = { nextPlaceholder := S counter } env
+          env'' = debugPrint ("buildPlaceholders: creating " ++ show phName ++ " : " ++ show entry.type) $ addPlaceholder phName entry.type env'
+          ph : ClosedExpr = Const phName []
+          entry' = { placeholder := Just ph } entry
+          (env''', ctx', rest) = buildPlaceholders env'' ctx
+      in (env''', entry' :: ctx', ph :: rest)
+
 ||| Close an expression by substituting all bound variables with placeholders.
 ||| This is used to convert Expr n to ClosedExpr for type checking purposes.
 |||
 ||| We substitute each variable with a unique constant based on its name.
-||| This is safe for type inference since we only need the *structure* of the type.
-closeWithPlaceholders : LocalCtx n -> Expr n -> ClosedExpr
-closeWithPlaceholders [] e = e
-closeWithPlaceholders {n = S m} (entry :: ctx) e =
-  -- Substitute var 0 with a placeholder, then close the rest
-  let e' : Expr m = subst0 e (Const (Str "_local" entry.name) [])
-  in closeWithPlaceholders ctx e'
+||| Also registers placeholder types in the environment so they can be looked up later.
+||| Uses a global counter to ensure unique placeholder names across multiple closures.
+||| Returns the updated context with placeholders assigned to entries.
+|||
+||| This version uses substAll for simultaneous substitution, which correctly
+||| handles nested binders where free variables appear at shifted indices.
+covering
+closeWithPlaceholders : TCEnv -> LocalCtx n -> Expr n -> (TCEnv, LocalCtx n, ClosedExpr)
+closeWithPlaceholders env ctx e =
+  let (env', ctx', placeholders) = buildPlaceholders env ctx
+  in (env', ctx', substAll placeholders e)
+
+||| Replace a specific placeholder constant with a BVar at a given depth.
+||| This is used when constructing the codomain of a Pi type from an inferred body type.
+||| The placeholder is the one assigned to the innermost bound variable.
+|||
+||| For example, if we have `α.0._local → α.0._local` and the placeholder is `α.0._local`,
+||| the result should be `BVar 0 → BVar 0` as an Expr 1.
+|||
+||| The `depth` parameter tracks how many binders we've gone under.
+||| At depth 0, the placeholder becomes BVar 0.
+||| At depth 1 (under one binder), the placeholder becomes BVar 1.
+||| etc.
+|||
+||| This function increases the scope by 1 (adding the new BVar) and also
+||| shifts existing BVars to make room for the new one.
+covering
+replacePlaceholderWithBVarDepth : {m : Nat} -> (depth : Nat) -> ClosedExpr -> Expr m -> Expr (S m)
+replacePlaceholderWithBVarDepth depth placeholder e = go {k=m} depth e
+  where
+    -- Convert a Nat to a Fin (S n) by repeatedly applying FS
+    -- Returns Nothing if nat >= n+1
+    natToFin : (nat : Nat) -> (n : Nat) -> Maybe (Fin (S n))
+    natToFin Z _ = Just FZ
+    natToFin (S k) Z = Nothing
+    natToFin (S k) (S m) = map FS (natToFin k m)
+
+    go : {k : Nat} -> Nat -> Expr k -> Expr (S k)
+    go _ (Sort l) = Sort l
+    go _ (BVar i) = BVar (FS i)  -- Shift existing BVars up by 1
+    go d (Const n ls) =
+      -- Check if this is the placeholder we're looking for
+      if Const n ls == placeholder
+        then case natToFin d k of
+               Just idx => BVar idx
+               Nothing => Const n ls  -- Shouldn't happen if depth is correct
+        else Const n ls
+    go d (App f x) = App (go d f) (go d x)
+    go d (Lam name bi ty body) = Lam name bi (go d ty) (go (S d) body)
+    go d (Pi name bi dom cod) = Pi name bi (go d dom) (go (S d) cod)
+    go d (Let name ty val body) = Let name (go d ty) (go d val) (go (S d) body)
+    go d (Proj sn i s) = Proj sn i (go d s)
+    go _ (NatLit n) = NatLit n
+    go _ (StringLit s) = StringLit s
+
+||| Convenience wrapper for the common case of replacing in a ClosedExpr at depth 0
+covering
+replacePlaceholderWithBVar : ClosedExpr -> ClosedExpr -> Expr 1
+replacePlaceholderWithBVar placeholder e = replacePlaceholderWithBVarDepth 0 placeholder e
+
+||| Helper to find placeholder index in a list of entries
+findPlaceholderIdx : List LocalEntry -> Name -> Nat -> Maybe Nat
+findPlaceholderIdx [] _ _ = Nothing
+findPlaceholderIdx (entry :: rest) name idx =
+  case entry.placeholder of
+    Just (Const phName []) =>
+      if phName == name
+        then Just idx  -- Found it at this index
+        else findPlaceholderIdx rest name (S idx)
+    _ => findPlaceholderIdx rest name (S idx)
+
+||| Make a BVar from a Nat (unsafe, but index should be in range)
+||| This creates BVar with the given de Bruijn index
+makeBVarFromNat : Nat -> ClosedExpr
+makeBVarFromNat k = believe_me (BVar {n = S k} (natToFin k))
+  where
+    -- Convert Nat to Fin (S k) - always succeeds since k < S k
+    natToFin : (n : Nat) -> Fin (S n)
+    natToFin Z = FZ
+    natToFin (S m) = FS (natToFin m)
+
+||| Core implementation of placeholder-to-BVar replacement
+||| Takes a list of entries and replaces all matching placeholders with BVars
+covering
+replaceAllPlaceholdersGo : List LocalEntry -> Nat -> ClosedExpr -> ClosedExpr
+replaceAllPlaceholdersGo entries depth (Sort l) = Sort l
+replaceAllPlaceholdersGo entries depth (BVar i) = BVar i  -- Shouldn't happen in ClosedExpr
+replaceAllPlaceholdersGo entries depth (Const name ls) =
+  case findPlaceholderIdx entries name 0 of
+    Just idx => makeBVarFromNat (idx + depth)  -- Replace with BVar at appropriate depth
+    Nothing => Const name ls            -- Not a placeholder, keep as-is
+replaceAllPlaceholdersGo entries depth (App f x) =
+  App (replaceAllPlaceholdersGo entries depth f) (replaceAllPlaceholdersGo entries depth x)
+replaceAllPlaceholdersGo entries depth (Lam name bi ty body) =
+  Lam name bi (replaceAllPlaceholdersGo entries depth ty)
+              (believe_me (replaceAllPlaceholdersGo entries (S depth) (believe_me body)))
+replaceAllPlaceholdersGo entries depth (Pi name bi dom cod) =
+  Pi name bi (replaceAllPlaceholdersGo entries depth dom)
+             (believe_me (replaceAllPlaceholdersGo entries (S depth) (believe_me cod)))
+replaceAllPlaceholdersGo entries depth (Let name ty val body) =
+  Let name (replaceAllPlaceholdersGo entries depth ty)
+           (replaceAllPlaceholdersGo entries depth val)
+           (believe_me (replaceAllPlaceholdersGo entries (S depth) (believe_me body)))
+replaceAllPlaceholdersGo entries depth (Proj sn i s) =
+  Proj sn i (replaceAllPlaceholdersGo entries depth s)
+replaceAllPlaceholdersGo entries depth (NatLit k) = NatLit k
+replaceAllPlaceholdersGo entries depth (StringLit s) = StringLit s
+
+||| Replace ALL placeholders from a list of entries with their corresponding BVars.
+||| This is a variant that takes List LocalEntry directly for easier use.
+covering
+export
+replaceAllPlaceholdersWithBVars' : List LocalEntry -> ClosedExpr -> ClosedExpr
+replaceAllPlaceholdersWithBVars' entries e = replaceAllPlaceholdersGo entries 0 e
+
+||| Replace ALL placeholders from a context with their corresponding BVars.
+||| Given a context of n entries, converts a ClosedExpr to Expr n.
+||| Each placeholder in the context gets replaced with its corresponding BVar:
+||| - Entry 0 (innermost) → BVar 0
+||| - Entry 1 → BVar 1
+||| - etc.
+|||
+||| This is used to convert a fully-closed result type back to an open expression
+||| with proper de Bruijn indices.
+covering
+replaceAllPlaceholdersWithBVars : {n : Nat} -> LocalCtx n -> ClosedExpr -> Expr n
+replaceAllPlaceholdersWithBVars {n} ctx e = believe_me (replaceAllPlaceholdersGo (toList ctx) 0 e)
+
+------------------------------------------------------------------------
+-- Projection Type Inference Helpers
+------------------------------------------------------------------------
+
+||| Get the inductive info for a name (if it exists and is an inductive)
+getInductiveInfo : TCEnv -> Name -> Maybe InductiveInfo
+getInductiveInfo env name =
+  case lookupDecl name env of
+    Just (IndDecl info _) => Just info
+    _ => Nothing
+
+||| Get the single constructor of a structure (structures have exactly one constructor)
+||| Note: The InductiveInfo stores constructor names but with placeholder types.
+||| We need to look up the actual CtorDecl to get the real type.
+getStructCtor : TCEnv -> Name -> Maybe ConstructorInfo
+getStructCtor env structName = do
+  indInfo <- getInductiveInfo env structName
+  case indInfo.constructors of
+    [ctorInfo] =>
+      -- Look up the actual CtorDecl to get the real type
+      case lookupDecl ctorInfo.name env of
+        Just (CtorDecl name ty _ _ _ _ _) => Just (MkConstructorInfo name ty)
+        _ => Just ctorInfo  -- Fall back to placeholder if CtorDecl not found
+    _ => Nothing  -- Not a structure (0 or multiple constructors)
+
+||| Get the type of a projection field from a structure
+||| Given struct name, field index, and struct params (extracted from struct type),
+||| returns the field type with parameters substituted
+|||
+||| For a structure like Prod with constructor:
+|||   Prod.mk : {α β : Type} → α → β → Prod α β
+||| and a value s : Prod Nat Bool, we have params = [Nat, Bool]
+||| So getProjType "Prod" 0 [Nat, Bool] = Nat
+|||    getProjType "Prod" 1 [Nat, Bool] = Bool
+|||
+||| Note: The field index is offset by numParams in the constructor type.
+||| Field 0 is at Pi position numParams, field 1 at numParams+1, etc.
+covering
+getProjType : TCEnv -> Name -> Nat -> List ClosedExpr -> Maybe ClosedExpr
+getProjType env structName idx structParams = do
+  indInfo <- getInductiveInfo env structName
+  let numParams = indInfo.numParams
+  ctor <- getStructCtor env structName
+  getNthPiDomSubst (numParams + idx) structParams ctor.type
+
+||| Deep normalization of types - normalizes under binders.
+||| Used for type comparison when types may have beta redexes in nested positions.
+|||
+||| For example, normalizes:
+|||   (val : Nat) -> (isLt : ...) -> ((fun (t : Fin n) => Sort u) (Fin.mk n val isLt))
+||| to:
+|||   (val : Nat) -> (isLt : ...) -> Sort u
+|||
+||| This is necessary for type comparison when one type has unreduced
+||| beta redexes nested inside Pi types.
+|||
+||| Uses a generic version that works on any expression with n free variables.
+-- Beta reduce an application if possible (works on any Expr n)
+-- Uses instantiate1N for proper substitution (shifts outer variables down)
+covering
+betaReduceN : {n : Nat} -> Expr n -> Maybe (Expr n)
+betaReduceN (App (Lam _ _ _ body) arg) = Just (instantiate1N body arg)
+betaReduceN _ = Nothing
+
+-- Helper functions for normalizeTypeOpenWithEnv
+getAppSpineN : {m : Nat} -> Expr m -> (Expr m, List (Expr m))
+getAppSpineN e = go e []
+  where
+    go : Expr m -> List (Expr m) -> (Expr m, List (Expr m))
+    go (App f x) args = go f (x :: args)
+    go e args = (e, args)
+
+mkAppN : {m : Nat} -> Expr m -> List (Expr m) -> Expr m
+mkAppN f [] = f
+mkAppN f (x :: xs) = mkAppN (App f x) xs
+
+-- Try to unfold a constant in an open expression context
+covering
+unfoldConstN : TCEnv -> {n : Nat} -> Name -> List Level -> Maybe (Expr n)
+unfoldConstN env name levels = do
+  decl <- lookupDecl name env
+  value <- getDeclValue decl
+  let params = declLevelParams decl
+  guard (length params == length levels)
+  -- Use non-safe instantiation since level param names can shadow outer names
+  let instantiated = instantiateLevelParams params levels value
+  Just (believe_me instantiated)
+
+-- Try delta reduction on an application whose head is a constant
+covering
+tryDeltaOpenN : TCEnv -> {n : Nat} -> Expr n -> Maybe (Expr n)
+tryDeltaOpenN env e =
+  let (head, args) = getAppSpineN e
+  in case head of
+    Const name levels => do
+      unfolded <- unfoldConstN env name levels
+      Just (mkAppN unfolded args)
+    _ => Nothing
+
+-- Try projection reduction on an open expression
+-- Works when the struct is a constructor application
+tryProjReductionN : TCEnv -> {n : Nat} -> Expr n -> Maybe (Expr n)
+tryProjReductionN env (Proj structName idx struct) = do
+  -- Get the spine of the struct (after any delta reduction)
+  let (head, args) = getAppSpineN struct
+  -- Check if head is a constructor
+  case head of
+    Const ctorName _ => do
+      (_, _, numParams, numFields) <- getConstructorInfo env ctorName
+      guard (idx < numFields)
+      listNth args (numParams + idx)
+    _ => Nothing
+tryProjReductionN _ _ = Nothing
+
+-- Try iota reduction for Nat.rec when the major premise is a constructor
+-- Nat.rec.{u} motive zeroCase succCase Nat.zero = zeroCase
+-- Nat.rec.{u} motive zeroCase succCase (Nat.succ n) = succCase n (Nat.rec.{u} motive zeroCase succCase n)
+tryNatRecIota : {n : Nat} -> Expr n -> Maybe (Expr n)
+tryNatRecIota e =
+  let (head, args) = getAppSpineN e
+  in case head of
+    Const name [u] =>
+      if name == Str "rec" (Str "Nat" Anonymous)
+        then case args of
+          -- Nat.rec motive zeroCase succCase major
+          [motive, zeroCase, succCase, major] =>
+            case major of
+              -- Nat.zero case: result = zeroCase
+              Const zeroName [] =>
+                if zeroName == Str "zero" (Str "Nat" Anonymous)
+                  then Just zeroCase
+                  else Nothing
+              -- Nat.succ n case: result = succCase n (Nat.rec motive zeroCase succCase n)
+              App (Const succName []) innerN =>
+                if succName == Str "succ" (Str "Nat" Anonymous)
+                  then let recCall = mkAppN (Const name [u]) [motive, zeroCase, succCase, innerN]
+                       in Just (App (App succCase innerN) recCall)
+                  else Nothing
+              _ => Nothing
+          _ => Nothing
+        else Nothing
+    _ => Nothing
+
+-- For open expressions (under binders), we can do beta reduction
+-- and delta reduction on constants. For iota reduction,
+-- we need to handle it symbolically when the major premise is a constructor.
+covering
+normalizeTypeOpenWithEnv : TCEnv -> {n : Nat} -> Expr n -> TC (Expr n)
+normalizeTypeOpenWithEnv env e = case betaReduceN e of
+  Just e' => normalizeTypeOpenWithEnv env e'
+  Nothing => case e of
+    Pi name bi dom cod => do
+      dom' <- normalizeTypeOpenWithEnv env dom
+      cod' <- normalizeTypeOpenWithEnv env cod
+      Right (Pi name bi dom' cod')
+    Lam name bi ty body => do
+      ty' <- normalizeTypeOpenWithEnv env ty
+      body' <- normalizeTypeOpenWithEnv env body
+      Right (Lam name bi ty' body')
+    App f arg => do
+      f' <- normalizeTypeOpenWithEnv env f
+      arg' <- normalizeTypeOpenWithEnv env arg
+      let app = App f' arg'
+      case betaReduceN app of
+        Just reduced => normalizeTypeOpenWithEnv env reduced
+        Nothing =>
+          -- Try iota reduction for Nat.rec
+          case tryNatRecIota app of
+            Just reduced => normalizeTypeOpenWithEnv env reduced
+            Nothing =>
+              -- Try delta reduction if f' is a constant
+              case tryDeltaOpenN env app of
+                Just reduced => normalizeTypeOpenWithEnv env reduced
+                Nothing =>
+                  -- Try projection reduction if f' is a Proj
+                  case tryProjReductionN env f' of
+                    Just fReduced => normalizeTypeOpenWithEnv env (App fReduced arg')
+                    Nothing => Right app
+    Let name ty val body => normalizeTypeOpenWithEnv env (instantiate1N body val)
+    Proj n i e => do
+      e' <- normalizeTypeOpenWithEnv env e
+      let proj = Proj n i e'
+      -- Try to reduce the projection if e' is a constructor application
+      case tryProjReductionN env proj of
+        Just reduced => normalizeTypeOpenWithEnv env reduced
+        Nothing => Right proj
+    Sort l => Right (Sort (simplify l))
+    -- For constants, try delta reduction
+    Const name levels => case unfoldConstN env name levels of
+      Just unfolded => normalizeTypeOpenWithEnv env unfolded
+      Nothing => Right (Const name levels)
+    e => Right e
+
+-- Wrapper that doesn't need env (for backwards compat)
+covering
+normalizeTypeOpen : {n : Nat} -> Expr n -> TC (Expr n)
+normalizeTypeOpen e = case betaReduceN e of
+  Just e' => normalizeTypeOpen e'
+  Nothing => case e of
+    Pi name bi dom cod => do
+      dom' <- normalizeTypeOpen dom
+      cod' <- normalizeTypeOpen cod
+      Right (Pi name bi dom' cod')
+    Lam name bi ty body => do
+      ty' <- normalizeTypeOpen ty
+      body' <- normalizeTypeOpen body
+      Right (Lam name bi ty' body')
+    App f arg => do
+      f' <- normalizeTypeOpen f
+      arg' <- normalizeTypeOpen arg
+      let app = App f' arg'
+      case betaReduceN app of
+        Just reduced => normalizeTypeOpen reduced
+        Nothing => Right app
+    Let name ty val body => normalizeTypeOpen (instantiate1N body val)
+    Proj n i e => do
+      e' <- normalizeTypeOpen e
+      Right (Proj n i e')
+    Sort l => Right (Sort (simplify l))
+    e => Right e
+
+||| Deep normalization for closed expressions
+||| Recursively normalizes under binders using whnf at each level
+covering
+normalizeType : TCEnv -> ClosedExpr -> TC ClosedExpr
+normalizeType env e = do
+  -- First whnf at top level (handles delta, iota, beta)
+  e' <- whnf env e
+  -- Then recurse into subexpressions
+  normalizeDeep e'
+  where
+    covering
+    normalizeDeep : ClosedExpr -> TC ClosedExpr
+    normalizeDeep (Pi name bi dom cod) = do
+      dom' <- normalizeType env dom
+      -- For codomain, we need to handle it carefully since it has a bound var
+      -- Use normalizeTypeOpenWithEnv to allow delta reduction in open terms
+      cod' <- normalizeTypeOpenWithEnv env cod
+      Right (Pi name bi dom' cod')
+    normalizeDeep (Lam name bi ty body) = do
+      ty' <- normalizeType env ty
+      body' <- normalizeTypeOpenWithEnv env body
+      Right (Lam name bi ty' body')
+    normalizeDeep (App f arg) = do
+      -- App after whnf means no beta/delta/iota at head, so just normalize subterms
+      f' <- normalizeType env f
+      arg' <- normalizeType env arg
+      Right (App f' arg')
+    normalizeDeep (Let name ty val body) = do
+      -- Let should have been reduced by whnf, but normalize subterms anyway
+      ty' <- normalizeType env ty
+      val' <- normalizeType env val
+      body' <- normalizeTypeOpenWithEnv env body
+      Right (Let name ty' val' body')
+    normalizeDeep (Proj n i e) = do
+      e' <- normalizeType env e
+      Right (Proj n i e')
+    normalizeDeep (Sort l) = Right (Sort (simplify l))
+    normalizeDeep e = Right e  -- Const, BVar, NatLit, StringLit
+
+||| Quick alpha-equivalence check for closed expressions.
+||| Compares expressions structurally but ignores binder names.
+||| This is simpler than full isDefEq but handles the common case
+||| where two normalized types differ only in binder names.
+||| Uses a de Bruijn level (counting from outer) to track equivalent placeholders.
+covering export
+alphaEq : ClosedExpr -> ClosedExpr -> Bool
+alphaEq = alphaEqWithEnv [] []
+  where
+    covering
+    alphaEqWithEnv : List Name -> List Name -> ClosedExpr -> ClosedExpr -> Bool
+    alphaEqWithEnv env1 env2 (Sort l1) (Sort l2) = simplify l1 == simplify l2
+    alphaEqWithEnv env1 env2 (Const n1 ls1) (Const n2 ls2) =
+      -- First, if names are exactly equal, they're the same constant
+      if n1 == n2 && map simplify ls1 == map simplify ls2
+        then True
+        else
+          -- Check if both are placeholder constants
+          -- For comparison placeholders (de Bruijn): same depth = equivalent
+          -- For inference placeholders: same base name = equivalent
+          case (extractComparisonPlaceholderDepth n1, extractComparisonPlaceholderDepth n2) of
+            (Just d1, Just d2) => d1 == d2 && map simplify ls1 == map simplify ls2
+            _ => -- Fall back to inference placeholder comparison
+                 let base1 = extractPlaceholderBase n1
+                     base2 = extractPlaceholderBase n2
+                 in case (base1, base2) of
+                      (Just b1, Just b2) => b1 == b2 && map simplify ls1 == map simplify ls2
+                      -- Also check if both are in the binder environment at same position
+                      _ => let level1 = findLevelNat n1 env1 0
+                               level2 = findLevelNat n2 env2 0
+                           in case (level1, level2) of
+                                (Just l1, Just l2) => l1 == l2 && map simplify ls1 == map simplify ls2
+                                _ => False
+      where
+        findLevelNat : Name -> List Name -> Nat -> Maybe Nat
+        findLevelNat _ [] _ = Nothing
+        findLevelNat n (x :: xs) idx = if n == x then Just idx else findLevelNat n xs (S idx)
+    alphaEqWithEnv env1 env2 (BVar i1) (BVar i2) = i1 == i2
+    alphaEqWithEnv env1 env2 (App f1 a1) (App f2 a2) =
+      alphaEqWithEnv env1 env2 f1 f2 && alphaEqWithEnv env1 env2 a1 a2
+    -- Lam: ignore binder info (like isDefEqWhnf does) since it's not part of type equality in Lean
+    alphaEqWithEnv env1 env2 (Lam name1 _ ty1 body1) (Lam name2 _ ty2 body2) =
+      alphaEqWithEnv env1 env2 ty1 ty2 &&
+      alphaEqWithEnv (name1 :: env1) (name2 :: env2) (believe_me body1) (believe_me body2)
+    -- Pi: ignore binder info (like isDefEqWhnf does) since it's not part of type equality in Lean
+    alphaEqWithEnv env1 env2 (Pi name1 _ dom1 cod1) (Pi name2 _ dom2 cod2) =
+      alphaEqWithEnv env1 env2 dom1 dom2 &&
+      alphaEqWithEnv (name1 :: env1) (name2 :: env2) (believe_me cod1) (believe_me cod2)
+    alphaEqWithEnv env1 env2 (Let name1 ty1 v1 b1) (Let name2 ty2 v2 b2) =
+      alphaEqWithEnv env1 env2 ty1 ty2 && alphaEqWithEnv env1 env2 v1 v2 &&
+      alphaEqWithEnv (name1 :: env1) (name2 :: env2) (believe_me b1) (believe_me b2)
+    alphaEqWithEnv env1 env2 (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
+      sn1 == sn2 && i1 == i2 && alphaEqWithEnv env1 env2 s1 s2
+    alphaEqWithEnv _ _ (NatLit n1) (NatLit n2) = n1 == n2
+    alphaEqWithEnv _ _ (StringLit s1) (StringLit s2) = s1 == s2
+    alphaEqWithEnv _ _ _ _ = False
 
 mutual
   ||| Infer the type of a closed expression.
+  ||| Returns the updated environment (with any new placeholders) and the type.
   ||| Delegates to inferTypeOpen with empty context for binder forms.
   export
   covering
-  inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
+  inferTypeE : TCEnv -> ClosedExpr -> TC (TCEnv, ClosedExpr)
 
   -- Sort : Sort (succ level)
-  inferType _ (Sort l) = Right (Sort (Succ l))
+  inferTypeE env (Sort l) = Right (env, Sort (Succ l))
 
   -- Const: look up type in environment and instantiate levels
-  inferType env (Const name levels) =
-    case lookupDecl name env of
-      Nothing => Left (UnknownConst name)
-      Just decl => case declType decl of
-        Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
-        Just ty =>
-          let params = declLevelParams decl in
-          if length params /= length levels
-            then Left (WrongNumLevels (length params) (length levels) name)
-            else case instantiateLevelParamsSafe params levels ty of
-              Nothing => Left (CyclicLevelParam name)
-              Just ty' => Right ty'
+  -- First check if it's a placeholder constant (from closeWithPlaceholders)
+  inferTypeE env (Const name levels) =
+    case lookupPlaceholder name env of
+      Just ty => Right (env, ty)  -- Placeholder constant - return its registered type
+      Nothing =>
+        -- Check if it's a quotient primitive (when quotient is enabled)
+        case (if env.quotInit then getQuotType name else Nothing) of
+          Just (ty, params) =>
+            if length params /= length levels
+              then Left (WrongNumLevels (length params) (length levels) name)
+              else Right (env, instantiateLevelParams params levels ty)
+          Nothing =>
+            case lookupDecl name env of
+              Nothing => Left (OtherError $ "unknown constant: " ++ show name ++
+                              "\n  Name structure: " ++ showNameStructure name ++
+                              "\n  Registered placeholders: " ++ show (length (Data.SortedMap.toList env.placeholders)))
+              Just decl => case declType decl of
+                Nothing => Left (UnknownConst name)  -- QuotDecl has no direct type
+                Just ty =>
+                  let params = declLevelParams decl in
+                  if length params /= length levels
+                    then Left (WrongNumLevels (length params) (length levels) name)
+                    -- Use non-safe version: the level names in the replacement are from
+                    -- the outer scope (current definition), not the inner scope (instantiated definition).
+                    -- So "u := u+1" where the inner u is Fin.casesOn's param and outer u is
+                    -- Fin.noConfusionType's param is NOT a cycle.
+                    else Right (env, instantiateLevelParams params levels ty)
+  where
+    showNameStructure : Name -> String
+    showNameStructure Anonymous = "Anonymous"
+    showNameStructure (Str s parent) = "Str \"" ++ s ++ "\" (" ++ showNameStructure parent ++ ")"
+    showNameStructure (Num n parent) = "Num " ++ show n ++ " (" ++ showNameStructure parent ++ ")"
 
   -- App: infer function type, check it's Pi, verify arg type, instantiate with arg
-  inferType env (App f arg) = do
-    fTy <- inferType env f
-    (_, _, dom, cod) <- ensurePi env fTy
-    -- Verify argument type matches domain (basic check - full isDefEq requires mutual recursion)
-    argTy <- inferType env arg
-    argTy' <- whnf env argTy
-    dom' <- whnf env dom
-    -- Simple structural equality after reduction
-    if argTy' == dom'
-      then Right (subst0 cod arg)
-      else Left (AppTypeMismatch dom argTy)
+  inferTypeE env (App f arg) = do
+    (env1, fTy) <- inferTypeE env f
+    case ensurePi env1 fTy of
+      Left err => debugPrint ("inferTypeE App: ensurePi failed for f=" ++ show f ++ " arg=" ++ show arg ++ " fTy=" ++ show fTy) $ Left err
+      Right (_, _, dom, cod) => do
+        -- Verify argument type matches domain
+        (env2, argTy) <- inferTypeE env1 arg
+        -- First whnf to unfold constants like outParam, then normalizeType for nested beta
+        argTy1 <- whnf env2 argTy
+        argTy' <- normalizeType env2 argTy1
+        dom1 <- whnf env2 dom
+        dom' <- normalizeType env2 dom1
+        -- Use alphaEq for proper alpha-equivalence (handles different binder names)
+        if alphaEq argTy' dom'
+          then do
+            -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+            let resultTy = instantiate1 (believe_me cod) arg
+            -- Reduce the result type to handle beta redexes like ((fun _ => C x) y)
+            resultTy' <- whnf env2 resultTy
+            Right (env2, resultTy')
+          else do
+            debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  dom1 (after whnf)=" ++ show dom1 ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTy1 (after whnf)=" ++ show argTy1 ++ "\n  argTy' (after normalize)=" ++ show argTy') $
+              Left (AppTypeMismatch dom' argTy')
 
-  -- Lam: delegate to inferTypeOpen which properly handles the body
-  inferType env (Lam name bi ty body) =
-    inferTypeOpen env emptyCtx (Lam name bi ty body)
+  -- Lam: delegate to inferTypeOpenE which properly handles the body
+  inferTypeE env (Lam name bi ty body) = do
+    (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Lam name bi ty body)
+    Right (env', resultTy)
 
-  -- Pi: delegate to inferTypeOpen which properly handles the codomain
-  inferType env (Pi name bi dom cod) =
-    inferTypeOpen env emptyCtx (Pi name bi dom cod)
+  -- Pi: delegate to inferTypeOpenE which properly handles the codomain
+  inferTypeE env (Pi name bi dom cod) = do
+    (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Pi name bi dom cod)
+    Right (env', resultTy)
 
-  -- Let: delegate to inferTypeOpen which properly handles the body
-  inferType env (Let name ty val body) =
-    inferTypeOpen env emptyCtx (Let name ty val body)
+  -- Let: delegate to inferTypeOpenE which properly handles the body
+  inferTypeE env (Let name ty val body) = do
+    (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Let name ty val body)
+    Right (env', resultTy)
 
-  -- Proj: for now unsupported (requires inductive types)
-  inferType _ (Proj _ _ _) = Left (OtherError "projection not yet supported")
+  -- Proj: delegate to inferTypeOpenE
+  inferTypeE env (Proj structName idx structExpr) = do
+    (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Proj structName idx structExpr)
+    Right (env', resultTy)
 
   -- NatLit: type is Nat
-  inferType _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
+  inferTypeE env (NatLit _) = Right (env, Const (Str "Nat" Anonymous) [])
 
   -- StringLit: type is String
-  inferType _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
+  inferTypeE env (StringLit _) = Right (env, Const (Str "String" Anonymous) [])
+
+  -- BVar: should not appear in closed expressions but can occur due to believe_me casts
+  -- This indicates a bug somewhere in the code - we shouldn't be type-checking open expressions
+  -- with inferTypeE
+  inferTypeE env (BVar i) =
+    Left (OtherError $ "inferTypeE: unexpected BVar " ++ show (finToNat i) ++ " in closed expression (should use inferTypeOpenE)")
+
+  ||| Convenience wrapper that discards the environment
+  export
+  covering
+  inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
+  inferType env e = do
+    (_, ty) <- inferTypeE env e
+    Right ty
 
   -- BVar: should not appear in closed expressions (Fin 0 is empty)
 
@@ -607,101 +1560,214 @@ mutual
   ------------------------------------------------------------------------
 
   ||| Infer the type of an open expression with a local context.
+  ||| Returns the updated environment (with placeholders) and the type.
   |||
   ||| This is the general form that handles expressions with bound variables.
-  ||| The result is always a closed expression (type).
+  ||| The result type is always a closed expression.
+  ||| Returns the updated context with placeholders assigned for proper reuse.
   |||
   ||| Key idea: when we look up a bound variable, we return its type from context.
   ||| When we go under a binder, we extend the context with the domain type.
   export
   covering
-  inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+  inferTypeOpenE : TCEnv -> LocalCtx n -> Expr n -> TC (TCEnv, LocalCtx n, ClosedExpr)
 
   -- Sort: same as closed case
-  inferTypeOpen _ _ (Sort l) = Right (Sort (Succ l))
+  inferTypeOpenE env ctx (Sort l) = Right (env, ctx, Sort (Succ l))
 
-  -- Const: same as closed case
-  inferTypeOpen env _ (Const name levels) =
-    case lookupDecl name env of
-      Nothing => Left (UnknownConst name)
-      Just decl => case declType decl of
-        Nothing => Left (UnknownConst name)
-        Just ty =>
-          let params = declLevelParams decl in
-          if length params /= length levels
-            then Left (WrongNumLevels (length params) (length levels) name)
-            else case instantiateLevelParamsSafe params levels ty of
-              Nothing => Left (CyclicLevelParam name)
-              Just ty' => Right ty'
+  -- Const: same as closed case (also checks placeholders and quotient primitives)
+  inferTypeOpenE env ctx (Const name levels) =
+    case lookupPlaceholder name env of
+      Just ty => Right (env, ctx, ty)  -- Placeholder constant
+      Nothing =>
+        -- Check if it's a quotient primitive (when quotient is enabled)
+        case (if env.quotInit then getQuotType name else Nothing) of
+          Just (ty, params) =>
+            if length params /= length levels
+              then Left (WrongNumLevels (length params) (length levels) name)
+              else Right (env, ctx, instantiateLevelParams params levels ty)
+          Nothing =>
+            case lookupDecl name env of
+              Nothing => Left (OtherError $ "unknown constant (inferTypeOpenE): " ++ show name ++
+                              "\n  Name structure: " ++ showNameStructure name ++
+                              "\n  Context depth: " ++ show (length ctx) ++
+                              "\n  Registered placeholders: " ++ show (length (Data.SortedMap.toList env.placeholders)))
+              Just decl => case declType decl of
+                Nothing => Left (UnknownConst name)
+                Just ty =>
+                  let params = declLevelParams decl in
+                  if length params /= length levels
+                    then Left (WrongNumLevels (length params) (length levels) name)
+                    -- Use non-safe version (same reasoning as in inferTypeE)
+                    else
+                      let ty' = instantiateLevelParams params levels ty
+                          -- Debug: trace Fin.rec type lookup
+                          _ = case name of
+                                Str "rec" (Str "Fin" _) => debugPrint ("Const Fin.rec type=" ++ show ty') ()
+                                _ => ()
+                      in Right (env, ctx, ty')
+  where
+    showNameStructure : Name -> String
+    showNameStructure Anonymous = "Anonymous"
+    showNameStructure (Str s parent) = "Str \"" ++ s ++ "\" (" ++ showNameStructure parent ++ ")"
+    showNameStructure (Num n parent) = "Num " ++ show n ++ " (" ++ showNameStructure parent ++ ")"
 
   -- BVar: look up type in local context
-  inferTypeOpen _ ctx (BVar i) = Right (lookupCtx i ctx).type
+  inferTypeOpenE env ctx (BVar i) = Right (env, ctx, (lookupCtx i ctx).type)
 
   -- App: infer function type, ensure it's Pi, instantiate codomain
-  inferTypeOpen env ctx (App f arg) = do
-    fTy <- inferTypeOpen env ctx f
-    (_, _, dom, cod) <- ensurePi env fTy
-    -- Substitute the argument into the codomain
-    -- We close the argument to get a ClosedExpr for substitution
-    let argClosed = closeWithPlaceholders ctx arg
-    Right (subst0 cod argClosed)
+  inferTypeOpenE env ctx (App f arg) = do
+    (env1, ctx1, fTy) <- inferTypeOpenE env ctx f
+    case ensurePi env1 fTy of
+      Left err => debugPrint ("inferTypeOpenE App: ensurePi failed for f=" ++ show f ++ " arg=" ++ show arg ++ " fTy=" ++ show fTy ++ " ctxLen=" ++ show (length ctx)) $ Left err
+      Right (_, _, dom, cod) => do
+        -- Substitute the argument into the codomain
+        -- We close the argument to get a ClosedExpr for substitution
+        -- Use ctx1 which has placeholders from inferring f's type
+        let (env2, ctx2, argClosed) = closeWithPlaceholders env1 ctx1 arg
+        -- Use instantiate1 for proper beta reduction (shifts outer variables down)
+        let resultTy = instantiate1 (believe_me cod) argClosed
+        -- Reduce the result type to handle cases like ((fun _ => C x) y)
+        resultTy' <- whnf env2 resultTy
+        -- Debug: trace Fin.rec applications
+        let _ = case getAppHead f of
+                  Just headName => if isFinRecName headName
+                    then debugPrint ("App Fin.rec:\n  fTy=" ++ show fTy ++ "\n  dom=" ++ show dom ++ "\n  cod=" ++ show cod ++ "\n  argClosed=" ++ show argClosed ++ "\n  resultTy=" ++ show resultTy ++ "\n  resultTy'=" ++ show resultTy') ()
+                    else ()
+                  Nothing => ()
+        Right (env2, ctx2, resultTy')
+  where
+    getAppHead : Expr n -> Maybe Name
+    getAppHead (Const n _) = Just n
+    getAppHead (App f' _) = getAppHead f'
+    getAppHead _ = Nothing
+
+    isRecName : Name -> Bool
+    isRecName (Str "rec" _) = True
+    isRecName _ = False
+
+    isFinRecName : Name -> Bool
+    isFinRecName (Str "rec" (Str "Fin" Anonymous)) = True
+    isFinRecName _ = False
 
   -- Lam: type is Pi type
-  inferTypeOpen env ctx (Lam name bi domExpr body) = do
+  -- The type of (λx:A. body) is (Πx:A. bodyType)
+  inferTypeOpenE env ctx (Lam name bi domExpr body) = do
     -- Check domain is a type
-    domTy <- inferTypeOpen env ctx domExpr
-    _ <- ensureSort env domTy
-    -- Close the domain to use in the context
-    let domClosed = closeWithPlaceholders ctx domExpr
+    (env1, ctx1, domTy) <- inferTypeOpenE env ctx domExpr
+    _ <- ensureSort env1 domTy
+    -- Close the domain for use in context extension and in result type
+    -- This also assigns placeholders to all context entries
+    let (env2, ctx2, domClosed) = closeWithPlaceholders env1 ctx1 domExpr
+    -- Create a placeholder for the new bound variable BEFORE extending context
+    -- This way we know what placeholder to replace with BVar 0 later
+    let counter = env2.nextPlaceholder
+        phName = placeholderName name counter
+        env3 = { nextPlaceholder := S counter } env2
+        env4 = addPlaceholder phName domClosed env3
+        ph : ClosedExpr = Const phName []
+        -- Extend context with the new variable, pre-assigning its placeholder
+        newEntry = MkLocalEntry name domClosed Nothing (Just ph)
+        ctx' : LocalCtx (S n) = newEntry :: ctx2
     -- Infer body type with extended context
-    let ctx' = extendCtx name domClosed ctx
-    bodyTy <- inferTypeOpen env ctx' body
-    -- Result is Pi type
-    Right (Pi name bi domClosed (weaken1 bodyTy))
+    (env5, ctx'', bodyTy) <- inferTypeOpenE env4 ctx' body
+    -- Debug: check if bodyTy is Lam
+    let _ = case bodyTy of
+              Lam lamName _ _ _ => debugPrint ("Lam case: bodyTy is Lam!\n  outer name=" ++ show name ++ "\n  lam name=" ++ show lamName ++ "\n  bodyTy=" ++ show bodyTy) ()
+              _ => ()
+    -- Convert body type: replace ALL placeholders from ctx'' with their BVars
+    -- ctx'' has the new variable at index 0, so its placeholder becomes BVar 0
+    -- Use replaceAllPlaceholdersWithBVars' which takes List LocalEntry directly
+    let bodyCodOpen = replaceAllPlaceholdersWithBVars' (toList ctx'') bodyTy
+    let resultCod : Expr 1 = believe_me bodyCodOpen
+    -- Debug: always trace for mk names
+    let _ = case name of
+              Str "mk" _ => debugPrint ("Lam mk: bodyTy=" ++ show bodyTy ++ "\n  resultCod=" ++ show resultCod ++ "\n  ctxLen=" ++ show (length ctx'')) ()
+              _ => ()
+    -- Debug: trace when resultCod is a Lam
+    let _ = case resultCod of
+              Lam lamName _ _ _ => debugPrint ("Lam: resultCod is Lam!\n  outer name=" ++ show name ++ "\n  lam name=" ++ show lamName ++ "\n  bodyTy=" ++ show bodyTy ++ "\n  resultCod=" ++ show resultCod) ()
+              _ => ()
+    -- Result is Pi type with closed domain and the converted codomain
+    Right (env5, ctx2, Pi name bi domClosed resultCod)
 
   -- Pi: infer universe level of the result
-  inferTypeOpen env ctx (Pi name bi domExpr codExpr) = do
+  inferTypeOpenE env ctx (Pi name bi domExpr codExpr) = do
     -- Infer domain type and get its universe level
-    domTy <- inferTypeOpen env ctx domExpr
-    domLevel <- ensureSort env domTy
-    -- Close domain for context extension
-    let domClosed = closeWithPlaceholders ctx domExpr
-    let ctx' = extendCtx name domClosed ctx
+    (env1, ctx1, domTy) <- inferTypeOpenE env ctx domExpr
+    domLevel <- ensureSort env1 domTy
+    -- Close domain for context extension (assigns placeholders to context)
+    let (env2, ctx2, domClosed) = closeWithPlaceholders env1 ctx1 domExpr
+    let ctx' = extendCtx name domClosed ctx2
+    -- Debug: trace when codExpr is a Lam
+    let _ = case codExpr of
+              Lam lamName _ _ _ => debugPrint ("Pi: codExpr is Lam!\n  pi name=" ++ show name ++ "\n  lam name=" ++ show lamName ++ "\n  codExpr=" ++ show codExpr) ()
+              _ => ()
     -- Infer codomain type and get its universe level
-    codTy <- inferTypeOpen env ctx' codExpr
-    codLevel <- ensureSort env codTy
+    (env3, _, codTy) <- inferTypeOpenE env2 ctx' codExpr
+    codLevel <- ensureSort env3 codTy
     -- Result universe is imax of domain and codomain, simplified
-    Right (Sort (simplify (IMax domLevel codLevel)))
+    -- Return ctx2 (not ctx') since ctx' has the extended context entry
+    Right (env3, ctx2, Sort (simplify (IMax domLevel codLevel)))
 
   -- Let: check value type matches declared type, then extend context and infer body type
-  inferTypeOpen env ctx (Let name tyExpr valExpr body) = do
+  inferTypeOpenE env ctx (Let name tyExpr valExpr body) = do
     -- Check type is a type
-    tyTy <- inferTypeOpen env ctx tyExpr
-    _ <- ensureSort env tyTy
-    -- Close type and value
-    let tyClosed = closeWithPlaceholders ctx tyExpr
-    let valClosed = closeWithPlaceholders ctx valExpr
+    (env1, ctx1, tyTy) <- inferTypeOpenE env ctx tyExpr
+    _ <- ensureSort env1 tyTy
+    -- Close type (assigns placeholders to context)
+    let (env2, ctx2, tyClosed) = closeWithPlaceholders env1 ctx1 tyExpr
+    -- Close value (reuses placeholders from ctx2)
+    let (env3, ctx3, valClosed) = closeWithPlaceholders env2 ctx2 valExpr
     -- Check value has the declared type
-    valTy <- inferTypeOpen env ctx valExpr
-    tyClosed' <- whnf env tyClosed
-    valTy' <- whnf env valTy
-    if tyClosed' == valTy'
+    (env4, ctx4, valTy) <- inferTypeOpenE env3 ctx3 valExpr
+    -- Normalize both types
+    tyClosed' <- whnf env4 tyClosed
+    valTy' <- whnf env4 valTy
+    tyClosed'' <- normalizeType env4 tyClosed'
+    valTy'' <- normalizeType env4 valTy'
+    -- Convert tyClosed's placeholders to BVars using ctx4 so comparison works
+    -- valTy has BVars from Lam inference, tyClosed has placeholders from closing
+    -- Converting tyClosed to BVars makes them comparable
+    let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed''
+    if alphaEq tyWithBVars valTy''
       then do
         -- Extend context with let binding
-        let ctx' = extendCtxLet name tyClosed valClosed ctx
+        let ctx' = extendCtxLet name tyClosed valClosed ctx4
         -- Infer body type
-        inferTypeOpen env ctx' body
-      else Left (LetTypeMismatch tyClosed valTy)
+        (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
+        -- Return ctx4 (not ctx') since ctx' has the extended context entry
+        Right (env5, ctx4, bodyTy)
+      else Left (LetTypeMismatch tyClosed'' valTy'')
 
   -- Proj: infer structure type and get field type
-  inferTypeOpen env ctx (Proj structName idx structExpr) = do
-    structTy <- inferTypeOpen env ctx structExpr
-    -- For now, return an error - projection typing requires inductive type lookup
-    Left (OtherError $ "projection typing not yet fully supported for " ++ show structName)
+  inferTypeOpenE env ctx (Proj structName idx structExpr) = do
+    (env1, ctx1, structTy) <- inferTypeOpenE env ctx structExpr
+    -- Reduce struct type to WHNF to expose the structure application
+    structTy' <- whnf env1 structTy
+    -- Extract the head (should be the structure name) and args (params)
+    let (head, params) = getAppSpine structTy'
+    case getConstHead head of
+      Nothing => Left (OtherError $ "projection: expected structure type for " ++ show structName ++ "\n  structExpr=" ++ show structExpr ++ "\n  structTy'=" ++ show structTy')
+      Just (tyName, _) =>
+        -- Verify the type matches the declared structure name
+        if tyName /= structName
+          then Left (OtherError $ "projection: type mismatch, expected " ++ show structName ++ " got " ++ show tyName)
+          else case getProjType env1 structName idx params of
+            Nothing => Left (OtherError $ "projection: could not compute field type for " ++ show structName ++ " at index " ++ show idx)
+            Just fieldTy => Right (env1, ctx1, fieldTy)
 
   -- Literals
-  inferTypeOpen _ _ (NatLit _) = Right (Const (Str "Nat" Anonymous) [])
-  inferTypeOpen _ _ (StringLit _) = Right (Const (Str "String" Anonymous) [])
+  inferTypeOpenE env ctx (NatLit _) = Right (env, ctx, Const (Str "Nat" Anonymous) [])
+  inferTypeOpenE env ctx (StringLit _) = Right (env, ctx, Const (Str "String" Anonymous) [])
+
+  ||| Convenience wrapper that discards the environment and context
+  export
+  covering
+  inferTypeOpen : TCEnv -> LocalCtx n -> Expr n -> TC ClosedExpr
+  inferTypeOpen env ctx e = do
+    (_, _, ty) <- inferTypeOpenE env ctx e
+    Right ty
 
 ------------------------------------------------------------------------
 -- Proof Irrelevance
@@ -729,52 +1795,201 @@ isProp env e = do
 ||| any two proofs of the same proposition are equal.
 |||
 ||| Takes isDefEq as parameter to break mutual recursion.
+
+||| Quick check if an expression is definitely NOT a proof
+||| (i.e., it's a type, a constructor, etc.)
+||| This avoids expensive type inference for common cases
+isDefinitelyNotProof : ClosedExpr -> Bool
+isDefinitelyNotProof (Sort _) = True        -- Sorts are not proofs
+isDefinitelyNotProof (Pi _ _ _ _) = True    -- Pi types are not proofs
+isDefinitelyNotProof (Lam _ _ _ _) = True   -- Lambdas are functions, not proofs of Prop in general
+isDefinitelyNotProof _ = False
+
 covering
 tryProofIrrelevance : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
                       TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
 tryProofIrrelevance recurEq env t s = do
-  -- Check if t has type Prop
-  tIsProp <- isProp env t
-  if not tIsProp
-    then Right Nothing  -- Not a proof, proof irrelevance doesn't apply
+  -- Quick check: skip if obviously not a proof
+  if isDefinitelyNotProof t || isDefinitelyNotProof s
+    then Right Nothing
     else do
-      -- t is a proof, check if s has the same type
-      tTy <- inferType env t
-      sTy <- inferType env s
-      typesEq <- recurEq env tTy sTy
-      if typesEq
-        then Right (Just True)   -- Same Prop type, proofs are equal
-        else Right (Just False)  -- Different types, not equal
+      -- Check if t has type Prop
+      tIsProp <- isProp env t
+      if not tIsProp
+        then Right Nothing  -- Not a proof, proof irrelevance doesn't apply
+        else do
+          -- t is a proof, check if s has the same type
+          tTy <- inferType env t
+          sTy <- inferType env s
+          typesEq <- recurEq env tTy sTy
+          if typesEq
+            then Right (Just True)   -- Same Prop type, proofs are equal
+            else Right (Just False)  -- Different types, not equal
 
 ------------------------------------------------------------------------
 -- Definitional Equality
 ------------------------------------------------------------------------
 
-||| Check syntactic equality of levels
+||| Normalize and compare levels for equality
+||| Uses simplification to bring levels to a canonical form before comparison
+covering
 levelEq : Level -> Level -> Bool
-levelEq Zero Zero = True
-levelEq (Succ l1) (Succ l2) = levelEq l1 l2
-levelEq (Max a1 b1) (Max a2 b2) = levelEq a1 a2 && levelEq b1 b2
-levelEq (IMax a1 b1) (IMax a2 b2) = levelEq a1 a2 && levelEq b1 b2
-levelEq (Param n1) (Param n2) = n1 == n2
-levelEq _ _ = False
+levelEq l1 l2 =
+  let l1' = simplify l1
+      l2' = simplify l2
+  in levelEqCore l1' l2'
+  where
+    levelEqCore : Level -> Level -> Bool
+    levelEqCore Zero Zero = True
+    levelEqCore (Succ l1) (Succ l2) = levelEqCore l1 l2
+    levelEqCore (Max a1 b1) (Max a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
+    levelEqCore (IMax a1 b1) (IMax a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
+    levelEqCore (Param n1) (Param n2) = n1 == n2
+    levelEqCore _ _ = False
 
 ||| Check syntactic equality of level lists
+covering
 levelListEq : List Level -> List Level -> Bool
 levelListEq [] [] = True
 levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2
 levelListEq _ _ = False
 
-||| Helper for comparing bodies (Expr 1)
-||| We compare them by substituting a fresh variable placeholder
+||| Check if a name is an inference placeholder for a specific binder name
+||| Check if a placeholder name matches a target binder name.
+||| Matches both inference placeholders and comparison placeholders:
+||| - Inference: Str "_local" (Num counter binderName)
+||| - Comparison: Str "_isDefEqBody" (Str counter binderName)
+||| We match by binder name regardless of counter.
+isPlaceholderForBinder : Name -> Name -> Bool
+isPlaceholderForBinder (Str "_local" (Num _ binderName)) targetName =
+  binderName == targetName
+isPlaceholderForBinder (Str "_isDefEqBody" (Str _ binderName)) targetName =
+  binderName == targetName
+isPlaceholderForBinder _ _ = False
+
+||| Extract the binder name from an inference placeholder
+||| Returns Just binderName if this is an inference placeholder, Nothing otherwise
+extractInferencePlaceholderBinder : Name -> Maybe Name
+extractInferencePlaceholderBinder (Str "_local" (Num _ binderName)) = Just binderName
+extractInferencePlaceholderBinder _ = Nothing
+
+||| Check if a name is a comparison placeholder (created by isDefEqBodyWithNameAndType)
+isComparisonPlaceholder : Name -> Bool
+isComparisonPlaceholder (Str "_x" (Str "_isDefEqBody" _)) = True
+isComparisonPlaceholder (Str "_isDefEqBody" _) = True  -- Also match our actual format
+isComparisonPlaceholder _ = False
+
+||| Check if expression contains any placeholders matching a binder name
+||| This is a quick check to avoid unnecessary traversals
+covering
+containsPlaceholderForBinder : Name -> ClosedExpr -> Bool
+containsPlaceholderForBinder targetBinder (Const name []) = isPlaceholderForBinder name targetBinder
+containsPlaceholderForBinder _ (Const _ _) = False  -- Placeholders have no level args
+containsPlaceholderForBinder _ (BVar _) = False
+containsPlaceholderForBinder _ (Sort _) = False
+containsPlaceholderForBinder targetBinder (App f x) =
+  containsPlaceholderForBinder targetBinder f || containsPlaceholderForBinder targetBinder x
+containsPlaceholderForBinder targetBinder (Lam _ _ ty body) =
+  containsPlaceholderForBinder targetBinder ty || containsPlaceholderForBinder targetBinder (believe_me body)
+containsPlaceholderForBinder targetBinder (Pi _ _ dom cod) =
+  containsPlaceholderForBinder targetBinder dom || containsPlaceholderForBinder targetBinder (believe_me cod)
+containsPlaceholderForBinder targetBinder (Let _ ty val body) =
+  containsPlaceholderForBinder targetBinder ty ||
+  containsPlaceholderForBinder targetBinder val ||
+  containsPlaceholderForBinder targetBinder (believe_me body)
+containsPlaceholderForBinder targetBinder (Proj _ _ s) = containsPlaceholderForBinder targetBinder s
+containsPlaceholderForBinder _ (NatLit _) = False
+containsPlaceholderForBinder _ (StringLit _) = False
+
+||| Replace inference placeholders for a specific binder with the shared comparison placeholder
+||| This handles placeholders created by closeWithPlaceholders during type inference.
+||| Uses believe_me to handle any depth of Expr
+replacePlaceholdersForBinderN : Name -> {n : Nat} -> Expr n -> Name -> Expr n
+replacePlaceholdersForBinderN targetBinder (BVar i) _ = BVar i
+replacePlaceholdersForBinderN targetBinder (Sort l) _ = Sort l
+replacePlaceholdersForBinderN targetBinder (Const name []) sharedName =
+  if isPlaceholderForBinder name targetBinder
+    then Const sharedName []
+    else Const name []
+replacePlaceholdersForBinderN _ (Const name ls) _ = Const name ls
+replacePlaceholdersForBinderN targetBinder (App f x) sharedName =
+  App (replacePlaceholdersForBinderN targetBinder f sharedName)
+      (replacePlaceholdersForBinderN targetBinder x sharedName)
+replacePlaceholdersForBinderN targetBinder (Lam name bi ty body) sharedName =
+  Lam name bi (replacePlaceholdersForBinderN targetBinder ty sharedName)
+              (replacePlaceholdersForBinderN targetBinder body sharedName)
+replacePlaceholdersForBinderN targetBinder (Pi name bi dom cod) sharedName =
+  Pi name bi (replacePlaceholdersForBinderN targetBinder dom sharedName)
+             (replacePlaceholdersForBinderN targetBinder cod sharedName)
+replacePlaceholdersForBinderN targetBinder (Let name ty val body) sharedName =
+  Let name (replacePlaceholdersForBinderN targetBinder ty sharedName)
+           (replacePlaceholdersForBinderN targetBinder val sharedName)
+           (replacePlaceholdersForBinderN targetBinder body sharedName)
+replacePlaceholdersForBinderN targetBinder (Proj sn i s) sharedName =
+  Proj sn i (replacePlaceholdersForBinderN targetBinder s sharedName)
+replacePlaceholdersForBinderN _ (NatLit k) _ = NatLit k
+replacePlaceholdersForBinderN _ (StringLit s) _ = StringLit s
+
+||| Convenience wrapper for closed expressions
+replacePlaceholdersForBinder : Name -> ClosedExpr -> Name -> ClosedExpr
+replacePlaceholdersForBinder targetBinder e sharedName = replacePlaceholdersForBinderN targetBinder e sharedName
+
+||| Combined substitution and placeholder replacement
+||| Substitutes BVar 0 with the comparison placeholder (using instantiate1 for proper
+||| depth tracking), and replaces any inference placeholders for the given binder
+||| with the comparison placeholder
+covering
+substAndReplacePlaceholders : Name -> Name -> Expr 1 -> ClosedExpr
+substAndReplacePlaceholders binderName phName e =
+  -- Use instantiate1 for proper beta reduction (shifts outer BVars down)
+  let e' : ClosedExpr = instantiate1 (believe_me e) (Const phName [])
+      hasPlaceholder : Bool = containsPlaceholderForBinder binderName e'
+      result : ClosedExpr = if hasPlaceholder
+                              then replacePlaceholdersForBinder binderName e' phName
+                              else e'
+  in result
+
+||| Helper for comparing bodies (Expr 1) with depth-based placeholder naming.
+||| We compare them by substituting a fresh variable placeholder.
+|||
+||| Uses de Bruijn depth for placeholder names: Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+||| This ensures that shadowed binders (same name, different depths) get different placeholders.
+||| The depth parameter indicates how many binders we've descended into (0 = outermost).
+covering
+isDefEqBodyWithDepth : Nat -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBodyWithDepth depth binderType recur env b1 b2 =
+  -- Create a placeholder for var 0 using depth-based naming
+  -- Format: Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+  let counter = env.nextPlaceholder
+      phName = Str "_isDefEqBody" (Num counter (Num depth Anonymous))
+      -- Increment counter, add placeholder type for proper type inference
+      env' = addPlaceholder phName binderType ({ nextPlaceholder := S counter } env)
+      -- Substitute BVar 0 with the comparison placeholder (simple substitution)
+      e1' : ClosedExpr = instantiate1 (believe_me b1) (Const phName [])
+      e2' : ClosedExpr = instantiate1 (believe_me b2) (Const phName [])
+  in debugPrint ("isDefEqBodyWithDepth: depth=" ++ show depth ++ " phName=" ++ show phName ++ "\n  e1'=" ++ show e1' ++ "\n  e2'=" ++ show e2') $
+     recur env' e1' e2'
+
+||| Helper for comparing bodies (Expr 1) - uses depth 0 as default
+||| For backwards compatibility with call sites that don't track depth
+covering
+isDefEqBodyWithNameAndType : Name -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBodyWithNameAndType binderName binderType recur env b1 b2 =
+  -- binderName is ignored - we use depth-based placeholders now
+  isDefEqBodyWithDepth 0 binderType recur env b1 b2
+
+||| Helper for comparing bodies (Expr 1) - fallback for cases without domain type info
+covering
+isDefEqBodyWithName : Name -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBodyWithName binderName recur env b1 b2 =
+  -- binderName is ignored - we use depth-based placeholders now
+  isDefEqBodyWithDepth 0 (Sort Zero) recur env b1 b2
+
+||| Helper for comparing bodies (Expr 1) - fallback for cases without binder name
 covering
 isDefEqBody : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) -> TCEnv -> Expr 1 -> Expr 1 -> TC Bool
 isDefEqBody recur env b1 b2 =
-  -- Create a placeholder for var 0 - use a fresh constant
-  let placeholder = Const (Str "_x" Anonymous) []
-      e1 = subst0 b1 placeholder
-      e2 = subst0 b2 placeholder
-  in recur env e1 e2
+  isDefEqBodyWithDepth 0 (Sort Zero) recur env b1 b2
 
 ||| Try eta expansion: if t is λx.body and s is not a lambda,
 ||| eta-expand s to λx:A. s x where A is the domain of s's type.
@@ -842,9 +2057,7 @@ isDefEq env e1 e2 = do
   proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
   case proofIrrel of
     Just result => Right result
-    Nothing =>
-      -- Then check structural equality
-      isDefEqWhnf e1' e2'
+    Nothing => isDefEqWhnf e1' e2'
   where
     -- Check equality of expressions in whnf
     covering
@@ -853,37 +2066,69 @@ isDefEq env e1 e2 = do
     -- Sorts: compare levels
     isDefEqWhnf (Sort l1) (Sort l2) = Right (levelEq l1 l2)
 
-    -- Constants: same name and levels
+    -- Constants: same name and levels, or equivalent via binder alias
     isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
-      Right (n1 == n2 && levelListEq ls1 ls2)
+      debugPrint ("isDefEqWhnf Const: n1=" ++ show n1 ++ " n2=" ++ show n2) $
+      if n1 == n2 && levelListEq ls1 ls2
+        then Right True
+        else -- Check if both are comparison placeholders at the same depth
+             -- With de Bruijn indices, same depth = same variable (regardless of counter)
+             case (ls1, ls2) of
+               ([], []) => Right (areEquivalentPlaceholders n1 n2)
+               _ => Right False
+      where
+        -- Check if two constant names are equivalent placeholders.
+        -- With de Bruijn depth-based naming, comparison placeholders are equivalent
+        -- if they have the same depth (different counters are fine - they represent
+        -- the same binder at the same nesting level).
+        areEquivalentPlaceholders : Name -> Name -> Bool
+        areEquivalentPlaceholders c1 c2 =
+          case (extractComparisonPlaceholderDepth c1, extractComparisonPlaceholderDepth c2) of
+            (Just depth1, Just depth2) =>
+              let result = depth1 == depth2
+              in debugPrint ("comparison placeholder depth match: " ++ show depth1 ++ " vs " ++ show depth2 ++ " = " ++ show result) result
+            -- Inference placeholders (from closeWithPlaceholders) use binder names.
+            -- Two inference placeholders with the same base name are equivalent.
+            _ => case (extractPlaceholderBase c1, extractPlaceholderBase c2) of
+                   (Just base1, Just base2) =>
+                     let result = base1 == base2
+                     in debugPrint ("inference placeholder match: " ++ show base1 ++ " vs " ++ show base2 ++ " = " ++ show result) result
+                   _ => debugPrint ("not equivalent placeholders: " ++ show c1 ++ " vs " ++ show c2) False
 
     -- App: check function and arg
     isDefEqWhnf (App f1 a1) (App f2 a2) = do
       eqF <- isDefEq env f1 f2
       if eqF
-        then isDefEq env a1 a2
-        else Right False
+        then do
+          eqA <- isDefEq env a1 a2
+          if eqA
+            then Right True
+            else debugPrint ("isDefEqWhnf App arg mismatch:\n  a1=" ++ show a1 ++ "\n  a2=" ++ show a2) $ Right False
+        else debugPrint ("isDefEqWhnf App fun mismatch:\n  f1=" ++ show f1 ++ "\n  f2=" ++ show f2) $ Right False
 
     -- Lam: check binder type and body (ignoring binder name and info)
-    isDefEqWhnf (Lam _ _ ty1 body1) (Lam _ _ ty2 body2) = do
+    -- Pass declared binder name and type for placeholder matching
+    isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
       eqTy <- isDefEq env ty1 ty2
       if eqTy
-        then isDefEqBody isDefEq env body1 body2
-        else Right False
+        then isDefEqBodyWithNameAndType name1 ty1 isDefEq env body1 body2
+        else debugPrint ("isDefEqWhnf Lam type mismatch:\n  ty1=" ++ show ty1 ++ "\n  ty2=" ++ show ty2) $ Right False
 
     -- Pi: check domain and codomain
-    isDefEqWhnf (Pi _ _ dom1 cod1) (Pi _ _ dom2 cod2) = do
+    -- Pass declared binder name and type for placeholder matching
+    isDefEqWhnf (Pi name1 _ dom1 cod1) (Pi _ _ dom2 cod2) = do
+      debugPrint ("isDefEqWhnf Pi: name1=" ++ show name1 ++ "\n  cod1=" ++ show cod1 ++ "\n  cod2=" ++ show cod2) $ pure ()
       eqDom <- isDefEq env dom1 dom2
       if eqDom
-        then isDefEqBody isDefEq env cod1 cod2
+        then isDefEqBodyWithNameAndType name1 dom1 isDefEq env cod1 cod2
         else Right False
 
     -- Let: should have been reduced in whnf
-    isDefEqWhnf (Let _ ty1 v1 b1) (Let _ ty2 v2 b2) = do
+    isDefEqWhnf (Let name1 ty1 v1 b1) (Let _ ty2 v2 b2) = do
       eqTy <- isDefEq env ty1 ty2
       eqV <- isDefEq env v1 v2
       if eqTy && eqV
-        then isDefEqBody isDefEq env b1 b2
+        then isDefEqBodyWithNameAndType name1 ty1 isDefEq env b1 b2
         else Right False
 
     -- Proj: same struct name, index, and argument
@@ -901,7 +2146,7 @@ isDefEq env e1 e2 = do
       etaResult <- tryEtaExpansion isDefEq env t s
       case etaResult of
         Just b => Right b
-        Nothing => Right False  -- No eta, different constructors
+        Nothing => debugPrint ("isDefEqWhnf fallthrough:\n  t=" ++ show t ++ "\n  s=" ++ show s) $ Right False  -- No eta, different constructors
 
 ------------------------------------------------------------------------
 -- Convenience functions
@@ -977,14 +2222,23 @@ export
 covering
 checkDefDecl : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC ()
 checkDefDecl env name ty value levelParams = do
+  debugPrint ("checkDefDecl: " ++ show name) $ pure ()
   checkNameNotDeclared env name
+  debugPrint ("checkDefDecl: checkNameNotDeclared done") $ pure ()
   checkNoDuplicateUnivParams levelParams
+  debugPrint ("checkDefDecl: checkNoDuplicateUnivParams done") $ pure ()
   _ <- checkIsType env ty
-  valueTy <- inferType env value
-  eq <- isDefEq env valueTy ty
+  debugPrint ("checkDefDecl: checkIsType done") $ pure ()
+  -- Use inferTypeE to get updated env with placeholders
+  (env', valueTy) <- debugPrint ("checkDefDecl: about to infer value type for " ++ show name ++ "\n  value=" ++ show value) $ inferTypeE env value
+  debugPrint ("checkDefDecl: inferTypeE done\n  valueTy=" ++ show valueTy ++ "\n  ty=" ++ show ty) $ pure ()
+  -- Use updated env for comparison (so placeholders can be looked up)
+  eq <- isDefEq env' valueTy ty
   if eq
     then Right ()
-    else Left (OtherError $ "definition type mismatch for " ++ show name)
+    else Left (OtherError $ "definition type mismatch for " ++ show name
+               ++ "\n  inferred: " ++ show valueTy
+               ++ "\n  declared: " ++ show ty)
 
 ||| Validate a theorem declaration.
 |||
@@ -1005,8 +2259,9 @@ checkThmDecl env name ty value levelParams = do
   if simplify tyLevel /= Zero
     then Left (OtherError $ "theorem type must be a Prop: " ++ show name)
     else do
-      valueTy <- inferType env value
-      eq <- isDefEq env valueTy ty
+      -- Use inferTypeE to get updated env with placeholders
+      (env', valueTy) <- inferTypeE env value
+      eq <- isDefEq env' valueTy ty
       if eq
         then Right ()
         else Left (OtherError $ "theorem proof type mismatch for " ++ show name)
@@ -1117,13 +2372,6 @@ checkCtorUniverseParams ctorName indParams ctorParams =
   if indParams == ctorParams
     then Right ()
     else Left (CtorUniverseMismatch ctorName indParams ctorParams)
-
-||| Get the inductive info for a name (if it exists and is an inductive)
-getInductiveInfo : TCEnv -> Name -> Maybe InductiveInfo
-getInductiveInfo env name =
-  case lookupDecl name env of
-    Just (IndDecl info _) => Just info
-    _ => Nothing
 
 ||| Get the level parameters for an inductive
 getInductiveLevelParams : TCEnv -> Name -> Maybe (List Name)

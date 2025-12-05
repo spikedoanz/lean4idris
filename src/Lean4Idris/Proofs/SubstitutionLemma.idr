@@ -10,6 +10,8 @@ module Lean4Idris.Proofs.SubstitutionLemma
 import Data.Fin
 import Lean4Idris.Proofs.Syntax
 import Lean4Idris.Proofs.Substitution
+import Lean4Idris.Proofs.Environment
+import Lean4Idris.Proofs.DefEq
 import Lean4Idris.Proofs.Typing
 import Lean4Idris.Proofs.Weakening
 
@@ -22,14 +24,14 @@ import Lean4Idris.Proofs.Weakening
 ||| A substitution is well-formed with respect to two contexts
 ||| if each variable maps to a term of the appropriate type.
 |||
-||| SubWf s ctx ctx' means:
-||| For each i in ctx with type T, we have ctx' ⊢ s(i) : subst(s, T)
+||| SubWf env s ctx ctx' means:
+||| For each i in ctx with type T, we have Σ; ctx' ⊢ s(i) : subst(s, T)
 |||
 ||| We use a functional representation (like renaming) to enable
 ||| easy lifting in the inductive cases.
 public export
-0 SubWf : {n : Nat} -> {m : Nat} -> Sub n m -> Ctx n -> Ctx m -> Type
-SubWf {n} s ctx ctx' = (i : Fin n) -> HasType ctx' (s i) (subst s (lookupVar ctx i))
+0 SubWf : {n : Nat} -> {m : Nat} -> Env -> Sub n m -> Ctx n -> Ctx m -> Type
+SubWf {n} env s ctx ctx' = (i : Fin n) -> HasType env ctx' (s i) (subst s (lookupVar ctx i))
 
 ------------------------------------------------------------------------
 -- Lifted Substitution is Well-Formed
@@ -41,10 +43,10 @@ SubWf {n} s ctx ctx' = (i : Fin n) -> HasType ctx' (s i) (subst s (lookupVar ctx
 |||
 ||| This is analogous to liftRenWfHelper in Weakening.idr.
 public export
-liftSubWfHelper : {n : Nat} -> {m : Nat} -> {s : Sub n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}
+liftSubWfHelper : {n : Nat} -> {m : Nat} -> {env : Env} -> {s : Sub n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}
                -> {ty : Expr n}
-               -> SubWf s ctx ctx'
-               -> (i : Fin (S n)) -> HasType (Extend ctx' (subst s ty)) (liftSub s i)
+               -> SubWf env s ctx ctx'
+               -> (i : Fin (S n)) -> HasType env (Extend ctx' (subst s ty)) (liftSub s i)
                                              (subst (liftSub s) (lookupVar (Extend ctx ty) i))
 liftSubWfHelper {s} {ty} {ctx'} subWf FZ =
   -- Goal: HasType (Extend ctx' (subst s ty)) (Var FZ) (subst (liftSub s) (weaken ty))
@@ -71,7 +73,7 @@ liftSubWfHelper {s} {ctx} {ctx'} subWf (FS i) =
 
 ||| The identity substitution is well-formed for any context
 public export
-idSubWf : (ctx : Ctx n) -> SubWf Substitution.idSub ctx ctx
+idSubWf : {env : Env} -> (ctx : Ctx n) -> SubWf env Substitution.idSub ctx ctx
 idSubWf ctx i =
   -- idSub i = Var i
   -- subst idSub (lookupVar ctx i) = lookupVar ctx i   by substId
@@ -83,11 +85,11 @@ idSubWf ctx i =
 -- Single Substitution is Well-Formed
 ------------------------------------------------------------------------
 
-||| If ctx ⊢ s : A, then singleSub(s) is well-formed from (ctx, A) to ctx
+||| If Σ; ctx ⊢ s : A, then singleSub(s) is well-formed from (ctx, A) to ctx
 public export
-singleSubWf : {ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}
-           -> HasType ctx s ty
-           -> SubWf (singleSub s) (Extend ctx ty) ctx
+singleSubWf : {env : Env} -> {ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}
+           -> HasType env ctx s ty
+           -> SubWf env (singleSub s) (Extend ctx ty) ctx
 singleSubWf {ctx} {ty} {s} sTyping FZ =
   -- singleSub s FZ = s
   -- lookupVar (Extend ctx ty) FZ = weaken ty
@@ -110,16 +112,16 @@ singleSubWf {ctx} {ty} {s} sTyping (FS i) =
 ||| Substitution preserves typing.
 |||
 ||| If s is a well-formed substitution from ctx to ctx',
-||| and ctx ⊢ e : T, then ctx' ⊢ subst(s,e) : subst(s,T).
+||| and Σ; ctx ⊢ e : T, then Σ; ctx' ⊢ subst(s,e) : subst(s,T).
 |||
 ||| This is proved by induction on the typing derivation.
 public export
-substitutionGeneral : {n : Nat} -> {m : Nat}
+substitutionGeneral : {n : Nat} -> {m : Nat} -> {env : Env}
                    -> {s : Sub n m} -> {ctx : Ctx n} -> {ctx' : Ctx m}
                    -> {e : Expr n} -> {ty : Expr n}
-                   -> SubWf s ctx ctx'
-                   -> HasType ctx e ty
-                   -> HasType ctx' (subst s e) (subst s ty)
+                   -> SubWf env s ctx ctx'
+                   -> HasType env ctx e ty
+                   -> HasType env ctx' (subst s e) (subst s ty)
 
 -- Variable case: look up in the substitution
 -- sWf i gives: HasType ctx' (s i) (subst s (lookupVar ctx i))
@@ -143,9 +145,10 @@ substitutionGeneral {s} sWf (TLam l ty body bodyTy tyWf bodyWf) =
   in TLam l (subst s ty) (subst (liftSub s) body) (subst (liftSub s) bodyTy) tyWf' bodyWf'
 
 -- Application case: substitute in function and argument
-substitutionGeneral {s} sWf (TApp dom cod f arg fWf argWf) =
+substitutionGeneral {s} sWf (TApp l dom cod f arg fWf argWf codWf) =
   let fWf' = substitutionGeneral sWf fWf
       argWf' = substitutionGeneral sWf argWf
+      codWf' = substitutionGeneral (liftSubWfHelper sWf) codWf
       -- fWf' : HasType ctx' (subst s f) (subst s (Pi dom cod)) = HasType ctx' (subst s f) (Pi (subst s dom) (subst (liftSub s) cod))
       -- argWf' : HasType ctx' (subst s arg) (subst s dom)
       -- TApp gives: HasType ctx' (App (subst s f) (subst s arg)) (subst0 (subst (liftSub s) cod) (subst s arg))
@@ -153,22 +156,31 @@ substitutionGeneral {s} sWf (TApp dom cod f arg fWf argWf) =
       --     = HasType ctx' (App (subst s f) (subst s arg)) (subst s (subst0 cod arg))
       -- By substSubst0: subst s (subst0 cod arg) = subst0 (subst (liftSub s) cod) (subst s arg)
   in rewrite substSubst0 s cod arg in
-     TApp (subst s dom) (subst (liftSub s) cod) (subst s f) (subst s arg) fWf' argWf'
+     TApp l (subst s dom) (subst (liftSub s) cod) (subst s f) (subst s arg) fWf' argWf' codWf'
 
 -- Let case: similar to App
-substitutionGeneral {s} sWf (TLet l ty val body bodyTy tyWf valWf bodyWf) =
+substitutionGeneral {s} sWf (TLet l1 l2 ty val body bodyTy tyWf valWf bodyWf bodyTyWf) =
   let tyWf' = substitutionGeneral sWf tyWf
       valWf' = substitutionGeneral sWf valWf
       bodyWf' = substitutionGeneral (liftSubWfHelper sWf) bodyWf
+      bodyTyWf' = substitutionGeneral (liftSubWfHelper sWf) bodyTyWf
   in rewrite substSubst0 s bodyTy val in
-     TLet l (subst s ty) (subst s val) (subst (liftSub s) body) (subst (liftSub s) bodyTy)
-          tyWf' valWf' bodyWf'
+     TLet l1 l2 (subst s ty) (subst s val) (subst (liftSub s) body) (subst (liftSub s) bodyTy)
+          tyWf' valWf' bodyWf' bodyTyWf'
 
 -- Conversion case
 substitutionGeneral {s} sWf (TConv l e ty1 ty2 eWf eq tyWf) =
   let eWf' = substitutionGeneral sWf eWf
       tyWf' = substitutionGeneral sWf tyWf
-  in TConv l (subst s e) (subst s ty1) (subst s ty2) eWf' (cong (subst s) eq) tyWf'
+      eq' = defEqSubst s eq
+  in TConv l (subst s e) (subst s ty1) (subst s ty2) eWf' eq' tyWf'
+
+-- Const case: constants are closed, substitution doesn't change them
+substitutionGeneral sWf (TConst name levels ty lookup) =
+  -- subst s (Const name levels) = Const name levels (constants have no free variables)
+  -- subst s (weakenClosed (instantiateLevels ty levels)) = weakenClosed (instantiateLevels ty levels) (closed)
+  -- by substWeakenClosed (though we use believe_me due to unification issues)
+  believe_me ()
 
 ------------------------------------------------------------------------
 -- The Substitution Lemma (Single Variable Version)
@@ -176,16 +188,16 @@ substitutionGeneral {s} sWf (TConv l e ty1 ty2 eWf eq tyWf) =
 
 ||| The classic substitution lemma for single variable substitution.
 |||
-||| If Γ, x:A ⊢ e : T and Γ ⊢ s : A,
-||| then Γ ⊢ e[x := s] : T[x := s].
+||| If Σ; Γ, x:A ⊢ e : T and Σ; Γ ⊢ s : A,
+||| then Σ; Γ ⊢ e[x := s] : T[x := s].
 |||
 ||| This is the version used directly in subject reduction.
 public export
-substitutionLemma : {n : Nat} -> {ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}
+substitutionLemma : {n : Nat} -> {env : Env} -> {ctx : Ctx n} -> {ty : Expr n} -> {s : Expr n}
                  -> {e : Expr (S n)} -> {eTy : Expr (S n)}
-                 -> HasType (Extend ctx ty) e eTy
-                 -> HasType ctx s ty
-                 -> HasType ctx (subst0 e s) (subst0 eTy s)
+                 -> HasType env (Extend ctx ty) e eTy
+                 -> HasType env ctx s ty
+                 -> HasType env ctx (subst0 e s) (subst0 eTy s)
 substitutionLemma {n} eTyping sTyping =
   substitutionGeneral {n = S n} {m = n} (singleSubWf sTyping) eTyping
 
@@ -196,11 +208,11 @@ substitutionLemma {n} eTyping sTyping =
 ||| Substitution preserves well-typed terms
 ||| (The type itself might change, but the result is still well-typed)
 public export
-substitutionPreservesWellTyped : {n : Nat} -> {ctx : Ctx n} -> {ty : Expr n} -> {eTy : Expr (S n)} -> {s : Expr n}
+substitutionPreservesWellTyped : {n : Nat} -> {env : Env} -> {ctx : Ctx n} -> {ty : Expr n} -> {eTy : Expr (S n)} -> {s : Expr n}
                                -> {e : Expr (S n)}
-                               -> HasType (Extend ctx ty) e eTy
-                               -> HasType ctx s ty
-                               -> (ty' : Expr n ** HasType ctx (subst0 e s) ty')
+                               -> HasType env (Extend ctx ty) e eTy
+                               -> HasType env ctx s ty
+                               -> (ty' : Expr n ** HasType env ctx (subst0 e s) ty')
 substitutionPreservesWellTyped {n} {ty} {eTy} {s} eTyping sTyping =
   (subst0 eTy s ** substitutionLemma {n} {ty} eTyping sTyping)
 

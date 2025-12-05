@@ -7,6 +7,7 @@ module Lean4Idris.Proofs.Syntax
 
 import Data.Fin
 import public Data.Vect
+import public Lean4Idris.Proofs.Name
 
 %default total
 
@@ -69,6 +70,16 @@ data Expr : Nat -> Type where
   ||| The body can reference variable 0 (which is x)
   Let : (ty : Expr n) -> (val : Expr n) -> (body : Expr (S n)) -> Expr n
 
+  ||| Global constant reference with universe levels
+  ||| Const "Nat" [] references the Nat type
+  ||| Const "List" [l] references List at universe level l
+  Const : (name : Name) -> (levels : List Level) -> Expr n
+
+  ||| Projection from a structure
+  ||| Proj "Prod" 0 p extracts the first field of a pair
+  ||| Proj "Prod" 1 p extracts the second field
+  Proj : (structName : Name) -> (fieldIdx : Nat) -> (struct : Expr n) -> Expr n
+
 ------------------------------------------------------------------------
 -- Derived Forms and Conveniences
 ------------------------------------------------------------------------
@@ -82,6 +93,8 @@ shift (Pi d c) = Pi (shift d) (shift c)
 shift (Lam t b) = Lam (shift t) (shift b)
 shift (App f x) = App (shift f) (shift x)
 shift (Let t v b) = Let (shift t) (shift v) (shift b)
+shift (Const n ls) = Const n ls
+shift (Proj sn idx s) = Proj sn idx (shift s)
 
 ||| Non-dependent function type: A -> B
 ||| Encoded as Pi where the codomain doesn't use the variable
@@ -110,6 +123,14 @@ export
   show (Lam t b) = "(λ _ : " ++ show t ++ ". " ++ show b ++ ")"
   show (App f x) = "(" ++ show f ++ " " ++ show x ++ ")"
   show (Let t v b) = "(let _ : " ++ show t ++ " = " ++ show v ++ " in " ++ show b ++ ")"
+  show (Const n []) = n
+  show (Const n ls) = n ++ ".{" ++ showLevels ls ++ "}"
+    where
+      showLevels : List Level -> String
+      showLevels [] = ""
+      showLevels [l] = show l
+      showLevels (l :: ls) = show l ++ ", " ++ showLevels ls
+  show (Proj sn idx s) = show s ++ "." ++ show idx
 
 ------------------------------------------------------------------------
 -- Decidable Equality

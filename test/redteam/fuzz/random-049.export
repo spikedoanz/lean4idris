@@ -1,0 +1,23 @@
+0.0.0
+1 #NS 0 yiovrth
+2 #NS 1 q
+3 #NS 2 wpok
+1 #UM 0 0
+2 #UP 6
+3 #UIM 1 2
+0 #EL #BD 3 0 0
+1 #EP #BD 3 0 0
+2 #EC 2
+3 #EC 2
+4 #EV 9
+5 #EA 4 3
+6 #EP #BC 2 2 5
+7 #EL #BD 3 1 0
+8 #EC 1
+9 #EV 1
+10 #ES 5
+11 #EP #BS 3 10 0
+12 #EA 5 1
+#DEF 7 4 7 A 2
+#IND 1 0 0 0 0 0 0 1 1 0
+#AX 2 6 3

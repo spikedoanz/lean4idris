@@ -1,0 +1,15 @@
+0.0.0
+1 #NS 0 _x
+2 #NS 0 f
+3 #NS 0 g
+4 #NS 0 bad
+1 #US 0
+0 #ES 1
+1 #EC 1
+2 #EP #BD 1 0 0
+3 #EL #BD 1 0 1
+4 #EL #BD 1 0 0
+#AX 1 0 0
+#DEF 2 2 3 A 0
+#DEF 3 2 4 A 0
+#DEF 4 0 3 A 0

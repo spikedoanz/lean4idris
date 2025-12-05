@@ -19,6 +19,7 @@ import Debug.Trace
 import Data.Fin
 import Data.List
 import Data.Vect
+import Data.Maybe
 import Data.String
 import System.FFI
 import System.File
@@ -302,14 +303,14 @@ getDeclValue _ = Nothing  -- Axioms, inductives, etc. don't have values to unfol
 covering
 unfoldConst : TCEnv -> Name -> List Level -> Maybe ClosedExpr
 unfoldConst env name levels = do
-  decl <- lookupDecl name env
-  value <- getDeclValue decl
-  let params = declLevelParams decl
-  -- Check level count matches
-  guard (length params == length levels)
-  -- Use the non-safe version since level parameter names can shadow outer names
-  -- (e.g., outParam.{u+2} where outParam has param "u" and caller also has "u")
-  Just (instantiateLevelParams params levels value)
+    decl <- lookupDecl name env
+    value <- getDeclValue decl
+    let params = declLevelParams decl
+    -- Check level count matches
+    guard (length params == length levels)
+    -- Use the non-safe version since level parameter names can shadow outer names
+    -- (e.g., outParam.{u+2} where outParam has param "u" and caller also has "u")
+    Just (instantiateLevelParams params levels value)
 
 ||| Get the head constant of an application spine
 ||| e.g., for `f a b c` returns `Just (f, [a, b, c])`
@@ -471,17 +472,22 @@ tryIotaReduction env e whnfStep = do
 ||| Try to reduce a projection.
 ||| Proj structName idx struct reduces when struct is a constructor application.
 ||| Result is the (numParams + idx)-th argument of the constructor.
+covering
 tryProjReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryProjReduction env (Proj structName idx struct) whnfStep = do
   -- Reduce struct to WHNF
   let struct' = iterWhnfStep whnfStep struct 100
   -- Check if it's a constructor application
   let (head, args) = getAppSpine struct'
-  (ctorName, _) <- getConstHead head
-  (_, _, numParams, numFields) <- getConstructorInfo env ctorName
-  -- Extract the field at idx (after params)
-  guard (idx < numFields)
-  listNth args (numParams + idx)
+  case getConstHead head of
+    Nothing => Nothing
+    Just (ctorName, _) =>
+      case getConstructorInfo env ctorName of
+        Nothing => Nothing
+        Just (_, _, numParams, numFields) =>
+          if idx >= numFields
+            then Nothing
+            else listNth args (numParams + idx)
 tryProjReduction _ _ _ = Nothing
 
 ------------------------------------------------------------------------
@@ -687,8 +693,14 @@ tryQuotReduction e whnfStep = do
 export
 covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
-whnf env e = whnfFuel 20 e
+whnf env e = whnfFuel 200 e
   where
+    ||| Convert NatLit to Nat.succ^n Nat.zero
+    ||| This is necessary for iota reduction to work on literals
+    natLitToNatExpr : Nat -> ClosedExpr
+    natLitToNatExpr Z = Const (Str "zero" (Str "Nat" Anonymous)) []
+    natLitToNatExpr (S n) = App (Const (Str "succ" (Str "Nat" Anonymous)) []) (natLitToNatExpr n)
+
     ||| Single step of whnf (beta/let reduction)
     ||| For nested applications like (((λ...) a) b), we reduce the innermost
     ||| beta-redex first.
@@ -703,6 +715,11 @@ whnf env e = whnfFuel 20 e
         Just f' => Just (App f' arg)
         Nothing => Nothing
     whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
+    -- Convert NatLit to constructor form for iota reduction
+    whnfStepCore (NatLit n) =
+      let result = natLitToNatExpr n
+          _ = trace ("### NatLit " ++ show n ++ " -> " ++ show result) ()
+      in Just result
     whnfStepCore _ = Nothing
 
     ||| Combined step including delta
@@ -712,6 +729,32 @@ whnf env e = whnfFuel 20 e
         Just e' => Just e'
         Nothing => unfoldHead env e
 
+    ||| Full step including beta, delta, projection, AND iota
+    ||| This uses a depth parameter to prevent infinite recursion
+    ||| Used inside tryProjReduction to fully reduce structs that may contain recursors
+    whnfStepFullWithIota : Nat -> ClosedExpr -> Maybe ClosedExpr
+    whnfStepFullWithIota 0 _ = Nothing  -- depth limit reached
+    whnfStepFullWithIota (S d) e =
+      case whnfStepCore e of
+        Just e' => Just e'
+        Nothing =>
+          -- Try projection reduction
+          case tryProjReduction env e (whnfStepFullWithIota d) of
+            Just e' => Just e'
+            Nothing =>
+              -- Try iota reduction (recursors) - this is the key addition!
+              case tryIotaReduction env e (whnfStepFullWithIota d) of
+                Just e' => Just e'
+                Nothing =>
+                  -- Try delta reduction
+                  unfoldHead env e
+
+    ||| Full step including beta, delta, and projection
+    ||| This is used inside tryIotaReduction and tryProjReduction to reduce arguments
+    ||| Note: Uses very small depth limit for iota to avoid exponential blowup
+    whnfStepFull : ClosedExpr -> Maybe ClosedExpr
+    whnfStepFull e = whnfStepFullWithIota 3 e  -- Use tiny depth limit to avoid blowup
+
     -- Try reducing the head of an application
     -- Returns Just if the head reduced, Nothing otherwise
     reduceAppHead : ClosedExpr -> Maybe ClosedExpr
@@ -720,7 +763,7 @@ whnf env e = whnfFuel 20 e
         Just f' => Just (App f' arg)
         Nothing =>
           -- f didn't reduce via recursion, try all reduction strategies on f
-          case tryProjReduction env f whnfStepWithDelta of
+          case tryProjReduction env f whnfStepFull of
             Just f' => Just (App f' arg)
             Nothing =>
               case unfoldHead env f of
@@ -731,7 +774,6 @@ whnf env e = whnfFuel 20 e
     whnfFuel : Nat -> ClosedExpr -> TC ClosedExpr
     whnfFuel 0 e = Right e  -- out of fuel, return as-is
     whnfFuel (S k) e =
-      -- First try beta/let reduction
       case whnfStepCore e of
         Just e' => whnfFuel k e'
         Nothing =>
@@ -740,15 +782,15 @@ whnf env e = whnfFuel 20 e
             Just e' => whnfFuel k e'
             Nothing =>
               -- Then try projection reduction
-              case tryProjReduction env e whnfStepWithDelta of
+              case tryProjReduction env e whnfStepFull of
                 Just e' => whnfFuel k e'
                 Nothing =>
                   -- Then try quotient reduction (if enabled)
-                  case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+                  case (if env.quotInit then tryQuotReduction e whnfStepFull else Nothing) of
                     Just e' => whnfFuel k e'
                     Nothing =>
                       -- Then try iota reduction (recursors)
-                      case tryIotaReduction env e whnfStepWithDelta of
+                      case tryIotaReduction env e whnfStepFull of
                         Just e' => whnfFuel k e'
                         Nothing =>
                           -- Then try delta reduction
@@ -1088,6 +1130,31 @@ makeBVarFromNat k = believe_me (BVar {n = S k} (natToFin k))
     natToFin Z = FZ
     natToFin (S m) = FS (natToFin m)
 
+||| Replace all occurrences of a specific Const with a replacement expression
+||| Used to substitute let-bound variables by replacing their placeholders
+covering
+replaceConstWith : Name -> ClosedExpr -> ClosedExpr -> ClosedExpr
+replaceConstWith target replacement (Sort l) = Sort l
+replaceConstWith target replacement (BVar i) = BVar i
+replaceConstWith target replacement (Const name ls) =
+  if name == target then replacement else Const name ls
+replaceConstWith target replacement (App f x) =
+  App (replaceConstWith target replacement f) (replaceConstWith target replacement x)
+replaceConstWith target replacement (Lam name bi ty body) =
+  Lam name bi (replaceConstWith target replacement ty)
+              (believe_me (replaceConstWith target replacement (believe_me body)))
+replaceConstWith target replacement (Pi name bi dom cod) =
+  Pi name bi (replaceConstWith target replacement dom)
+             (believe_me (replaceConstWith target replacement (believe_me cod)))
+replaceConstWith target replacement (Let name ty val body) =
+  Let name (replaceConstWith target replacement ty)
+           (replaceConstWith target replacement val)
+           (believe_me (replaceConstWith target replacement (believe_me body)))
+replaceConstWith target replacement (Proj sname idx e) =
+  Proj sname idx (replaceConstWith target replacement e)
+replaceConstWith target replacement (NatLit k) = NatLit k
+replaceConstWith target replacement (StringLit s) = StringLit s
+
 ||| Core implementation of placeholder-to-BVar replacement
 ||| Takes a list of entries and replaces all matching placeholders with BVars
 covering
@@ -1097,7 +1164,14 @@ replaceAllPlaceholdersGo entries depth (BVar i) = BVar i  -- Shouldn't happen in
 replaceAllPlaceholdersGo entries depth (Const name ls) =
   case findPlaceholderIdx entries name 0 of
     Just idx => makeBVarFromNat (idx + depth)  -- Replace with BVar at appropriate depth
-    Nothing => Const name ls            -- Not a placeholder, keep as-is
+    Nothing =>
+      -- Check if this looks like an unresolved placeholder
+      case extractPlaceholderBase name of
+        Just binderName =>
+          let entryPhs = map (\e => show e.placeholder) entries
+          in trace ("### UNRESOLVED PLACEHOLDER: " ++ show name ++ " (binder: " ++ show binderName ++ ") not found in entries: " ++ show entryPhs) $
+          Const name ls
+        Nothing => Const name ls
 replaceAllPlaceholdersGo entries depth (App f x) =
   App (replaceAllPlaceholdersGo entries depth f) (replaceAllPlaceholdersGo entries depth x)
 replaceAllPlaceholdersGo entries depth (Lam name bi ty body) =
@@ -1523,9 +1597,8 @@ mutual
             -- Reduce the result type to handle beta redexes like ((fun _ => C x) y)
             resultTy' <- whnf env2 resultTy
             Right (env2, resultTy')
-          else do
-            debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  dom1 (after whnf)=" ++ show dom1 ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTy1 (after whnf)=" ++ show argTy1 ++ "\n  argTy' (after normalize)=" ++ show argTy') $
-              Left (AppTypeMismatch dom' argTy')
+          else
+            Left (AppTypeMismatch dom' argTy')
 
   -- Lam: delegate to inferTypeOpenE which properly handles the body
   inferTypeE env (Lam name bi ty body) = do
@@ -1677,6 +1750,9 @@ mutual
     -- This way we know what placeholder to replace with BVar 0 later
     let counter = env2.nextPlaceholder
         phName = placeholderName name counter
+        _ = if show name == "funType_1"
+              then trace ("### LAMBDA creating funType_1 placeholder: counter=" ++ show counter ++ " phName=" ++ show phName) ()
+              else ()
         env3 = { nextPlaceholder := S counter } env2
         env4 = addPlaceholder phName domClosed env3
         ph : ClosedExpr = Const phName []
@@ -1685,6 +1761,10 @@ mutual
         ctx' : LocalCtx (S n) = newEntry :: ctx2
     -- Infer body type with extended context
     (env5, ctx'', bodyTy) <- inferTypeOpenE env4 ctx' body
+    -- Debug: trace when processing funType_1 lambda
+    let _ = if show name == "funType_1"
+              then trace ("### LAMBDA funType_1: bodyTy=" ++ show bodyTy ++ " ctx len=" ++ show (length ctx'')) ()
+              else ()
     -- Debug: check if bodyTy is Lam
     let _ = case bodyTy of
               Lam lamName _ _ _ => debugPrint ("Lam case: bodyTy is Lam!\n  outer name=" ++ show name ++ "\n  lam name=" ++ show lamName ++ "\n  bodyTy=" ++ show bodyTy) ()
@@ -1746,12 +1826,23 @@ mutual
     let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed''
     if alphaEq tyWithBVars valTy''
       then do
-        -- Extend context with let binding
-        let ctx' = extendCtxLet name tyClosed valClosed ctx4
+        -- Create a placeholder for the let-bound variable BEFORE extending context
+        -- This ensures the placeholder is tracked and can be replaced later
+        let counter = env4.nextPlaceholder
+            phName = placeholderName name counter
+            env4' = { nextPlaceholder := S counter } env4
+            env4'' = addPlaceholder phName tyClosed env4'
+            ph : ClosedExpr = Const phName []
+            -- Extend context with let binding, pre-assigning its placeholder
+            newEntry = MkLocalEntry name tyClosed (Just valClosed) (Just ph)
+            ctx' : LocalCtx (S n) = newEntry :: ctx4
         -- Infer body type
-        (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
-        -- Return ctx4 (not ctx') since ctx' has the extended context entry
-        Right (env5, ctx4, bodyTy)
+        (env5, ctx'', bodyTy) <- inferTypeOpenE env4'' ctx' body
+        -- bodyTy may contain the let-bound placeholder (phName = funType_1.X._local)
+        -- We need to substitute the let value for that placeholder
+        -- Other placeholders remain and refer to ctx4 entries
+        let bodyTySubst = replaceConstWith phName valClosed bodyTy
+        Right (env5, ctx4, bodyTySubst)
       else Left (LetTypeMismatch tyClosed'' valTy'')
 
   -- Proj: infer structure type and get field type
@@ -1792,15 +1883,21 @@ mutual
 export
 covering
 isProp : TCEnv -> ClosedExpr -> TC Bool
-isProp env e = do
+isProp env e =
   -- Get the type of e (e.g., P for a proof p : P)
-  ty <- inferType env e
-  -- Get the type of that type (e.g., Prop = Sort 0 for P : Prop)
-  tyTy <- inferType env ty
-  tyTy' <- whnf env tyTy
-  case tyTy' of
-    Sort l => Right (simplify l == Zero)
-    _ => Right False
+  -- If type inference fails (e.g., due to comparison placeholders during isDefEq),
+  -- conservatively return False (not a proof)
+  case inferType env e of
+    Left _ => Right False  -- Can't infer type, assume not a proof
+    Right ty =>
+      -- Get the type of that type (e.g., Prop = Sort 0 for P : Prop)
+      case inferType env ty of
+        Left _ => Right False  -- Can't infer type's type, assume not a proof
+        Right tyTy => do
+          tyTy' <- whnf env tyTy
+          case tyTy' of
+            Sort l => Right (simplify l == Zero)
+            _ => Right False
 
 ||| Try proof irrelevance: if both terms have type Prop and their types
 ||| are definitionally equal, then the terms are definitionally equal.
@@ -1831,14 +1928,20 @@ tryProofIrrelevance recurEq env t s = do
       tIsProp <- isProp env t
       if not tIsProp
         then Right Nothing  -- Not a proof, proof irrelevance doesn't apply
-        else do
+        else
           -- t is a proof, check if s has the same type
-          tTy <- inferType env t
-          sTy <- inferType env s
-          typesEq <- recurEq env tTy sTy
-          if typesEq
-            then Right (Just True)   -- Same Prop type, proofs are equal
-            else Right (Just False)  -- Different types, not equal
+          -- If type inference fails (e.g., due to comparison placeholders),
+          -- just skip proof irrelevance
+          case inferType env t of
+            Left _ => Right Nothing  -- Can't infer type, skip
+            Right tTy =>
+              case inferType env s of
+                Left _ => Right Nothing  -- Can't infer type, skip
+                Right sTy => do
+                  typesEq <- recurEq env tTy sTy
+                  if typesEq
+                    then Right (Just True)   -- Same Prop type, proofs are equal
+                    else Right (Just False)  -- Different types, not equal
 
 ------------------------------------------------------------------------
 -- Definitional Equality
@@ -1983,8 +2086,7 @@ isDefEqBodyWithNameAndType binderName binderType recur env b1 b2 =
       -- Substitute BVar 0 with the comparison placeholder
       e1' = substAndReplacePlaceholders binderName phName b1
       e2' = substAndReplacePlaceholders binderName phName b2
-  in debugPrint ("isDefEqBodyWithNameAndType: binderName=" ++ show binderName ++ "\n  e1'=" ++ show e1' ++ "\n  e2'=" ++ show e2') $
-     recur env'' e1' e2'
+  in recur env'' e1' e2'
 
 ||| Helper for comparing bodies (Expr 1) - fallback for cases without domain type info
 covering
@@ -2008,22 +2110,26 @@ tryEtaExpansionCore recurEq env t s =
     Lam name bi ty body =>
       case s of
         Lam _ _ _ _ => Right Nothing  -- Both are lambdas, eta doesn't apply
-        _ => do
+        _ =>
           -- s is not a lambda, try to eta-expand it
           -- We need the type of s to be a Pi type
-          sTy <- inferType env s
-          sTy' <- whnf env sTy
-          case sTy' of
-            Pi piName piBi dom cod =>
-              -- Eta-expand s to: λ(piName : dom). s x
-              -- where x is BVar FZ (the bound variable)
-              -- The body is: App (weaken1 s) (BVar FZ)
-              let sExpanded : ClosedExpr = Lam piName piBi dom (App (weaken1 s) (BVar FZ))
-              in do
-                -- Now compare t with the expanded s
-                result <- recurEq env t sExpanded
-                Right (Just result)
-            _ => Right Nothing  -- s's type is not a Pi, can't eta-expand
+          -- If type inference fails (e.g., due to comparison placeholders),
+          -- just skip eta expansion
+          case inferType env s of
+            Left _ => Right Nothing  -- Can't infer type, skip eta
+            Right sTy => do
+              sTy' <- whnf env sTy
+              case sTy' of
+                Pi piName piBi dom cod =>
+                  -- Eta-expand s to: λ(piName : dom). s x
+                  -- where x is BVar FZ (the bound variable)
+                  -- The body is: App (weaken1 s) (BVar FZ)
+                  let sExpanded : ClosedExpr = Lam piName piBi dom (App (weaken1 s) (BVar FZ))
+                  in do
+                    -- Now compare t with the expanded s
+                    result <- recurEq env t sExpanded
+                    Right (Just result)
+                _ => Right Nothing  -- s's type is not a Pi, can't eta-expand
     _ => Right Nothing  -- t is not a lambda
 
 ||| Try eta expansion in both directions
@@ -2055,15 +2161,16 @@ export
 covering
 isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
 isDefEq env e1 e2 = do
-  -- First reduce both to whnf (includes delta reduction)
-  e1' <- whnf env e1
-  e2' <- whnf env e2
-  -- Try proof irrelevance first (before structural comparison)
-  proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
-  case proofIrrel of
-    Just result => Right result
-    Nothing => isDefEqWhnf e1' e2'
+    -- First reduce both to whnf (includes delta reduction)
+    e1' <- whnf env e1
+    e2' <- whnf env e2
+    -- Try proof irrelevance first (before structural comparison)
+    proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
+    case proofIrrel of
+      Just result => Right result
+      Nothing => isDefEqWhnf e1' e2'
   where
+
     -- Check equality of expressions in whnf
     covering
     isDefEqWhnf : ClosedExpr -> ClosedExpr -> TC Bool
@@ -2243,16 +2350,11 @@ export
 covering
 checkDefDecl : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC ()
 checkDefDecl env name ty value levelParams = do
-  debugPrint ("checkDefDecl: " ++ show name) $ pure ()
   checkNameNotDeclared env name
-  debugPrint ("checkDefDecl: checkNameNotDeclared done") $ pure ()
   checkNoDuplicateUnivParams levelParams
-  debugPrint ("checkDefDecl: checkNoDuplicateUnivParams done") $ pure ()
   _ <- checkIsType env ty
-  debugPrint ("checkDefDecl: checkIsType done") $ pure ()
   -- Use inferTypeE to get updated env with placeholders
-  (env', valueTy) <- debugPrint ("checkDefDecl: about to infer value type for " ++ show name ++ "\n  value=" ++ show value) $ inferTypeE env value
-  debugPrint ("checkDefDecl: inferTypeE done\n  valueTy=" ++ show valueTy ++ "\n  ty=" ++ show ty) $ pure ()
+  (env', valueTy) <- inferTypeE env value
   -- Use updated env for comparison (so placeholders can be looked up)
   eq <- isDefEq env' valueTy ty
   if eq
@@ -2285,7 +2387,19 @@ checkThmDecl env name ty value levelParams = do
       eq <- isDefEq env' valueTy ty
       if eq
         then Right ()
-        else Left (OtherError $ "theorem proof type mismatch for " ++ show name)
+        else Left (OtherError $ "theorem proof type mismatch for " ++ show name
+                   ++ "\n  inferred: " ++ show valueTy
+                   ++ "\n  declared: " ++ show ty)
+  where
+    isInfixOf : String -> String -> Bool
+    isInfixOf needle haystack = go 0
+      where
+        go : Nat -> Bool
+        go n = if n + length needle > length haystack
+                 then False
+                 else if substr n (length needle) haystack == needle
+                        then True
+                        else go (S n)
 
 ------------------------------------------------------------------------
 -- Inductive/Constructor Validation

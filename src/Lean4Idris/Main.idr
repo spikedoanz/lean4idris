@@ -36,26 +36,48 @@ flushStdout = do
   pure ()
 
 ||| Check all declarations in IO (with progress output)
-checkAllDeclsIO : TCEnv -> List Declaration -> IO (Either String TCEnv)
-checkAllDeclsIO env [] = pure (Right env)
-checkAllDeclsIO env (d :: ds) = do
+||| If continueOnError is True, continues checking after failures and reports summary
+checkAllDeclsIO : (continueOnError : Bool) -> TCEnv -> List Declaration -> (passed : Nat) -> (failed : Nat) -> (errors : List String) -> IO (Either String TCEnv)
+checkAllDeclsIO _ env [] passed failed errors =
+  if failed > 0
+    then do
+      putStrLn ""
+      putStrLn "=== Errors encountered ==="
+      traverse_ putStrLn (reverse errors)
+      putStrLn ""
+      putStrLn $ "Summary: " ++ show passed ++ " passed, " ++ show failed ++ " failed"
+      pure (Left $ show failed ++ " declarations failed")
+    else pure (Right env)
+checkAllDeclsIO cont env (d :: ds) passed failed errors = do
   let name = show (declName d)
   putStr $ "Checking: " ++ name ++ "... "
   flushStdout
   case addDeclChecked env d of
     Left err => do
       putStrLn "FAIL"
-      pure (Left (show err ++ " (in " ++ name ++ ")"))
+      let errMsg = show err ++ " (in " ++ name ++ ")"
+      if cont
+        then checkAllDeclsIO cont env ds passed (S failed) (errMsg :: errors)
+        else pure (Left errMsg)
     Right env' => do
       putStrLn "ok"
-      checkAllDeclsIO env' ds
+      checkAllDeclsIO cont env' ds (S passed) failed errors
+
+||| Parse command line arguments
+||| Returns (continueOnError, files)
+parseArgs : List String -> (Bool, List String)
+parseArgs [] = (False, [])
+parseArgs ("--continue-on-error" :: rest) = let (_, files) = parseArgs rest in (True, files)
+parseArgs ("-c" :: rest) = let (_, files) = parseArgs rest in (True, files)
+parseArgs (arg :: rest) = let (cont, files) = parseArgs rest in (cont, arg :: files)
 
 ||| Main entry point
 main : IO ()
 main = do
   args <- getArgs
   let args' = drop 1 args
-  case args' of
+  let (continueOnError, files) = parseArgs args'
+  case files of
     (path :: _) => do
       result <- readFile path
       case result of
@@ -72,7 +94,8 @@ main = do
               flushStdout
               let decls = getDecls st
               putStrLn $ show (length decls) ++ " found"
-              result <- checkAllDeclsIO emptyEnv decls
+              when continueOnError $ putStrLn "(continuing on errors)"
+              result <- checkAllDeclsIO continueOnError emptyEnv decls 0 0 []
               case result of
                 Left err => do
                   putStrLn $ "Type error: " ++ err
@@ -83,7 +106,10 @@ main = do
     _ => do
       putStrLn "lean4idris - Type checker for Lean 4 export files"
       putStrLn ""
-      putStrLn "Usage: lean4idris <export-file>"
+      putStrLn "Usage: lean4idris [OPTIONS] <export-file>"
+      putStrLn ""
+      putStrLn "Options:"
+      putStrLn "  -c, --continue-on-error  Continue checking after failures"
       putStrLn ""
       putStrLn "Exit codes:"
       putStrLn "  0 - All declarations type-checked successfully"

@@ -18,6 +18,7 @@ depends = contrib
 -- modules to install
 modules = Lean4Idris
         , Lean4Idris.Main
+        , Lean4Idris.Cache
         , Lean4Idris.Name
         , Lean4Idris.Level
         , Lean4Idris.Expr

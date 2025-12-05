@@ -484,6 +484,26 @@ parseThm st (TCommand THM :: rest) = do
     parseNatList rest' = ([], rest')
 parseThm _ toks = Left $ "Expected #THM, got " ++ show (take 1 toks)
 
+||| Parse #OPAQ name type value levelParams*
+parseOpaq : ParseState -> List Token -> Result ParseState
+parseOpaq st (TCommand OPAQ :: rest) = do
+  (nameIdx, rest1) <- expectNat rest
+  (typeIdx, rest2) <- expectNat rest1
+  (valueIdx, rest3) <- expectNat rest2
+  let (paramIdxs, rest4) = parseNatList rest3
+  name <- lookupName st nameIdx
+  ty <- lookupExpr st typeIdx
+  val <- lookupExpr st valueIdx
+  params <- parseLevelParamNames st paramIdxs
+  let decl = OpaqueDecl name ty val params
+  Right ({ decls $= (decl ::) } st, rest4)
+  where
+    parseNatList : List Token -> (List Nat, List Token)
+    parseNatList (TNat n :: rest') =
+      let (more, rest'') = parseNatList rest' in (n :: more, rest'')
+    parseNatList rest' = ([], rest')
+parseOpaq _ toks = Left $ "Expected #OPAQ, got " ++ show (take 1 toks)
+
 ||| Parse #CTOR name type inductName ctorIdx numParams numFields levelParams*
 parseCtor : ParseState -> List Token -> Result ParseState
 parseCtor st (TCommand CTOR :: rest) = do
@@ -613,8 +633,11 @@ parseAllLines st toks@(TCommand QUOT :: _) = do
   -- This enables quotient types - just add QuotDecl to state
   let decl = QuotDecl
   parseAllLines ({ decls $= (decl ::) } st) (skipToNewline (drop 1 toks))
+parseAllLines st toks@(TCommand OPAQ :: _) = do
+  (st', rest) <- parseOpaq st toks
+  parseAllLines st' (skipNewlines rest)
 parseAllLines st (TCommand _ :: rest) =
-  -- Skip other declaration lines (OPAQ, ABBREV, etc.)
+  -- Skip other declaration lines (ABBREV, etc.)
   parseAllLines st (skipToNewline rest)
 -- Indexed lines (names, levels, exprs, rec rules)
 parseAllLines st toks@(TNat _ :: _) = do

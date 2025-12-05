@@ -24,7 +24,7 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 ## Coverage
 
-Type checking coverage on Lean 4 export files (using `lean4idris -c`):
+Type checking coverage on Lean 4 export files:
 
 | Export File | Declarations | Passed | Failed | Coverage |
 |-------------|--------------|--------|--------|----------|
@@ -34,6 +34,19 @@ Type checking coverage on Lean 4 export files (using `lean4idris -c`):
 | Init.Data.Nat.Basic | 4586 | 4050 | 536 | 88.3% |
 
 Known blocking issues tracked in [GitHub Issues](https://github.com/spikedoanz/lean4idris/issues).
+
+### Running coverage tests
+
+```bash
+# Type check an export file, continue on errors, save full output
+pack run lean4idris -c test/exports/tier01-init/Init.Prelude.export 2>&1 | tee results/Init.Prelude.txt
+
+# Just see the summary
+grep "Summary:" results/Init.Prelude.txt
+
+# See all failures
+grep "FAIL" results/Init.Prelude.txt
+```
 
 ## Build
 

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Idris2 and pack
+        run: |
+          curl -sSL https://github.com/stefan-hoeck/idris2-pack/releases/latest/download/install.bash | bash
+          echo "$HOME/.pack/bin" >> $GITHUB_PATH
+
+      - name: Build
+        run: pack build lean4idris
+
+      - name: Test
+        run: pack test
+
+  regression-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Idris2 and pack
+        run: |
+          curl -sSL https://github.com/stefan-hoeck/idris2-pack/releases/latest/download/install.bash | bash
+          echo "$HOME/.pack/bin" >> $GITHUB_PATH
+
+      - name: Build
+        run: pack build lean4idris
+
+      - name: Cache exports
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/lean4exports
+          key: lean4exports-v1
+
+      - name: Download exports
+        run: |
+          mkdir -p ~/.cache/lean4exports
+          # TODO: download tier01-init exports from release or fetch script
+          # For now, skip if no exports available
+          if [ ! -d ~/.cache/lean4exports/tier01-init ]; then
+            echo "No exports found, skipping regression check"
+            exit 0
+          fi
+
+      - name: Check for regressions
+        run: python3 scripts/check-regression.py 10000

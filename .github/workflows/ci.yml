@@ -17,7 +17,8 @@ jobs:
 
       - name: Install pack
         run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash)" -- -s chezscheme
+          curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash -o install.bash
+          echo "" | bash install.bash
           echo "$HOME/.pack/bin" >> $GITHUB_PATH
 
       - name: Build
@@ -36,7 +37,8 @@ jobs:
 
       - name: Install pack
         run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash)" -- -s chezscheme
+          curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash -o install.bash
+          echo "" | bash install.bash
           echo "$HOME/.pack/bin" >> $GITHUB_PATH
 
       - name: Build

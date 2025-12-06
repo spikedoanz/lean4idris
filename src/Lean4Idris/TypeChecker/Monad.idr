@@ -39,7 +39,7 @@ lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
 lookupPlaceholder name env = lookup name env.placeholders
 
 ||| Add a let-bound placeholder that stores both the type and value
-||| This allows whnfWithLetPlaceholders to unfold let-bound placeholders to their values
+||| The value is stored in letValues for substitution before isDefEq
 public export
 addLetPlaceholder : Name -> ClosedExpr -> ClosedExpr -> TCEnv -> TCEnv
 addLetPlaceholder name ty val env =
@@ -56,6 +56,29 @@ lookupLetValue name env = lookup name env.letValues
 public export
 hasLetValues : TCEnv -> Bool
 hasLetValues env = not (null env.letValues)
+
+||| Substitute let-bound placeholder constants with their values
+||| This is called ONCE before isDefEq, not in the whnf hot loop
+export covering
+substLetPlaceholders : TCEnv -> ClosedExpr -> ClosedExpr
+substLetPlaceholders env e =
+  if not (hasLetValues env) then e  -- Fast path when no let-values exist
+  else go e
+  where
+    covering
+    go : ClosedExpr -> ClosedExpr
+    go (BVar i) = BVar i
+    go (Sort l) = Sort l
+    go (Const name ls) = case lookupLetValue name env of
+      Just val => val  -- Replace let-placeholder with its value
+      Nothing => Const name ls
+    go (App f x) = App (go f) (go x)
+    go (Lam name bi ty body) = Lam name bi (go ty) (believe_me (go (believe_me body)))
+    go (Pi name bi dom cod) = Pi name bi (go dom) (believe_me (go (believe_me cod)))
+    go (Let name ty val body) = Let name (go ty) (go val) (believe_me (go (believe_me body)))
+    go (Proj sn idx s) = Proj sn idx (go s)
+    go (NatLit n) = NatLit n
+    go (StringLit s) = StringLit s
 
 public export
 clearPlaceholders : TCEnv -> TCEnv

@@ -39,7 +39,7 @@ lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
 lookupPlaceholder name env = lookup name env.placeholders
 
 ||| Add a let-bound placeholder that stores both the type and value
-||| This allows whnfWithLetPlaceholders to unfold let-bound placeholders to their values
+||| This allows whnf to unfold let-bound placeholders to their values
 public export
 addLetPlaceholder : Name -> ClosedExpr -> ClosedExpr -> TCEnv -> TCEnv
 addLetPlaceholder name ty val env =
@@ -51,11 +51,6 @@ addLetPlaceholder name ty val env =
 public export
 lookupLetValue : Name -> TCEnv -> Maybe ClosedExpr
 lookupLetValue name env = lookup name env.letValues
-
-||| Check if there are any let-bound placeholders
-public export
-hasLetValues : TCEnv -> Bool
-hasLetValues env = not (null env.letValues)
 
 public export
 clearPlaceholders : TCEnv -> TCEnv

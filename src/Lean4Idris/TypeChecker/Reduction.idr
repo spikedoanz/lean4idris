@@ -14,6 +14,27 @@ import Data.List
 -- Helpers
 ------------------------------------------------------------------------
 
+||| Names for Nat constructors
+export natZeroName : Name
+natZeroName = Str "zero" (Str "Nat" Anonymous)
+
+export natSuccName : Name
+natSuccName = Str "succ" (Str "Nat" Anonymous)
+
+||| Convert a Nat to constructor form: 0 => Nat.zero, n+1 => Nat.succ (NatLit n)
+||| This mirrors lean4lean's natLitToConstructor
+export
+natLitToConstructor : Nat -> ClosedExpr
+natLitToConstructor Z = Const natZeroName []
+natLitToConstructor (S n) = App (Const natSuccName []) (NatLit n)
+
+||| Normalize a NatLit to constructor form if needed for iota reduction
+||| This converts NatLit n to Nat.zero or Nat.succ (NatLit (n-1))
+export
+normalizeNatLit : ClosedExpr -> ClosedExpr
+normalizeNatLit (NatLit n) = natLitToConstructor n
+normalizeNatLit e = e
+
 export
 getAppSpine : ClosedExpr -> (ClosedExpr, List ClosedExpr)
 getAppSpine e = go e []
@@ -148,7 +169,9 @@ tryIotaReduction env e whnfStep = do
   let majorIdx = getMajorIdx recInfo
   major <- listNth args majorIdx
   let major' = iterWhnfStep whnfStep major 100
-  let (majorHead, majorArgs) = getAppSpine major'
+  -- Convert NatLit to constructor form for Nat.rec (like lean4lean's natLitToConstructor)
+  let major'' = normalizeNatLit major'
+  let (majorHead, majorArgs) = getAppSpine major''
   (ctorName, _) <- getConstHead majorHead
   (_, _, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
   rule <- findRecRule recInfo.rules ctorName
@@ -311,8 +334,9 @@ export covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
 whnf env e = do
   useFuel
-  pure (whnfPure 20 e)
+  pure (whnfPure 100 e)
   where
+    -- Basic beta/let reduction
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
     whnfStepCore (App f arg) = case whnfStepCore f of
@@ -321,42 +345,42 @@ whnf env e = do
     whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
     whnfStepCore _ = Nothing
 
-    whnfStepWithDelta : ClosedExpr -> Maybe ClosedExpr
-    whnfStepWithDelta e = case whnfStepCore e of
-      Just e' => Just e'
-      Nothing => case tryUnfoldLetPlaceholder env e of
+    -- Full whnf step including iota reduction
+    -- Uses mutual recursion so tryProjReduction and tryIotaReduction get a step function
+    -- that includes iota reduction (critical for nested recursor applications)
+    mutual
+      whnfStepFull : ClosedExpr -> Maybe ClosedExpr
+      whnfStepFull e = case whnfStepCore e of
         Just e' => Just e'
-        Nothing => unfoldHead env e
+        Nothing => case tryUnfoldLetPlaceholder env e of
+          Just e' => Just e'
+          Nothing => case reduceAppHead e of
+            Just e' => Just e'
+            Nothing => case tryProjReduction env e whnfStepFull of
+              Just e' => Just e'
+              Nothing => case (if env.quotInit then tryQuotReduction e whnfStepFull else Nothing) of
+                Just e' => Just e'
+                Nothing => case tryIotaReduction env e whnfStepFull of
+                  Just e' => Just e'
+                  Nothing => unfoldHead env e
 
-    reduceAppHead : ClosedExpr -> Maybe ClosedExpr
-    reduceAppHead (App f arg) = case reduceAppHead f of
-      Just f' => Just (App f' arg)
-      Nothing => case tryProjReduction env f whnfStepWithDelta of
+      reduceAppHead : ClosedExpr -> Maybe ClosedExpr
+      reduceAppHead (App f arg) = case reduceAppHead f of
         Just f' => Just (App f' arg)
-        Nothing => case tryUnfoldLetPlaceholder env f of
+        Nothing => case tryProjReduction env f whnfStepFull of
           Just f' => Just (App f' arg)
-          Nothing => case unfoldHead env f of
+          Nothing => case tryUnfoldLetPlaceholder env f of
             Just f' => Just (App f' arg)
-            Nothing => Nothing
-    reduceAppHead _ = Nothing
+            Nothing => case unfoldHead env f of
+              Just f' => Just (App f' arg)
+              Nothing => Nothing
+      reduceAppHead _ = Nothing
 
     whnfPure : Nat -> ClosedExpr -> ClosedExpr
     whnfPure 0 e = e
-    whnfPure (S k) e = case whnfStepCore e of
+    whnfPure (S k) e = case whnfStepFull e of
       Just e' => whnfPure k e'
-      Nothing => case tryUnfoldLetPlaceholder env e of
-        Just e' => whnfPure k e'
-        Nothing => case reduceAppHead e of
-          Just e' => whnfPure k e'
-          Nothing => case tryProjReduction env e whnfStepWithDelta of
-            Just e' => whnfPure k e'
-            Nothing => case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
-              Just e' => whnfPure k e'
-              Nothing => case tryIotaReduction env e whnfStepWithDelta of
-                Just e' => whnfPure k e'
-                Nothing => case unfoldHead env e of
-                  Just e' => whnfPure k e'
-                  Nothing => e
+      Nothing => e
 
 export covering
 whnfCore : ClosedExpr -> TC ClosedExpr

@@ -12,11 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-
       - name: Cache pack installation
         uses: actions/cache@v4
         with:
@@ -25,33 +20,32 @@ jobs:
             ~/.local/state/pack
             ~/.cache/pack
             ~/.config/pack
-          key: pack-${{ runner.os }}-v1
+          key: pack-${{ runner.os }}-v2
+
+      - name: Install Chez Scheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
 
       - name: Install pack (or use cached)
         run: |
           if [ -f "$HOME/.pack/bin/pack" ]; then
             echo "Using cached pack"
           else
-            nix-shell -p chezscheme --run 'bash -c "curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash -o install.bash && echo \"\" | bash install.bash"'
+            curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash -o install.bash
+            echo "" | bash install.bash
           fi
           echo "$HOME/.pack/bin" >> $GITHUB_PATH
 
       - name: Build
-        run: nix-shell -p chezscheme --run 'pack build lean4idris'
+        run: pack build lean4idris
 
       - name: Test
-        run: nix-shell -p chezscheme --run 'pack test'
+        run: pack test
 
   regression-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-
       - name: Cache pack installation
         uses: actions/cache@v4
         with:
@@ -60,19 +54,23 @@ jobs:
             ~/.local/state/pack
             ~/.cache/pack
             ~/.config/pack
-          key: pack-${{ runner.os }}-v1
+          key: pack-${{ runner.os }}-v2
+
+      - name: Install Chez Scheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
 
       - name: Install pack (or use cached)
         run: |
           if [ -f "$HOME/.pack/bin/pack" ]; then
             echo "Using cached pack"
           else
-            nix-shell -p chezscheme --run 'bash -c "curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash -o install.bash && echo \"\" | bash install.bash"'
+            curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash -o install.bash
+            echo "" | bash install.bash
           fi
           echo "$HOME/.pack/bin" >> $GITHUB_PATH
 
       - name: Build
-        run: nix-shell -p chezscheme --run 'pack build lean4idris'
+        run: pack build lean4idris
 
       - name: Cache exports
         uses: actions/cache@v4
@@ -83,11 +81,10 @@ jobs:
       - name: Download exports
         run: |
           mkdir -p ~/.cache/lean4exports
-          # Skip regression check if no exports available
           if [ ! -d ~/.cache/lean4exports/tier01-init ]; then
             echo "No exports found, skipping regression check"
             exit 0
           fi
 
       - name: Check for regressions
-        run: nix-shell -p chezscheme --run 'python3 scripts/check-regression.py 10000'
+        run: python3 scripts/check-regression.py 10000

@@ -21,12 +21,11 @@ record TCEnv where
   decls : SortedMap Name Declaration
   quotInit : Bool
   placeholders : SortedMap Name ClosedExpr
-  letValues : SortedMap Name ClosedExpr  -- values for let-bound placeholders
   nextPlaceholder : Nat
 
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False empty empty 0
+emptyEnv = MkTCEnv empty False empty 0
 
 public export
 addPlaceholder : Name -> ClosedExpr -> TCEnv -> TCEnv
@@ -38,23 +37,9 @@ public export
 lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
 lookupPlaceholder name env = lookup name env.placeholders
 
-||| Add a let-bound placeholder that stores both the type and value
-||| This allows whnf to unfold let-bound placeholders to their values
-public export
-addLetPlaceholder : Name -> ClosedExpr -> ClosedExpr -> TCEnv -> TCEnv
-addLetPlaceholder name ty val env =
-  let env' = { placeholders $= insert name ty } env
-      env'' = { letValues $= insert name val } env'
-  in { decls $= insert name (AxiomDecl name ty []) } env''
-
-||| Look up the value of a let-bound placeholder
-public export
-lookupLetValue : Name -> TCEnv -> Maybe ClosedExpr
-lookupLetValue name env = lookup name env.letValues
-
 public export
 clearPlaceholders : TCEnv -> TCEnv
-clearPlaceholders env = { placeholders := empty, letValues := empty } env
+clearPlaceholders env = { placeholders := empty } env
 
 public export
 enableQuot : TCEnv -> TCEnv

@@ -182,11 +182,7 @@ buildPlaceholders env ctx = buildPlaceholdersWithDepth env ctx 0
         let counter = env.nextPlaceholder
             phName = placeholderName entry.name counter depth
             env' = { nextPlaceholder := S counter } env
-            -- If this entry has a value (from a let-binding), use addLetPlaceholder
-            -- so that whnf can unfold the let-bound placeholder to its value
-            env'' = case entry.value of
-              Just val => addLetPlaceholder phName entry.type val env'
-              Nothing => addPlaceholder phName entry.type env'
+            env'' = debugPrint ("buildPlaceholders: creating " ++ show phName ++ " (depth=" ++ show depth ++ ") : " ++ show entry.type) $ addPlaceholder phName entry.type env'
             ph : ClosedExpr = Const phName []
             entry' = { placeholder := Just ph } entry
             (env''', rest', phs) = buildPlaceholdersWithDepth env'' rest (S depth)

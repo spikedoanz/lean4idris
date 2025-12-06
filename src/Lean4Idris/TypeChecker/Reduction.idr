@@ -288,22 +288,6 @@ tryQuotReduction e whnfStep = do
   pure (mkApp result remainingArgs)
 
 ------------------------------------------------------------------------
--- Let Placeholder Unfolding
-------------------------------------------------------------------------
-
-||| Try to unfold a let-bound placeholder constant to its value
-||| This is similar to lean4lean's whnfFVar which unfolds let-bound free variables
-export
-tryUnfoldLetPlaceholder : TCEnv -> ClosedExpr -> Maybe ClosedExpr
-tryUnfoldLetPlaceholder env e =
-  let (head, args) = getAppSpine e
-  in case head of
-    Const name _ => case lookupLetValue name env of
-      Just val => Just (mkApp val args)
-      Nothing => Nothing
-    _ => Nothing
-
-------------------------------------------------------------------------
 -- WHNF
 ------------------------------------------------------------------------
 
@@ -324,39 +308,33 @@ whnf env e = do
     whnfStepWithDelta : ClosedExpr -> Maybe ClosedExpr
     whnfStepWithDelta e = case whnfStepCore e of
       Just e' => Just e'
-      Nothing => case tryUnfoldLetPlaceholder env e of
-        Just e' => Just e'
-        Nothing => unfoldHead env e
+      Nothing => unfoldHead env e
 
     reduceAppHead : ClosedExpr -> Maybe ClosedExpr
     reduceAppHead (App f arg) = case reduceAppHead f of
       Just f' => Just (App f' arg)
       Nothing => case tryProjReduction env f whnfStepWithDelta of
         Just f' => Just (App f' arg)
-        Nothing => case tryUnfoldLetPlaceholder env f of
+        Nothing => case unfoldHead env f of
           Just f' => Just (App f' arg)
-          Nothing => case unfoldHead env f of
-            Just f' => Just (App f' arg)
-            Nothing => Nothing
+          Nothing => Nothing
     reduceAppHead _ = Nothing
 
     whnfPure : Nat -> ClosedExpr -> ClosedExpr
     whnfPure 0 e = e
     whnfPure (S k) e = case whnfStepCore e of
       Just e' => whnfPure k e'
-      Nothing => case tryUnfoldLetPlaceholder env e of
+      Nothing => case reduceAppHead e of
         Just e' => whnfPure k e'
-        Nothing => case reduceAppHead e of
+        Nothing => case tryProjReduction env e whnfStepWithDelta of
           Just e' => whnfPure k e'
-          Nothing => case tryProjReduction env e whnfStepWithDelta of
+          Nothing => case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
             Just e' => whnfPure k e'
-            Nothing => case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+            Nothing => case tryIotaReduction env e whnfStepWithDelta of
               Just e' => whnfPure k e'
-              Nothing => case tryIotaReduction env e whnfStepWithDelta of
+              Nothing => case unfoldHead env e of
                 Just e' => whnfPure k e'
-                Nothing => case unfoldHead env e of
-                  Just e' => whnfPure k e'
-                  Nothing => e
+                Nothing => e
 
 export covering
 whnfCore : ClosedExpr -> TC ClosedExpr

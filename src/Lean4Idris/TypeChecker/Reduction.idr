@@ -293,25 +293,26 @@ tryQuotReduction e whnfStep = do
 
 ||| Try to unfold a let-bound placeholder constant to its value
 ||| This is similar to lean4lean's whnfFVar which unfolds let-bound free variables
+||| Performance: guards with hasLetValues check to skip work when map is empty
 export
 tryUnfoldLetPlaceholder : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 tryUnfoldLetPlaceholder env e =
-  let (head, args) = getAppSpine e
-  in case head of
-    Const name _ => case lookupLetValue name env of
-      Just val => Just (mkApp val args)
-      Nothing => Nothing
-    _ => Nothing
+  if not (hasLetValues env) then Nothing  -- Fast path: no let-bound placeholders
+  else let (head, args) = getAppSpine e
+       in case head of
+         Const name _ => case lookupLetValue name env of
+           Just val => Just (mkApp val args)
+           Nothing => Nothing
+         _ => Nothing
 
 ------------------------------------------------------------------------
 -- WHNF
 ------------------------------------------------------------------------
 
-export covering
-whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
-whnf env e = do
-  useFuel
-  pure (whnfPure 20 e)
+-- Fast path: no let-bound placeholders to unfold
+covering
+whnfFast : TCEnv -> ClosedExpr -> ClosedExpr
+whnfFast env e = whnfPure 20 e
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
@@ -324,29 +325,23 @@ whnf env e = do
     whnfStepWithDelta : ClosedExpr -> Maybe ClosedExpr
     whnfStepWithDelta e = case whnfStepCore e of
       Just e' => Just e'
-      Nothing => case tryUnfoldLetPlaceholder env e of
-        Just e' => Just e'
-        Nothing => unfoldHead env e
+      Nothing => unfoldHead env e
 
     reduceAppHead : ClosedExpr -> Maybe ClosedExpr
     reduceAppHead (App f arg) = case reduceAppHead f of
       Just f' => Just (App f' arg)
       Nothing => case tryProjReduction env f whnfStepWithDelta of
         Just f' => Just (App f' arg)
-        Nothing => case tryUnfoldLetPlaceholder env f of
+        Nothing => case unfoldHead env f of
           Just f' => Just (App f' arg)
-          Nothing => case unfoldHead env f of
-            Just f' => Just (App f' arg)
-            Nothing => Nothing
+          Nothing => Nothing
     reduceAppHead _ = Nothing
 
     whnfPure : Nat -> ClosedExpr -> ClosedExpr
     whnfPure 0 e = e
     whnfPure (S k) e = case whnfStepCore e of
       Just e' => whnfPure k e'
-      Nothing => case tryUnfoldLetPlaceholder env e of
-        Just e' => whnfPure k e'
-        Nothing => case reduceAppHead e of
+      Nothing => case reduceAppHead e of
           Just e' => whnfPure k e'
           Nothing => case tryProjReduction env e whnfStepWithDelta of
             Just e' => whnfPure k e'
@@ -357,6 +352,67 @@ whnf env e = do
                 Nothing => case unfoldHead env e of
                   Just e' => whnfPure k e'
                   Nothing => e
+
+||| Separate whnf that includes let-bound placeholder unfolding
+||| Only call this directly from theorem checking where let-placeholders need unfolding
+||| Do NOT use this in the general hot path as it causes 16x performance regression
+export covering
+whnfWithLetPlaceholders : TCEnv -> ClosedExpr -> TC ClosedExpr
+whnfWithLetPlaceholders env e = do
+  useFuel
+  pure (whnfWithLetPure 20 e)
+ where
+  whnfStepCore : ClosedExpr -> Maybe ClosedExpr
+  whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
+  whnfStepCore (App f arg) = case whnfStepCore f of
+    Just f' => Just (App f' arg)
+    Nothing => Nothing
+  whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
+  whnfStepCore _ = Nothing
+
+  whnfStepWithDelta : ClosedExpr -> Maybe ClosedExpr
+  whnfStepWithDelta e = case whnfStepCore e of
+    Just e' => Just e'
+    Nothing => case tryUnfoldLetPlaceholder env e of
+      Just e' => Just e'
+      Nothing => unfoldHead env e
+
+  reduceAppHead : ClosedExpr -> Maybe ClosedExpr
+  reduceAppHead (App f arg) = case reduceAppHead f of
+    Just f' => Just (App f' arg)
+    Nothing => case tryProjReduction env f whnfStepWithDelta of
+      Just f' => Just (App f' arg)
+      Nothing => case tryUnfoldLetPlaceholder env f of
+        Just f' => Just (App f' arg)
+        Nothing => case unfoldHead env f of
+          Just f' => Just (App f' arg)
+          Nothing => Nothing
+  reduceAppHead _ = Nothing
+
+  covering
+  whnfWithLetPure : Nat -> ClosedExpr -> ClosedExpr
+  whnfWithLetPure 0 e = e
+  whnfWithLetPure (S k) e = case whnfStepCore e of
+    Just e' => whnfWithLetPure k e'
+    Nothing => case tryUnfoldLetPlaceholder env e of
+      Just e' => whnfWithLetPure k e'
+      Nothing => case reduceAppHead e of
+        Just e' => whnfWithLetPure k e'
+        Nothing => case tryProjReduction env e whnfStepWithDelta of
+          Just e' => whnfWithLetPure k e'
+          Nothing => case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+            Just e' => whnfWithLetPure k e'
+            Nothing => case tryIotaReduction env e whnfStepWithDelta of
+              Just e' => whnfWithLetPure k e'
+              Nothing => case unfoldHead env e of
+                Just e' => whnfWithLetPure k e'
+                Nothing => e
+
+export covering
+whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
+whnf env e = do
+  useFuel
+  pure (whnfFast env e)
 
 export covering
 whnfCore : ClosedExpr -> TC ClosedExpr

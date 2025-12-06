@@ -504,17 +504,25 @@ mutual
     (env1, fTy) <- inferTypeE env f
     (_, _, dom, cod) <- ensurePi env1 fTy
     (env2, argTy) <- inferTypeE env1 arg
-    argTy1 <- whnf env2 argTy
-    argTy' <- normalizeType env2 argTy1
-    dom1 <- whnf env2 dom
-    dom' <- normalizeType env2 dom1
-    if alphaEq argTy' dom'
+    -- Lazy normalization: try WHNF comparison first before full normalization
+    argTyWhnf <- whnf env2 argTy
+    domWhnf <- whnf env2 dom
+    if alphaEq argTyWhnf domWhnf
       then do
         let resultTy = instantiate1 (believe_me cod) arg
         resultTy' <- whnf env2 resultTy
         pure (env2, resultTy')
-      else debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  dom1 (after whnf)=" ++ show dom1 ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTy1 (after whnf)=" ++ show argTy1 ++ "\n  argTy' (after normalize)=" ++ show argTy') $
-             throw (AppTypeMismatch dom' argTy')
+      else do
+        -- WHNF comparison failed, try full normalization
+        argTy' <- normalizeType env2 argTyWhnf
+        dom' <- normalizeType env2 domWhnf
+        if alphaEq argTy' dom'
+          then do
+            let resultTy = instantiate1 (believe_me cod) arg
+            resultTy' <- whnf env2 resultTy
+            pure (env2, resultTy')
+          else debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  domWhnf=" ++ show domWhnf ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTyWhnf=" ++ show argTyWhnf ++ "\n  argTy' (after normalize)=" ++ show argTy') $
+               throw (AppTypeMismatch dom' argTy')
   inferTypeE env (Lam name bi ty body) = do
     (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Lam name bi ty body)
     pure (env', resultTy)
@@ -595,17 +603,26 @@ mutual
     let (env2, ctx2, tyClosed) = closeWithPlaceholders env1 ctx1 tyExpr
     let (env3, ctx3, valClosed) = closeWithPlaceholders env2 ctx2 valExpr
     (env4, ctx4, valTy) <- inferTypeOpenE env3 ctx3 valExpr
-    tyClosed' <- whnf env4 tyClosed
-    valTy' <- whnf env4 valTy
-    tyClosed'' <- normalizeType env4 tyClosed'
-    valTy'' <- normalizeType env4 valTy'
-    let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed''
-    if alphaEq tyWithBVars valTy''
+    -- Lazy normalization: try WHNF comparison first
+    tyClosedWhnf <- whnf env4 tyClosed
+    valTyWhnf <- whnf env4 valTy
+    let tyWithBVarsWhnf = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosedWhnf
+    if alphaEq tyWithBVarsWhnf valTyWhnf
       then do
         let ctx' = extendCtxLet name tyClosed valClosed ctx4
         (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
         pure (env5, ctx4, bodyTy)
-      else throw (LetTypeMismatch tyClosed'' valTy'')
+      else do
+        -- WHNF comparison failed, try full normalization
+        tyClosed' <- normalizeType env4 tyClosedWhnf
+        valTy' <- normalizeType env4 valTyWhnf
+        let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed'
+        if alphaEq tyWithBVars valTy'
+          then do
+            let ctx' = extendCtxLet name tyClosed valClosed ctx4
+            (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
+            pure (env5, ctx4, bodyTy)
+          else throw (LetTypeMismatch tyClosed' valTy')
   inferTypeOpenE env ctx (Proj structName idx structExpr) = do
     (env1, ctx1, structTy) <- inferTypeOpenE env ctx structExpr
     structTy' <- whnf env1 structTy

@@ -222,13 +222,17 @@ tryEtaExpansion recurEq env t s = do
 
 export covering
 isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
-isDefEq env e1 e2 = do
-  e1' <- whnf env e1
-  e2' <- whnf env e2
-  proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
-  case proofIrrel of
-    Just result => pure result
-    Nothing => isDefEqWhnf e1' e2'
+isDefEq env e1 e2 =
+  -- Fast path: syntactic equality check before any reduction
+  if exprEq e1 e2
+    then pure True
+    else do
+      e1' <- whnf env e1
+      e2' <- whnf env e2
+      proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
+      case proofIrrel of
+        Just result => pure result
+        Nothing => isDefEqWhnf e1' e2'
   where
     areEquivalentPlaceholders : Name -> Name -> Bool
     areEquivalentPlaceholders c1 c2 =

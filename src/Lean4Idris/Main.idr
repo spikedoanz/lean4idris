@@ -8,6 +8,7 @@ import Lean4Idris.Decl
 import Lean4Idris.Cache
 import System.File
 import System
+import System.Clock
 import Data.List
 import Data.Maybe
 import Data.String
@@ -63,11 +64,30 @@ computeVersion = do
         Left _ => pure "lean4idris-unknown"
     _ => pure "lean4idris-unknown"
 
+||| Per-declaration stats for profiling
+record DeclStats where
+  constructor MkDeclStats
+  name : String
+  fuelUsed : Nat
+  timeNs : Integer  -- nanoseconds
+  status : String   -- "ok", "fail", "timeout", "cached"
+
+||| Format stats as TSV line
+formatStats : DeclStats -> String
+formatStats s = s.name ++ "\t" ++ show s.fuelUsed ++ "\t" ++ show s.timeNs ++ "\t" ++ s.status
+
+||| Get elapsed time in nanoseconds between two monotonic clocks
+elapsedNs : Clock Monotonic -> Clock Monotonic -> Integer
+elapsedNs start end = toNano end - toNano start
+  where
+    toNano : Clock Monotonic -> Integer
+    toNano (MkClock s ns) = s * 1000000000 + ns
+
 ||| Check all declarations in IO (with progress output and caching)
 ||| If continueOnError is True, continues checking after failures and reports summary
 covering
-checkAllDeclsIO : (fuel : Nat) -> (continueOnError : Bool) -> (verbose : Bool) -> TCEnv -> List Declaration -> CacheState -> (passed : Nat) -> (failed : Nat) -> (timedOut : Nat) -> (cached : Nat) -> (errors : List String) -> IO (Either String TCEnv, CacheState)
-checkAllDeclsIO _ _ verbose env [] cache passed failed timedOut cached errors =
+checkAllDeclsIO : (fuel : Nat) -> (continueOnError : Bool) -> (verbose : Bool) -> (profile : Bool) -> TCEnv -> List Declaration -> CacheState -> (passed : Nat) -> (failed : Nat) -> (timedOut : Nat) -> (cached : Nat) -> (errors : List String) -> (stats : List DeclStats) -> IO (Either String TCEnv, CacheState, List DeclStats)
+checkAllDeclsIO _ _ verbose profile env [] cache passed failed timedOut cached errors stats =
   let totalDecls : Nat = passed + failed + timedOut + cached
       pct : Double = if totalDecls == 0 then 100.0
                        else (cast (passed + cached) / cast totalDecls) * 100.0
@@ -78,13 +98,18 @@ checkAllDeclsIO _ _ verbose env [] cache passed failed timedOut cached errors =
         putStrLn ""
         putStrLn "=== Errors encountered ==="
         traverse_ putStrLn (reverse errors)
+      -- Output profiling stats if enabled
+      when profile $ do
+        putStrLn ""
+        putStrLn "=== Profiling Stats (name\\tfuel_used\\ttime_ns\\tstatus) ==="
+        traverse_ (putStrLn . formatStats) (reverse stats)
       putStrLn ""
       -- Parsable format: TOTAL n OK n FAIL n TIMEOUT n CACHED n OK% pct
       putStrLn $ "TOTAL " ++ show totalDecls ++ " OK " ++ show passed ++ " FAIL " ++ show failed ++ " TIMEOUT " ++ show timedOut ++ " CACHED " ++ show cached ++ " OK% " ++ show pctRounded
       if failed > 0 || timedOut > 0
-        then pure (Left $ show (failed + timedOut) ++ " declarations failed", cache)
-        else pure (Right env, cache)
-checkAllDeclsIO fuel cont verbose env (d :: ds) cache passed failed timedOut cached errors = do
+        then pure (Left $ show (failed + timedOut) ++ " declarations failed", cache, reverse stats)
+        else pure (Right env, cache, reverse stats)
+checkAllDeclsIO fuel cont verbose profile env (d :: ds) cache passed failed timedOut cached errors stats = do
   let maybeName = declName d
   let name = maybe "<anonymous>" show maybeName
   -- Check if declaration is cached (skip anonymous declarations)
@@ -95,28 +120,38 @@ checkAllDeclsIO fuel cont verbose env (d :: ds) cache passed failed timedOut cac
       putStrLn "[cached] ok"
       -- Add declaration to env without type checking
       let env' = addDecl d env
-      checkAllDeclsIO fuel cont verbose env' ds cache passed failed timedOut (S cached) errors
+      let stat = MkDeclStats name 0 0 "cached"
+      checkAllDeclsIO fuel cont verbose profile env' ds cache passed failed timedOut (S cached) errors (stat :: stats)
     else do
       putStr $ "Checking: " ++ name ++ "... "
       flushStdout
-      case runTCWithFuel fuel (addDeclChecked env d) of
+      -- Time the type checking
+      startTime <- clockTime Monotonic
+      let result = runTCFuel fuel (addDeclChecked env d)
+      endTime <- clockTime Monotonic
+      let elapsed = elapsedNs startTime endTime
+      case result of
         Left FuelExhausted => do
           putStrLn "TIMEOUT"
           let errMsg = "fuel exhausted (in " ++ name ++ ")"
+          let stat = MkDeclStats name fuel elapsed "timeout"
           if cont
-            then checkAllDeclsIO fuel cont verbose env ds cache passed failed (S timedOut) cached (errMsg :: errors)
-            else pure (Left errMsg, cache)
+            then checkAllDeclsIO fuel cont verbose profile env ds cache passed failed (S timedOut) cached (errMsg :: errors) (stat :: stats)
+            else pure (Left errMsg, cache, reverse (stat :: stats))
         Left err => do
           putStrLn "FAIL"
           let errMsg = show err ++ " (in " ++ name ++ ")"
+          let stat = MkDeclStats name 0 elapsed "fail"  -- Can't know fuel used on error
           if cont
-            then checkAllDeclsIO fuel cont verbose env ds cache passed (S failed) timedOut cached (errMsg :: errors)
-            else pure (Left errMsg, cache)
-        Right env' => do
+            then checkAllDeclsIO fuel cont verbose profile env ds cache passed (S failed) timedOut cached (errMsg :: errors) (stat :: stats)
+            else pure (Left errMsg, cache, reverse (stat :: stats))
+        Right (remainingFuel, env') => do
           putStrLn "ok"
           -- Add to cache on success (skip anonymous declarations)
           let cache' = if isJust maybeName then addPassed name cache else cache
-          checkAllDeclsIO fuel cont verbose env' ds cache' (S passed) failed timedOut cached errors
+          let fuelUsed = fuel `minus` remainingFuel
+          let stat = MkDeclStats name fuelUsed elapsed "ok"
+          checkAllDeclsIO fuel cont verbose profile env' ds cache' (S passed) failed timedOut cached errors (stat :: stats)
 
 ||| CLI options
 record Options where
@@ -124,11 +159,12 @@ record Options where
   eager : Bool  -- Stop on first error (default: continue)
   verbose : Bool
   noCache : Bool  -- Disable caching
+  profile : Bool  -- Output per-declaration profiling stats
   fuel : Maybe Nat
   files : List String
 
 defaultOptions : Options
-defaultOptions = MkOptions False False False Nothing []
+defaultOptions = MkOptions False False False False Nothing []
 
 ||| Parse command line arguments
 parseArgs : List String -> Options
@@ -140,6 +176,8 @@ parseArgs ("-f" :: n :: rest) = { fuel := parsePositive n } (parseArgs rest)
 parseArgs ("--verbose" :: rest) = { verbose := True } (parseArgs rest)
 parseArgs ("-v" :: rest) = { verbose := True } (parseArgs rest)
 parseArgs ("--no-cache" :: rest) = { noCache := True } (parseArgs rest)
+parseArgs ("--profile" :: rest) = { profile := True } (parseArgs rest)
+parseArgs ("-p" :: rest) = { profile := True } (parseArgs rest)
 parseArgs (arg :: rest) = { files $= (arg ::) } (parseArgs rest)
 
 ||| Main entry point
@@ -184,8 +222,9 @@ main = do
               when opts.eager $ putStrLn "(eager mode: stopping on first error)"
               when (isJust opts.fuel) $ putStrLn $ "(fuel: " ++ show fuel ++ ")"
               when opts.noCache $ putStrLn "(caching disabled)"
+              when opts.profile $ putStrLn "(profiling enabled)"
               let continueOnError = not opts.eager
-              (result, finalCache) <- checkAllDeclsIO fuel continueOnError opts.verbose emptyEnv decls cache 0 0 0 0 []
+              (result, finalCache, _) <- checkAllDeclsIO fuel continueOnError opts.verbose opts.profile emptyEnv decls cache 0 0 0 0 [] []
               -- Save cache unless disabled
               unless opts.noCache $ do
                 saveCache finalCache
@@ -208,6 +247,7 @@ main = do
       putStrLn "  -f, --fuel <amount>  Set fuel limit per declaration (default: 100000)"
       putStrLn "  -v, --verbose        Print full error details"
       putStrLn "  --no-cache           Disable caching"
+      putStrLn "  -p, --profile        Output per-declaration fuel and timing stats"
       putStrLn ""
       putStrLn "Exit codes:"
       putStrLn "  0 - All declarations type-checked successfully"

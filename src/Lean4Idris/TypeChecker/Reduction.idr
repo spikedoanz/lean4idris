@@ -288,6 +288,224 @@ tryQuotReduction e whnfStep = do
   pure (mkApp result remainingArgs)
 
 ------------------------------------------------------------------------
+-- Native Evaluation (for native_decide support)
+------------------------------------------------------------------------
+
+-- Lean name constructors for Nat operations
+natName : Name
+natName = Str "Nat" Anonymous
+
+natBleName : Name
+natBleName = Str "ble" natName
+
+natBeqName : Name
+natBeqName = Str "beq" natName
+
+natDecLeName : Name
+natDecLeName = Str "decLe" natName
+
+natDecEqName : Name
+natDecEqName = Str "decEq" natName
+
+natAddName : Name
+natAddName = Str "add" natName
+
+natSubName : Name
+natSubName = Str "sub" natName
+
+natMulName : Name
+natMulName = Str "mul" natName
+
+-- Bool constructors
+boolName : Name
+boolName = Str "Bool" Anonymous
+
+boolTrueName : Name
+boolTrueName = Str "true" boolName
+
+boolFalseName : Name
+boolFalseName = Str "false" boolName
+
+-- Decidable constructors
+decidableName : Name
+decidableName = Str "Decidable" Anonymous
+
+isTrue : Name
+isTrue = Str "isTrue" decidableName
+
+isFalse : Name
+isFalse = Str "isFalse" decidableName
+
+-- String operations
+stringName : Name
+stringName = Str "String" Anonymous
+
+stringDecEqName : Name
+stringDecEqName = Str "decEq" stringName
+
+stringBeqName : Name
+stringBeqName = Str "beq" stringName
+
+stringAppendName : Name
+stringAppendName = Str "append" stringName
+
+stringLengthName : Name
+stringLengthName = Str "length" stringName
+
+-- Helper to extract Nat from NatLit
+getNatLit : ClosedExpr -> Maybe Nat
+getNatLit (NatLit n) = Just n
+getNatLit _ = Nothing
+
+-- Helper to extract String from StringLit
+getStringLit : ClosedExpr -> Maybe String
+getStringLit (StringLit s) = Just s
+getStringLit _ = Nothing
+
+-- Make Bool constant
+mkBool : Bool -> ClosedExpr
+mkBool True = Const boolTrueName []
+mkBool False = Const boolFalseName []
+
+-- Try to reduce Nat.ble n m to true/false
+-- Nat.ble : Nat → Nat → Bool
+tryNatBle : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatBle args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = mkBool (n <= m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.beq n m to true/false
+-- Nat.beq : Nat → Nat → Bool
+tryNatBeq : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatBeq args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = mkBool (n == m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.add n m to a NatLit
+-- Nat.add : Nat → Nat → Nat
+tryNatAdd : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatAdd args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (n + m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.sub n m to a NatLit (truncated subtraction)
+-- Nat.sub : Nat → Nat → Nat
+tryNatSub : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatSub args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (minus n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.mul n m to a NatLit
+-- Nat.mul : Nat → Nat → Nat
+tryNatMul : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatMul args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (n * m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce String.beq s1 s2 to true/false
+-- String.beq : String → String → Bool
+tryStringBeq : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryStringBeq args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  s1 <- getStringLit arg0'
+  s2 <- getStringLit arg1'
+  let result = mkBool (s1 == s2)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce String.append s1 s2 to a StringLit
+-- String.append : String → String → String
+tryStringAppend : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryStringAppend args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  s1 <- getStringLit arg0'
+  s2 <- getStringLit arg1'
+  let result = StringLit (s1 ++ s2)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce String.length s to a NatLit
+-- String.length : String → Nat
+tryStringLength : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryStringLength args whnfStep = do
+  guard (length args >= 1)
+  arg0 <- listNth args 0
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  s <- getStringLit arg0'
+  let result = NatLit (length s)
+  let remaining = listDrop 1 args
+  pure (mkApp result remaining)
+
+-- Main native evaluation dispatcher
+export
+tryNativeEval : ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNativeEval e whnfStep = do
+  (name, _, args) <- getAppConst e
+  tryNativeEvalName name args whnfStep
+  where
+    tryNativeEvalName : Name -> List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+    -- Nat operations
+    tryNativeEvalName name args step =
+      if name == natBleName then tryNatBle args step
+      else if name == natBeqName then tryNatBeq args step
+      else if name == natAddName then tryNatAdd args step
+      else if name == natSubName then tryNatSub args step
+      else if name == natMulName then tryNatMul args step
+      -- String operations
+      else if name == stringBeqName then tryStringBeq args step
+      else if name == stringAppendName then tryStringAppend args step
+      else if name == stringLengthName then tryStringLength args step
+      else Nothing
+
+------------------------------------------------------------------------
 -- WHNF
 ------------------------------------------------------------------------
 
@@ -332,9 +550,11 @@ whnf env e = do
             Just e' => whnfPure k e'
             Nothing => case tryIotaReduction env e whnfStepWithDelta of
               Just e' => whnfPure k e'
-              Nothing => case unfoldHead env e of
+              Nothing => case tryNativeEval e whnfStepWithDelta of
                 Just e' => whnfPure k e'
-                Nothing => e
+                Nothing => case unfoldHead env e of
+                  Just e' => whnfPure k e'
+                  Nothing => e
 
 export covering
 whnfCore : ClosedExpr -> TC ClosedExpr

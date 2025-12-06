@@ -223,8 +223,12 @@ tryEtaExpansion recurEq env t s = do
 export covering
 isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
 isDefEq env e1 e2 = do
-  e1' <- whnf env e1
-  e2' <- whnf env e2
+  -- Substitute let-placeholders with their values BEFORE whnf
+  -- This is done once at each isDefEq call, not in the whnf hot loop
+  let e1s = substLetPlaceholders env e1
+  let e2s = substLetPlaceholders env e2
+  e1' <- whnf env e1s
+  e2' <- whnf env e2s
   proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
   case proofIrrel of
     Just result => pure result

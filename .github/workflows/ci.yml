@@ -12,9 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Idris2 and pack
+      - name: Install Chez Scheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
+
+      - name: Install pack
         run: |
-          curl -sSL https://github.com/stefan-hoeck/idris2-pack/releases/latest/download/install.bash | bash
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash)" -- -s chezscheme
           echo "$HOME/.pack/bin" >> $GITHUB_PATH
 
       - name: Build
@@ -28,9 +31,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Idris2 and pack
+      - name: Install Chez Scheme
+        run: sudo apt-get update && sudo apt-get install -y chezscheme
+
+      - name: Install pack
         run: |
-          curl -sSL https://github.com/stefan-hoeck/idris2-pack/releases/latest/download/install.bash | bash
+          bash -c "$(curl -fsSL https://raw.githubusercontent.com/stefan-hoeck/idris2-pack/main/install.bash)" -- -s chezscheme
           echo "$HOME/.pack/bin" >> $GITHUB_PATH
 
       - name: Build

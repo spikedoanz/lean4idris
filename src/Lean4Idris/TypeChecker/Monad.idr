@@ -104,27 +104,27 @@ data TCError : Type where
   FuelExhausted : TCError
   OtherError : String -> TCError
 
+showExprHead : ClosedExpr -> String
+showExprHead (Sort _) = "Sort"
+showExprHead (Const n _) = "Const " ++ show n
+showExprHead (App f _) = "App (" ++ showExprHead f ++ " ...)"
+showExprHead (Lam _ _ _ _) = "Lam"
+showExprHead (Pi _ _ _ _) = "Pi"
+showExprHead (Let _ _ _ _) = "Let"
+showExprHead (BVar i) = "BVar " ++ show (finToNat i)
+showExprHead (Local id _) = "Local " ++ show id
+showExprHead (Proj sn _ _) = "Proj " ++ show sn
+showExprHead (NatLit n) = "NatLit " ++ show n
+showExprHead (StringLit _) = "StringLit"
+
 export
 covering
 Show TCError where
-  show (TypeExpected e) = "type expected (got: " ++ showExprHead e ++ ")"
-    where
-      showExprHead : ClosedExpr -> String
-      showExprHead (Sort _) = "Sort"
-      showExprHead (Const n _) = "Const " ++ show n
-      showExprHead (App _ _) = "App"
-      showExprHead (Lam _ _ _ _) = "Lam"
-      showExprHead (Pi _ _ _ _) = "Pi"
-      showExprHead (Let _ _ _ _) = "Let"
-      showExprHead (BVar _) = "BVar"
-      showExprHead (Local id _) = "Local " ++ show id
-      showExprHead (Proj _ _ _) = "Proj"
-      showExprHead (NatLit _) = "NatLit"
-      showExprHead (StringLit _) = "StringLit"
-  show (FunctionExpected e) = "function expected: " ++ show e
-  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ show dom ++ ", got " ++ show argTy
-  show (LetTypeMismatch expected actual) = "let binding type mismatch: expected " ++ show expected ++ ", got " ++ show actual
-  show (UnknownConst n) = "XXXUNKNOWN constant: " ++ show n
+  show (TypeExpected e) = "type expected: " ++ showExprHead e
+  show (FunctionExpected e) = "function expected: " ++ showExprHead e
+  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ showExprHead dom ++ ", got " ++ showExprHead argTy
+  show (LetTypeMismatch expected actual) = "let type mismatch: expected " ++ showExprHead expected ++ ", got " ++ showExprHead actual
+  show (UnknownConst n) = "unknown constant: " ++ show n
   show (WrongNumLevels exp act n) = "wrong number of universe levels for " ++ show n ++ ": expected " ++ show exp ++ ", got " ++ show act
   show (NegativeOccurrence ind ctor) = "negative occurrence of " ++ show ind ++ " in constructor " ++ show ctor
   show (CtorWrongReturnType ctor expected _) = "constructor " ++ show ctor ++ " must return " ++ show expected
@@ -133,7 +133,7 @@ Show TCError where
   show (CtorUniverseMismatch ctor indPs ctorPs) = "constructor " ++ show ctor ++ " universe params don't match inductive"
   show (CtorInductiveNotFound ctor ind) = "inductive " ++ show ind ++ " not found for constructor " ++ show ctor
   show (CyclicLevelParam n) = "cyclic universe level parameter: " ++ show n
-  show FuelExhausted = "fuel exhausted (type checking took too long)"
+  show FuelExhausted = "fuel exhausted"
   show (OtherError s) = s
 
 ------------------------------------------------------------------------

@@ -540,8 +540,10 @@ mutual
     -- Lazy normalization: try WHNF comparison first
     tyClosedWhnf <- whnf env4 tyClosed
     valTyWhnf <- whnf env4 valTy
+    -- Convert both to BVars for comparison
     let tyWithBVarsWhnf = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosedWhnf
-    if alphaEq tyWithBVarsWhnf valTyWhnf
+    let valTyWithBVarsWhnf = replaceAllPlaceholdersWithBVars' (toList ctx4) valTyWhnf
+    if alphaEq tyWithBVarsWhnf valTyWithBVarsWhnf
       then do
         let ctx' = extendCtxLet name tyClosed valClosed ctx4
         (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
@@ -550,8 +552,10 @@ mutual
         -- WHNF comparison failed, try full normalization
         tyClosed' <- normalizeType env4 tyClosedWhnf
         valTy' <- normalizeType env4 valTyWhnf
+        -- Convert both to BVars for comparison
         let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed'
-        if alphaEq tyWithBVars valTy'
+        let valTyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) valTy'
+        if alphaEq tyWithBVars valTyWithBVars
           then do
             let ctx' = extendCtxLet name tyClosed valClosed ctx4
             (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body

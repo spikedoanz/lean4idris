@@ -295,7 +295,7 @@ export covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
 whnf env e = do
   useFuel
-  pure (whnfPure 20 e)
+  pure (whnfPure 1000 e)
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
@@ -310,10 +310,21 @@ whnf env e = do
       Just e' => Just e'
       Nothing => unfoldHead env e
 
+    -- Full step function that includes iota and projection reduction
+    -- Used by iterWhnfStep inside tryIotaReduction/tryProjReduction
+    whnfStepFull : ClosedExpr -> Maybe ClosedExpr
+    whnfStepFull e = case whnfStepCore e of
+      Just e' => Just e'
+      Nothing => case tryProjReduction env e whnfStepWithDelta of
+        Just e' => Just e'
+        Nothing => case tryIotaReduction env e whnfStepWithDelta of
+          Just e' => Just e'
+          Nothing => unfoldHead env e
+
     reduceAppHead : ClosedExpr -> Maybe ClosedExpr
     reduceAppHead (App f arg) = case reduceAppHead f of
       Just f' => Just (App f' arg)
-      Nothing => case tryProjReduction env f whnfStepWithDelta of
+      Nothing => case tryProjReduction env f whnfStepFull of
         Just f' => Just (App f' arg)
         Nothing => case unfoldHead env f of
           Just f' => Just (App f' arg)
@@ -326,11 +337,11 @@ whnf env e = do
       Just e' => whnfPure k e'
       Nothing => case reduceAppHead e of
         Just e' => whnfPure k e'
-        Nothing => case tryProjReduction env e whnfStepWithDelta of
+        Nothing => case tryProjReduction env e whnfStepFull of
           Just e' => whnfPure k e'
-          Nothing => case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+          Nothing => case (if env.quotInit then tryQuotReduction e whnfStepFull else Nothing) of
             Just e' => whnfPure k e'
-            Nothing => case tryIotaReduction env e whnfStepWithDelta of
+            Nothing => case tryIotaReduction env e whnfStepFull of
               Just e' => whnfPure k e'
               Nothing => case unfoldHead env e of
                 Just e' => whnfPure k e'

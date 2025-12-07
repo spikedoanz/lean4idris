@@ -104,6 +104,7 @@ data TCError : Type where
   FuelExhausted : TCError
   OtherError : String -> TCError
 
+export
 showExprHead : ClosedExpr -> String
 showExprHead (Sort _) = "Sort"
 showExprHead (Const n _) = "Const " ++ show n

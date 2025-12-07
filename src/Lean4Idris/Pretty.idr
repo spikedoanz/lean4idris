@@ -83,6 +83,7 @@ lookupBinder ctx i =
 export
 ppExpr : PPContext -> Expr n -> String
 ppExpr ctx (BVar i) = lookupBinder ctx i
+ppExpr ctx (Local id name) = "?" ++ show name ++ "." ++ show id
 ppExpr ctx (Sort l) = "Sort " ++ ppLevel l
 ppExpr ctx (Const n ls) = show n ++ ppLevelArgs ls
 ppExpr ctx (App f x) = ppApp ctx f [x]

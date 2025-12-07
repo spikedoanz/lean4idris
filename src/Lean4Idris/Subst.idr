@@ -32,6 +32,7 @@ public export
 subst0 : Expr (S n) -> Expr n -> Expr n
 subst0 (BVar FZ) arg = arg
 subst0 (BVar (FS i)) _ = BVar i
+subst0 (Local id name) _ = Local id name
 subst0 (Sort l) _ = Sort l
 subst0 (Const name lvls) _ = Const name lvls
 subst0 (App f x) arg = App (subst0 f arg) (subst0 x arg)
@@ -62,6 +63,7 @@ liftLooseBVars s n e = go s e
       in if i < s
            then BVar (believe_me i)  -- Below cutoff, keep same
            else BVar (believe_me (i + n))  -- At or above cutoff, lift
+    go s (Local id name) = Local id name  -- Free vars not affected by lifting
     go s (Sort l) = Sort l
     go s (Const name lvls) = Const name lvls
     go s (App f x) = App (go s f) (go s x)
@@ -96,6 +98,7 @@ instantiate1 e subst = go 0 e
            else if i == d
              then liftLooseBVars 0 d subst  -- The variable being substituted
              else BVar (believe_me (minus i 1))  -- Outer free variable, shift down
+    go d (Local id name) = Local id name  -- Free vars unchanged
     go d (Sort l) = Sort l
     go d (Const name lvls) = Const name lvls
     go d (App f x) = App (go d f) (go d x)
@@ -113,6 +116,7 @@ instantiate1 e subst = go 0 e
 public export covering
 substLevelParams : List (Name, Level) -> Expr n -> Expr n
 substLevelParams ps (BVar i) = BVar i
+substLevelParams ps (Local id name) = Local id name
 substLevelParams ps (Sort l) = Sort (substParams ps l)
 substLevelParams ps (Const name lvls) = Const name (map (substParams ps) lvls)
 substLevelParams ps (App f x) = App (substLevelParams ps f) (substLevelParams ps x)
@@ -131,6 +135,7 @@ substLevelParams ps (StringLit s) = StringLit s
 public export covering
 substLevelParamsSafe : List (Name, Level) -> Expr n -> Maybe (Expr n)
 substLevelParamsSafe ps (BVar i) = Just (BVar i)
+substLevelParamsSafe ps (Local id name) = Just (Local id name)
 substLevelParamsSafe ps (Sort l) = Sort <$> substParamsSafe ps l
 substLevelParamsSafe ps (Const name lvls) = Const name <$> traverse (substParamsSafe ps) lvls
 substLevelParamsSafe ps (App f x) =
@@ -192,6 +197,7 @@ goSubstAllNat depth args idx =
 covering
 goSubstAll : (depth : Nat) -> List ClosedExpr -> ClosedExpr -> ClosedExpr
 goSubstAll depth args (BVar idx) = goSubstAllNat depth args (finToNat idx)
+goSubstAll depth args (Local id name) = Local id name
 goSubstAll depth args (Sort l) = Sort l
 goSubstAll depth args (Const name lvls) = Const name lvls
 goSubstAll depth args (App f x) = App (goSubstAll depth args f) (goSubstAll depth args x)

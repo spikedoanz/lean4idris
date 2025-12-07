@@ -20,26 +20,20 @@ record TCEnv where
   constructor MkTCEnv
   decls : SortedMap Name Declaration
   quotInit : Bool
-  placeholders : SortedMap Name ClosedExpr
-  nextPlaceholder : Nat
+  nextLocalId : Nat  -- Counter for generating unique Local IDs
+  localTypes : SortedMap Nat ClosedExpr  -- Types of Local variables by ID
 
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False empty 0
+emptyEnv = MkTCEnv empty False 0 empty
 
 public export
-addPlaceholder : Name -> ClosedExpr -> TCEnv -> TCEnv
-addPlaceholder name ty env =
-  let env' = { placeholders $= insert name ty } env
-  in { decls $= insert name (AxiomDecl name ty []) } env'
+addLocalType : Nat -> ClosedExpr -> TCEnv -> TCEnv
+addLocalType id ty env = { localTypes $= insert id ty } env
 
 public export
-lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
-lookupPlaceholder name env = lookup name env.placeholders
-
-public export
-clearPlaceholders : TCEnv -> TCEnv
-clearPlaceholders env = { placeholders := empty } env
+lookupLocalType : Nat -> TCEnv -> Maybe ClosedExpr
+lookupLocalType id env = lookup id env.localTypes
 
 public export
 enableQuot : TCEnv -> TCEnv
@@ -123,6 +117,7 @@ Show TCError where
       showExprHead (Pi _ _ _ _) = "Pi"
       showExprHead (Let _ _ _ _) = "Let"
       showExprHead (BVar _) = "BVar"
+      showExprHead (Local id _) = "Local " ++ show id
       showExprHead (Proj _ _ _) = "Proj"
       showExprHead (NatLit _) = "NatLit"
       showExprHead (StringLit _) = "StringLit"

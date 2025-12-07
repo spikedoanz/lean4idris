@@ -111,6 +111,7 @@ containsPlaceholderForBinder : Name -> ClosedExpr -> Bool
 containsPlaceholderForBinder targetBinder (Const name []) = isPlaceholderForBinder name targetBinder
 containsPlaceholderForBinder _ (Const _ _) = False
 containsPlaceholderForBinder _ (BVar _) = False
+containsPlaceholderForBinder _ (Local _ _) = False
 containsPlaceholderForBinder _ (Sort _) = False
 containsPlaceholderForBinder targetBinder (App f x) =
   containsPlaceholderForBinder targetBinder f || containsPlaceholderForBinder targetBinder x
@@ -128,6 +129,7 @@ containsPlaceholderForBinder _ (StringLit _) = False
 
 replacePlaceholdersForBinderN : Name -> {n : Nat} -> Expr n -> Name -> Expr n
 replacePlaceholdersForBinderN targetBinder (BVar i) _ = BVar i
+replacePlaceholdersForBinderN targetBinder (Local id name) _ = Local id name
 replacePlaceholdersForBinderN targetBinder (Sort l) _ = Sort l
 replacePlaceholdersForBinderN targetBinder (Const name []) sharedName =
   if isPlaceholderForBinder name targetBinder then Const sharedName [] else Const name []

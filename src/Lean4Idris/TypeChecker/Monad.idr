@@ -24,10 +24,11 @@ record TCEnv where
   nextPlaceholder : Nat
   whnfCache : SortedMap ClosedExpr ClosedExpr
   defEqCache : SortedMap (ClosedExpr, ClosedExpr) Bool
+  localTypes : SortedMap Nat ClosedExpr  -- Types of Local variables by ID
 
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False empty 0 empty empty
+emptyEnv = MkTCEnv empty False empty 0 empty empty empty
 
 public export
 cacheWhnf : ClosedExpr -> ClosedExpr -> TCEnv -> TCEnv
@@ -61,6 +62,14 @@ lookupPlaceholder name env = lookup name env.placeholders
 public export
 clearPlaceholders : TCEnv -> TCEnv
 clearPlaceholders env = { placeholders := empty } env
+
+public export
+addLocalType : Nat -> ClosedExpr -> TCEnv -> TCEnv
+addLocalType id ty env = { localTypes $= insert id ty } env
+
+public export
+lookupLocalType : Nat -> TCEnv -> Maybe ClosedExpr
+lookupLocalType id env = lookup id env.localTypes
 
 public export
 enableQuot : TCEnv -> TCEnv
@@ -144,6 +153,7 @@ Show TCError where
       showExprHead (Pi _ _ _ _) = "Pi"
       showExprHead (Let _ _ _ _) = "Let"
       showExprHead (BVar _) = "BVar"
+      showExprHead (Local id _) = "Local " ++ show id
       showExprHead (Proj _ _ _) = "Proj"
       showExprHead (NatLit _) = "NatLit"
       showExprHead (StringLit _) = "StringLit"

@@ -47,6 +47,11 @@ public export
 data Expr : (n : Nat) -> Type where
   ||| Bound variable - de Bruijn index guaranteed to be in scope
   BVar : Fin n -> Expr n
+  ||| Free variable (local) - used during type checking to represent
+  ||| variables introduced by binders. Has a unique ID and a type.
+  ||| Unlike BVar which uses de Bruijn indices, Local uses unique IDs
+  ||| which makes comparison trivial (same ID = same variable).
+  Local : (id : Nat) -> (userName : Name) -> Expr n
   ||| Sort (type universe)
   Sort : Level -> Expr n
   ||| Constant reference with universe level instantiation
@@ -85,6 +90,7 @@ shiftFin m (FS i) = FS (shiftFin m i)
 public export
 weaken : {m : Nat} -> Expr n -> Expr (n + m)
 weaken (BVar i) = BVar (shiftFin m i)
+weaken (Local id name) = Local id name
 weaken (Sort l) = Sort l
 weaken (Const name lvls) = Const name lvls
 weaken (App f x) = App (weaken f) (weaken x)
@@ -104,6 +110,7 @@ shiftFin1 (FS i) = FS (shiftFin1 i)
 public export
 weaken1 : Expr n -> Expr (S n)
 weaken1 (BVar i) = BVar (shiftFin1 i)
+weaken1 (Local id name) = Local id name
 weaken1 (Sort l) = Sort l
 weaken1 (Const name lvls) = Const name lvls
 weaken1 (App f x) = App (weaken1 f) (weaken1 x)
@@ -124,6 +131,7 @@ eqFin _ _ = False
 export
 exprEq : Expr n -> Expr m -> Bool
 exprEq (BVar i) (BVar j) = eqFin i j
+exprEq (Local id1 _) (Local id2 _) = id1 == id2
 exprEq (Sort l1) (Sort l2) = l1 == l2
 exprEq (Const n1 ls1) (Const n2 ls2) = n1 == n2 && ls1 == ls2
 exprEq (App f1 x1) (App f2 x2) = exprEq f1 f2 && exprEq x1 x2
@@ -165,6 +173,9 @@ exprCompare : Expr n -> Expr m -> Ordering
 exprCompare (BVar i) (BVar j) = compareFin i j
 exprCompare (BVar _) _ = LT
 exprCompare _ (BVar _) = GT
+exprCompare (Local id1 _) (Local id2 _) = compare id1 id2
+exprCompare (Local _ _) _ = LT
+exprCompare _ (Local _ _) = GT
 exprCompare (Sort l1) (Sort l2) = compare l1 l2
 exprCompare (Sort _) _ = LT
 exprCompare _ (Sort _) = GT
@@ -272,6 +283,7 @@ mkApp f (x :: xs) = mkApp (App f x) xs
 public export
 freeConsts : Expr n -> List Name
 freeConsts (BVar _) = []
+freeConsts (Local _ _) = []
 freeConsts (Sort _) = []
 freeConsts (Const name _) = [name]
 freeConsts (App f x) = freeConsts f ++ freeConsts x
@@ -286,6 +298,7 @@ freeConsts (StringLit _) = []
 public export
 levelParams : Expr n -> List Name
 levelParams (BVar _) = []
+levelParams (Local _ _) = []
 levelParams (Sort l) = Level.params l
 levelParams (Const _ ls) = concatMap Level.params ls
 levelParams (App f x) = levelParams f ++ levelParams x

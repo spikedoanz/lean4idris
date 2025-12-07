@@ -129,6 +129,7 @@ mutual
     Lam _ _ _ _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got Lam")
     Let _ _ _ _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got Let")
     BVar _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got BVar")
+    Local _ _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got Local")
     Proj _ _ _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got Proj")
     NatLit _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got NatLit")
     StringLit _ => throw (OtherError $ "ensurePiWhnf: expected Pi, got StringLit")
@@ -216,6 +217,7 @@ covering
 replaceAllPlaceholdersGo : List LocalEntry -> Nat -> ClosedExpr -> ClosedExpr
 replaceAllPlaceholdersGo entries depth (Sort l) = Sort l
 replaceAllPlaceholdersGo entries depth (BVar i) = BVar i
+replaceAllPlaceholdersGo entries depth (Local id name) = Local id name
 replaceAllPlaceholdersGo entries depth (Const name ls) =
   case findPlaceholderIdx entries name 0 of
     Just idx => makeBVarFromNat (idx + depth)
@@ -539,6 +541,11 @@ mutual
   inferTypeE env (StringLit _) = pure (env, Const (Str "String" Anonymous) [])
   inferTypeE env (BVar i) =
     throw (OtherError $ "inferTypeE: unexpected BVar " ++ show (finToNat i) ++ " in closed expression")
+  inferTypeE env (Local id name) =
+    -- Local variables have their types registered in localTypes map
+    case lookupLocalType id env of
+      Just ty => pure (env, ty)
+      Nothing => throw (OtherError $ "inferTypeE: Local " ++ show id ++ " (" ++ show name ++ ") type not found")
 
   export covering
   inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
@@ -567,6 +574,11 @@ mutual
                 then throw (WrongNumLevels (length params) (length levels) name)
                 else pure (env, ctx, instantiateLevelParams params levels ty)
   inferTypeOpenE env ctx (BVar i) = pure (env, ctx, (lookupCtx i ctx).type)
+  inferTypeOpenE env ctx (Local id name) =
+    -- Local variables have their types registered in localTypes map
+    case lookupLocalType id env of
+      Just ty => pure (env, ctx, ty)
+      Nothing => throw (OtherError $ "inferTypeOpenE: Local " ++ show id ++ " (" ++ show name ++ ") type not found")
   inferTypeOpenE env ctx (App f arg) = do
     (env1, ctx1, fTy) <- inferTypeOpenE env ctx f
     (_, _, dom, cod) <- ensurePi env1 fTy

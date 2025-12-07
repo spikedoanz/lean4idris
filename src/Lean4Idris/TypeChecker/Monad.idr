@@ -21,32 +21,11 @@ record TCEnv where
   decls : SortedMap Name Declaration
   quotInit : Bool
   nextLocalId : Nat  -- Counter for generating unique Local IDs
-  whnfCache : SortedMap ClosedExpr ClosedExpr
-  defEqCache : SortedMap (ClosedExpr, ClosedExpr) Bool
   localTypes : SortedMap Nat ClosedExpr  -- Types of Local variables by ID
 
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False 0 empty empty empty
-
-public export
-cacheWhnf : ClosedExpr -> ClosedExpr -> TCEnv -> TCEnv
-cacheWhnf input result env = { whnfCache $= insert input result } env
-
-public export
-lookupWhnfCache : ClosedExpr -> TCEnv -> Maybe ClosedExpr
-lookupWhnfCache e env = lookup e env.whnfCache
-
-public export
-cacheDefEq : ClosedExpr -> ClosedExpr -> Bool -> TCEnv -> TCEnv
-cacheDefEq e1 e2 result env = { defEqCache $= insert (e1, e2) result } env
-
-public export
-lookupDefEqCache : ClosedExpr -> ClosedExpr -> TCEnv -> Maybe Bool
-lookupDefEqCache e1 e2 env =
-  case lookup (e1, e2) env.defEqCache of
-    Just b => Just b
-    Nothing => lookup (e2, e1) env.defEqCache
+emptyEnv = MkTCEnv empty False 0 empty
 
 public export
 addLocalType : Nat -> ClosedExpr -> TCEnv -> TCEnv

@@ -1,0 +1,1 @@
+-[] run pack test lean4idris

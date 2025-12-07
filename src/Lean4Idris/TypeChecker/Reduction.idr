@@ -232,36 +232,53 @@ getQuotType name =
         sortU = Sort u
         sortV = Sort v
         prop = Sort Zero
+        -- rTy: at depth 1 (after α), so α = BVar 0
         rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- fTy domain: at depth 3 (after α, r, β), so α = BVar 2, r = BVar 1, β = BVar 0
+        -- fTy body: at depth 4 (after α, r, β, _), so β = BVar 1
+        fTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 2) (mkQBVar 1)
+        -- hTy: at depth 4 (after α, r, β, f)
+        -- hTy "a" domain: α = BVar 3
+        -- hTy "b" domain (depth 5): α = BVar 4
+        -- hTy "_" domain (depth 6): r = BVar 4, a = BVar 1, b = BVar 0
+        -- hTy "_" body (depth 7): Eq (f a) (f b), β = BVar 4, f = BVar 3, a = BVar 2, b = BVar 1
+        hTy = mkQPi (Str "a" Anonymous) Default (mkQBVar 3)
+                (mkQPi (Str "b" Anonymous) Default (mkQBVar 4)
+                  (mkQPi (Str "_" Anonymous) Default
+                    (App (App (mkQBVar 4) (mkQBVar 1)) (mkQBVar 0))
+                    (App (App (App (Const (Str "Eq" Anonymous) [v]) (mkQBVar 4))
+                              (App (mkQBVar 3) (mkQBVar 2)))
+                         (App (mkQBVar 3) (mkQBVar 1)))))
+        -- qTy domain: at depth 5 (after α, r, β, f, h), so α = BVar 4, r = BVar 3
+        -- qTy body: at depth 6 (after α, r, β, f, h, _), so β = BVar 3
         liftTy = mkQPi alphaName Implicit sortU
                    (mkQPi rName Implicit rTy
                      (mkQPi betaName Implicit sortV
-                       (mkQPi fName Default (mkQPi (Str "_" Anonymous) Default (mkQBVar 2) (mkQBVar 1))
-                         (mkQPi hName Default
-                           (mkQPi (Str "a" Anonymous) Default (mkQBVar 4)
-                             (mkQPi (Str "b" Anonymous) Default (mkQBVar 5)
-                               (mkQPi (Str "_" Anonymous) Default
-                                 (App (App (mkQBVar 4) (mkQBVar 1)) (mkQBVar 0))
-                                 (App (App (App (Const (Str "Eq" Anonymous) [v]) (mkQBVar 4))
-                                           (App (mkQBVar 3) (mkQBVar 2)))
-                                      (App (mkQBVar 3) (mkQBVar 1))))))
+                       (mkQPi fName Default fTy
+                         (mkQPi hName Default hTy
                            (mkQPi (Str "_" Anonymous) Default
-                             (App (App (Const quotName [u]) (mkQBVar 5)) (mkQBVar 4))
+                             (App (App (Const quotName [u]) (mkQBVar 4)) (mkQBVar 3))
                              (mkQBVar 3))))))
     in Just (liftTy, [uName, vName])
   else if name == quotIndName then
     let u = Param uName
         sortU = Sort u
         prop = Sort Zero
+        -- rTy: at depth 1 (after α), so α = BVar 0
         rTy = mkQPi (Str "_" Anonymous) Default (mkQBVar 0) (mkQPi (Str "_" Anonymous) Default (mkQBVar 1) prop)
+        -- betaTy: at depth 2 (after α, r), so α = BVar 1, r = BVar 0
         betaTy = mkQPi (Str "_" Anonymous) Default (App (App (Const quotName [u]) (mkQBVar 1)) (mkQBVar 0)) prop
-        hTy = mkQPi (Str "a" Anonymous) Default (mkQBVar 3)
-                (App (mkQBVar 1) (App (App (App (Const quotMkName [u]) (mkQBVar 4)) (mkQBVar 3)) (mkQBVar 0)))
+        -- hTy domain: at depth 3 (after α, r, β), so α = BVar 2, r = BVar 1, β = BVar 0
+        -- hTy body: at depth 4 (after α, r, β, a), so α = BVar 3, r = BVar 2, β = BVar 1, a = BVar 0
+        hTy = mkQPi (Str "a" Anonymous) Default (mkQBVar 2)
+                (App (mkQBVar 1) (App (App (App (Const quotMkName [u]) (mkQBVar 3)) (mkQBVar 2)) (mkQBVar 0)))
+        -- qTy domain: at depth 4 (after α, r, β, h), so α = BVar 3, r = BVar 2, β = BVar 1, h = BVar 0
+        -- result: at depth 5 (after α, r, β, h, q), so α = BVar 4, r = BVar 3, β = BVar 2, h = BVar 1, q = BVar 0
         indTy = mkQPi alphaName Implicit sortU
                   (mkQPi rName Implicit rTy
                     (mkQPi betaName Implicit betaTy
                       (mkQPi hName Default hTy
-                        (mkQPi qName Default (App (App (Const quotName [u]) (mkQBVar 4)) (mkQBVar 3))
+                        (mkQPi qName Default (App (App (Const quotName [u]) (mkQBVar 3)) (mkQBVar 2))
                           (App (mkQBVar 2) (mkQBVar 0))))))
     in Just (indTy, [uName])
   else Nothing
@@ -1062,7 +1079,7 @@ whnf env e = do
       Just e' => Just e'
       Nothing => unfoldHead env e
 
-    -- Full step function that includes native evaluation
+    -- Full step function that includes native evaluation, iota and projection reduction
     -- This is passed to native eval functions so they can reduce arguments
     whnfStepFull : ClosedExpr -> Maybe ClosedExpr
     whnfStepFull e = case whnfStepCore e of
@@ -1078,7 +1095,7 @@ whnf env e = do
     reduceAppHead : ClosedExpr -> Maybe ClosedExpr
     reduceAppHead (App f arg) = case reduceAppHead f of
       Just f' => Just (App f' arg)
-      Nothing => case tryProjReduction env f whnfStepWithDelta of
+      Nothing => case tryProjReduction env f whnfStepFull of
         Just f' => Just (App f' arg)
         Nothing => case unfoldHead env f of
           Just f' => Just (App f' arg)
@@ -1095,15 +1112,17 @@ whnf env e = do
         Just e' => whnfPure k e'
         Nothing => case reduceAppHead e of
           Just e' => whnfPure k e'
-          Nothing => case tryProjReduction env e whnfStepWithDelta of
+          Nothing => case tryProjReduction env e whnfStepFull of
             Just e' => whnfPure k e'
-            Nothing => case (if env.quotInit then tryQuotReduction e whnfStepWithDelta else Nothing) of
+            Nothing => case (if env.quotInit then tryQuotReduction e whnfStepFull else Nothing) of
               Just e' => whnfPure k e'
-              Nothing => case tryIotaReduction env e whnfStepWithDelta of
+              Nothing => case tryIotaReduction env e whnfStepFull of
                 Just e' => whnfPure k e'
-                Nothing => case unfoldHead env e of
+                Nothing => case tryIotaReduction env e whnfStepWithDelta of
                   Just e' => whnfPure k e'
-                  Nothing => e
+                  Nothing => case unfoldHead env e of
+                    Just e' => whnfPure k e'
+                    Nothing => e
 
 export covering
 whnfCore : ClosedExpr -> TC ClosedExpr

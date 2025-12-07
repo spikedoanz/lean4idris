@@ -62,6 +62,7 @@ checkNegativeOccurrence indName = go 0
   where
     go : {m : Nat} -> Nat -> Expr m -> Bool
     go _ (BVar _) = False
+    go _ (Local _ _) = False
     go _ (Sort _) = False
     go _ (NatLit _) = False
     go _ (StringLit _) = False

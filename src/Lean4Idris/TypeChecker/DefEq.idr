@@ -93,67 +93,6 @@ levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2
 levelListEq _ _ = False
 
 ------------------------------------------------------------------------
--- Placeholder Matching
-------------------------------------------------------------------------
-
-isPlaceholderForBinder : Name -> Name -> Bool
-isPlaceholderForBinder (Str "_local" (Num _ binderName)) targetName = binderName == targetName
-isPlaceholderForBinder (Str "_isDefEqBody" (Str _ binderName)) targetName = binderName == targetName
-isPlaceholderForBinder _ _ = False
-
-isComparisonPlaceholder : Name -> Bool
-isComparisonPlaceholder (Str "_x" (Str "_isDefEqBody" _)) = True
-isComparisonPlaceholder (Str "_isDefEqBody" _) = True
-isComparisonPlaceholder _ = False
-
-covering
-containsPlaceholderForBinder : Name -> ClosedExpr -> Bool
-containsPlaceholderForBinder targetBinder (Const name []) = isPlaceholderForBinder name targetBinder
-containsPlaceholderForBinder _ (Const _ _) = False
-containsPlaceholderForBinder _ (BVar _) = False
-containsPlaceholderForBinder _ (Sort _) = False
-containsPlaceholderForBinder targetBinder (App f x) =
-  containsPlaceholderForBinder targetBinder f || containsPlaceholderForBinder targetBinder x
-containsPlaceholderForBinder targetBinder (Lam _ _ ty body) =
-  containsPlaceholderForBinder targetBinder ty || containsPlaceholderForBinder targetBinder (believe_me body)
-containsPlaceholderForBinder targetBinder (Pi _ _ dom cod) =
-  containsPlaceholderForBinder targetBinder dom || containsPlaceholderForBinder targetBinder (believe_me cod)
-containsPlaceholderForBinder targetBinder (Let _ ty val body) =
-  containsPlaceholderForBinder targetBinder ty ||
-  containsPlaceholderForBinder targetBinder val ||
-  containsPlaceholderForBinder targetBinder (believe_me body)
-containsPlaceholderForBinder targetBinder (Proj _ _ s) = containsPlaceholderForBinder targetBinder s
-containsPlaceholderForBinder _ (NatLit _) = False
-containsPlaceholderForBinder _ (StringLit _) = False
-
-replacePlaceholdersForBinderN : Name -> {n : Nat} -> Expr n -> Name -> Expr n
-replacePlaceholdersForBinderN targetBinder (BVar i) _ = BVar i
-replacePlaceholdersForBinderN targetBinder (Sort l) _ = Sort l
-replacePlaceholdersForBinderN targetBinder (Const name []) sharedName =
-  if isPlaceholderForBinder name targetBinder then Const sharedName [] else Const name []
-replacePlaceholdersForBinderN _ (Const name ls) _ = Const name ls
-replacePlaceholdersForBinderN targetBinder (App f x) sharedName =
-  App (replacePlaceholdersForBinderN targetBinder f sharedName)
-      (replacePlaceholdersForBinderN targetBinder x sharedName)
-replacePlaceholdersForBinderN targetBinder (Lam name bi ty body) sharedName =
-  Lam name bi (replacePlaceholdersForBinderN targetBinder ty sharedName)
-              (replacePlaceholdersForBinderN targetBinder body sharedName)
-replacePlaceholdersForBinderN targetBinder (Pi name bi dom cod) sharedName =
-  Pi name bi (replacePlaceholdersForBinderN targetBinder dom sharedName)
-             (replacePlaceholdersForBinderN targetBinder cod sharedName)
-replacePlaceholdersForBinderN targetBinder (Let name ty val body) sharedName =
-  Let name (replacePlaceholdersForBinderN targetBinder ty sharedName)
-           (replacePlaceholdersForBinderN targetBinder val sharedName)
-           (replacePlaceholdersForBinderN targetBinder body sharedName)
-replacePlaceholdersForBinderN targetBinder (Proj sn i s) sharedName =
-  Proj sn i (replacePlaceholdersForBinderN targetBinder s sharedName)
-replacePlaceholdersForBinderN _ (NatLit k) _ = NatLit k
-replacePlaceholdersForBinderN _ (StringLit s) _ = StringLit s
-
-replacePlaceholdersForBinder : Name -> ClosedExpr -> Name -> ClosedExpr
-replacePlaceholdersForBinder targetBinder e sharedName = replacePlaceholdersForBinderN targetBinder e sharedName
-
-------------------------------------------------------------------------
 -- Body Comparison Helpers
 ------------------------------------------------------------------------
 
@@ -161,11 +100,11 @@ covering
 isDefEqBodyWithDepth : Nat -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
                        TCEnv -> Expr 1 -> Expr 1 -> TC Bool
 isDefEqBodyWithDepth depth binderType recur env b1 b2 =
-  let counter = env.nextPlaceholder
-      phName = Str "_isDefEqBody" (Num counter (Num depth Anonymous))
-      env' = addPlaceholder phName binderType ({ nextPlaceholder := S counter } env)
-      e1' : ClosedExpr = instantiate1 (believe_me b1) (Const phName [])
-      e2' : ClosedExpr = instantiate1 (believe_me b2) (Const phName [])
+  let localId = env.nextLocalId
+      localVar : ClosedExpr = Local localId Anonymous
+      env' = addLocalType localId binderType ({ nextLocalId := S localId } env)
+      e1' : ClosedExpr = instantiate1 (believe_me b1) localVar
+      e2' : ClosedExpr = instantiate1 (believe_me b2) localVar
   in recur env' e1' e2'
 
 covering
@@ -234,28 +173,12 @@ isDefEq env e1 e2 =
         Just result => pure result
         Nothing => isDefEqWhnf e1' e2'
   where
-    areEquivalentPlaceholders : Name -> Name -> Bool
-    areEquivalentPlaceholders c1 c2 =
-      let compDepth1 = extractComparisonPlaceholderDepth c1
-          compDepth2 = extractComparisonPlaceholderDepth c2
-          infDepth1 = extractInferencePlaceholderDepth c1
-          infDepth2 = extractInferencePlaceholderDepth c2
-          depth1 = compDepth1 <|> infDepth1
-          depth2 = compDepth2 <|> infDepth2
-      in case (depth1, depth2) of
-           (Just d1, Just d2) => d1 == d2
-           _ => case (extractPlaceholderBase c1, extractPlaceholderBase c2) of
-                  (Just base1, Just base2) => base1 == base2
-                  _ => False
-
     covering
     isDefEqWhnf : ClosedExpr -> ClosedExpr -> TC Bool
     isDefEqWhnf (Sort l1) (Sort l2) = pure (levelEq l1 l2)
     isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
-      if n1 == n2 && levelListEq ls1 ls2 then pure True
-      else case (ls1, ls2) of
-             ([], []) => pure (areEquivalentPlaceholders n1 n2)
-             _ => pure False
+      pure (n1 == n2 && levelListEq ls1 ls2)
+    isDefEqWhnf (Local id1 _) (Local id2 _) = pure (id1 == id2)
     isDefEqWhnf (App f1 a1) (App f2 a2) = do
       eqF <- isDefEq env f1 f2
       if eqF then isDefEq env a1 a2 else pure False

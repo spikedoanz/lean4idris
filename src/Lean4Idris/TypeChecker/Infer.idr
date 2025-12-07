@@ -562,10 +562,16 @@ mutual
         resultTy' <- whnf env2 resultTy
         pure (env2, resultTy')
       else do
-        -- For better error message, normalize both types
+        -- WHNF-based isDefEqSimple failed, try full normalization as fallback
         argTy' <- normalizeType env2 argTy
         dom' <- normalizeType env2 dom
-        throw (AppTypeMismatch dom' argTy')
+        eq' <- isDefEqSimple env2 argTy' dom'
+        if eq'
+          then do
+            let resultTy = instantiate1 (believe_me cod) arg
+            resultTy' <- whnf env2 resultTy
+            pure (env2, resultTy')
+          else throw (AppTypeMismatch dom' argTy')
   inferTypeE env (Lam name bi ty body) = do
     (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Lam name bi ty body)
     pure (env', resultTy)
@@ -659,10 +665,16 @@ mutual
         (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
         pure (env5, ctx4, bodyTy)
       else do
-        -- For better error message, normalize both types
+        -- WHNF-based isDefEqSimple failed, try full normalization as fallback
         tyClosed' <- normalizeType env4 tyClosed
         valTy' <- normalizeType env4 valTy
-        throw (LetTypeMismatch tyClosed' valTy')
+        eq' <- isDefEqSimple env4 tyClosed' valTy'
+        if eq'
+          then do
+            let ctx' = extendCtxLet name tyClosed valClosed ctx4
+            (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
+            pure (env5, ctx4, bodyTy)
+          else throw (LetTypeMismatch tyClosed' valTy')
   inferTypeOpenE env ctx (Proj structName idx structExpr) = do
     (env1, ctx1, structTy) <- inferTypeOpenE env ctx structExpr
     structTy' <- whnf env1 structTy

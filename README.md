@@ -34,14 +34,45 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 ## Coverage
 > note: by convention, lean exports are stored in ~/.cache/lean4exports/
 
+to get commands to manually check the coverage of the current built checker, run `./manual.sh`
+
+> note to be careful to use a directory where it won't be likely to be overwritten / overwrite
+something else /tmp is used by the human, if you're claude, please use the local dir instead
+and clean up afterwards
+
+example:
+
+```sh
+./build/exec/lean4idris --no-cache /Users/spike/.cache/lean4exports/tier01-init/Init.PropLemmas.export | tee /tmp/Init.PropLemmas.export.log
 ```
-tested on e7ef3af7b17dff418dce3e3951a5908e1c797f2b
-tier01-init/
+
+to obtain failures, just grep for them from the log file 
+```sh
+cat /tmp/Init.PropLemmas.export.log | grep CHECKING | grep FAIL
+```
+
+> this obviously also works for `ok`
+> also useful, is to inverse grep for `ok` and `FAIL` which will get theorems which are stuck
+
+the last time coverage for tier01 was checked was in e7ef3af7b17dff418dce3e3951a5908e1c797f2b
+
+current failed checks are stored in FAIL.txt
+> these don't include the ones that come after the hanged checks, so it might
+be undercounting
+
+current hanged checks are stored in HANG.txt
+> hang also just takes a very long time, so hanging doesn't necessarily
+mean fail, it more likely means inefficiency on the part of the type checker
+
+```
 tier01-init/Init.Classical.export
+> hangs
 tier01-init/Init.Core.export
 TOTAL 3761 OK 27 FAIL 48 TIMEOUT 0 CACHED 3686 OK% 98.7
 tier01-init/Init.Data.Array.Basic.export
+> hangs
 tier01-init/Init.Data.Char.Basic.export
+> hangs
 tier01-init/Init.Data.Fin.Basic.export
 TOTAL 5222 OK 13 FAIL 145 TIMEOUT 0 CACHED 5064 OK% 97.2
 tier01-init/Init.Data.Int.Basic.export
@@ -55,12 +86,14 @@ tier01-init/Init.Data.Nat.Lemmas.export
 tier01-init/Init.Data.Option.Basic.export
 TOTAL 4201 OK 4 FAIL 60 TIMEOUT 0 CACHED 4137 OK% 98.5
 tier01-init/Init.Data.String.Basic.export
+> hangs
 tier01-init/Init.Data.UInt.Basic.export
+> hangs
 tier01-init/Init.Prelude.export
 TOTAL 2046 OK 8 FAIL 36 TIMEOUT 0 CACHED 2002 OK% 98.2
 tier01-init/Init.PropLemmas.export
+> hangs
 
-tier02-std
 tier02-std/Std.Data.DHashMap.export
 tier02-std/Std.Data.DTreeMap.export
 tier02-std/Std.Data.HashMap.export
@@ -70,7 +103,6 @@ tier02-std/Std.Data.TreeSet.export
 tier02-std/Std.Sat.CNF.export
 tier02-std/Std.Tactic.BVDecide.export
 
-tier03-lean
 tier03-lean/Lean.Data.Name.export
 tier03-lean/Lean.Data.PersistentHashMap.export
 tier03-lean/Lean.Data.RBMap.export
@@ -86,7 +118,6 @@ tier03-lean/Lean.Meta.InferType.export
 tier03-lean/Lean.Meta.Reduce.export
 tier03-lean/Lean.Meta.WHNF.export
 
-tier04-batteries-data
 tier04-batteries-data/Batteries.Data.Array.Basic.export
 
 tier04-batteries-data/Batteries.Data.Array.Lemmas.export
@@ -103,7 +134,6 @@ tier04-batteries-data/Batteries.Data.RBMap.Basic.export
 tier04-batteries-data/Batteries.Data.String.Basic.export
 tier04-batteries-data/Batteries.Data.Vector.Basic.export
 
-tier05-batteries-tactic
 tier05-batteries-tactic/Batteries.Lean.HashMap.export
 tier05-batteries-tactic/Batteries.Lean.Meta.Basic.export
 tier05-batteries-tactic/Batteries.Lean.Meta.Expr.export
@@ -113,7 +143,6 @@ tier05-batteries-tactic/Batteries.Tactic.Basic.export
 tier05-batteries-tactic/Batteries.Tactic.Exact.export
 tier05-batteries-tactic/Batteries.Tactic.Lint.Basic.export
 
-tier06-mathlib-data
 tier06-mathlib-data/Mathlib.Data.Bool.Basic.export
 tier06-mathlib-data/Mathlib.Data.Fin.Basic.export
 tier06-mathlib-data/Mathlib.Data.Int.Basic.export
@@ -124,7 +153,6 @@ tier06-mathlib-data/Mathlib.Data.Nat.Prime.Basic.export
 tier06-mathlib-data/Mathlib.Data.Option.Basic.export
 tier06-mathlib-data/Mathlib.Logic.Basic.export
 
-tier07-mathlib-algebra
 tier07-mathlib-algebra/Mathlib.Algebra.Field.Basic.export
 tier07-mathlib-algebra/Mathlib.Algebra.Group.Basic.export
 tier07-mathlib-algebra/Mathlib.Algebra.Group.Defs.export
@@ -133,7 +161,6 @@ tier07-mathlib-algebra/Mathlib.Algebra.Ring.Basic.export
 tier07-mathlib-algebra/Mathlib.Algebra.Ring.Defs.export
 tier07-mathlib-algebra/Mathlib.GroupTheory.Perm.Basic.export
 
-tier08-mathlib-analysis
 tier08-mathlib-analysis/Mathlib.Analysis.Normed.Field.Basic.export
 tier08-mathlib-analysis/Mathlib.Analysis.SpecialFunctions.Pow.Real.export
 tier08-mathlib-analysis/Mathlib.Order.Filter.Basic.export
@@ -141,7 +168,6 @@ tier08-mathlib-analysis/Mathlib.Topology.Basic.export
 tier08-mathlib-analysis/Mathlib.Topology.MetricSpace.Basic.export
 tier08-mathlib-analysis/Mathlib.Topology.Order.export
 
-tier09-mathlib-category
 tier09-mathlib-category/Mathlib.CategoryTheory.Category.Basic.export
 tier09-mathlib-category/Mathlib.CategoryTheory.Functor.Basic.export
 tier09-mathlib-category/Mathlib.CategoryTheory.Iso.export
@@ -149,7 +175,6 @@ tier09-mathlib-category/Mathlib.CategoryTheory.Limits.Shapes.Terminal.export
 tier09-mathlib-category/Mathlib.CategoryTheory.NatTrans.export
 tier09-mathlib-category/Mathlib.CategoryTheory.Yoneda.export
 
-tier10-mathlib-advanced
 tier10-mathlib-advanced/Mathlib.Data.Tree.Basic.export
 tier01-init/Init.Data.UInt.Basic.export
 tier10-mathlib-advanced/Mathlib.Data.W.Basic.export

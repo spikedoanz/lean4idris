@@ -60,7 +60,6 @@ mutual
   ensureSortWhnf : TCEnv -> ClosedExpr -> TC Level
   ensureSortWhnf env' (Sort l) = pure l
   ensureSortWhnf env' (Local id _) =
-    -- Local variable - look up its type
     case lookupLocalType id env' of
       Just ty => ensureSortWhnf env' ty
       Nothing => throw (OtherError $ "ensureSortWhnf: Local " ++ show id ++ " type not found")
@@ -96,7 +95,6 @@ mutual
   ensurePiWhnf env' expr = case expr of
     Pi name bi dom cod => pure (name, bi, dom, cod)
     Local id _ =>
-      -- Local variable - look up its type and recurse
       case lookupLocalType id env' of
         Just ty => ensurePiWhnf env' ty
         Nothing => throw (OtherError $ "ensurePiWhnf: Local " ++ show id ++ " type not found")
@@ -128,10 +126,6 @@ ensurePi env e = do
   e' <- whnf env e
   ensurePiWhnf env e'
 
-------------------------------------------------------------------------
--- Local Variable Management
-------------------------------------------------------------------------
-
 export covering
 buildPlaceholders : TCEnv -> LocalCtx n -> (TCEnv, LocalCtx n, Vect n ClosedExpr)
 buildPlaceholders env ctx = buildWithDepth env ctx 0
@@ -143,7 +137,6 @@ buildPlaceholders env ctx = buildWithDepth env ctx 0
         let (env', rest', phs) = buildWithDepth env rest (S depth)
         in (env', entry :: rest', ph :: phs)
       Nothing =>
-        -- Create a Local free variable for this binder
         let localId = env.nextLocalId
             env' = { nextLocalId := S localId } env
             env'' = addLocalType localId entry.type env'
@@ -158,11 +151,6 @@ closeWithPlaceholders env ctx e =
   let (env', ctx', placeholders) = buildPlaceholders env ctx
   in (env', ctx', substAll placeholders e)
 
-------------------------------------------------------------------------
--- Local to BVar conversion
-------------------------------------------------------------------------
-
--- Find Local placeholder by ID
 findLocalIdx : List LocalEntry -> Nat -> Nat -> Maybe Nat
 findLocalIdx [] _ _ = Nothing
 findLocalIdx (entry :: rest) targetId idx = case entry.placeholder of
@@ -182,10 +170,9 @@ replaceLocalsWithBVars : List LocalEntry -> Nat -> ClosedExpr -> ClosedExpr
 replaceLocalsWithBVars entries depth (Sort l) = Sort l
 replaceLocalsWithBVars entries depth (BVar i) = BVar i
 replaceLocalsWithBVars entries depth (Local id name) =
-  -- Look up Local by ID to convert back to BVar
   case findLocalIdx entries id 0 of
     Just idx => makeBVarFromNat (idx + depth)
-    Nothing => Local id name  -- Not in context, keep as is
+    Nothing => Local id name
 replaceLocalsWithBVars entries depth (Const name ls) = Const name ls
 replaceLocalsWithBVars entries depth (App f x) =
   App (replaceLocalsWithBVars entries depth f) (replaceLocalsWithBVars entries depth x)
@@ -477,7 +464,6 @@ mutual
   inferTypeE env (BVar i) =
     throw (OtherError $ "inferTypeE: unexpected BVar " ++ show (finToNat i) ++ " in closed expression")
   inferTypeE env (Local id name) =
-    -- Local variables have their types registered in localTypes map
     case lookupLocalType id env of
       Just ty => pure (env, ty)
       Nothing => throw (OtherError $ "inferTypeE: Local " ++ show id ++ " (" ++ show name ++ ") type not found")
@@ -508,7 +494,6 @@ mutual
               else pure (env, ctx, instantiateLevelParams params levels ty)
   inferTypeOpenE env ctx (BVar i) = pure (env, ctx, (lookupCtx i ctx).type)
   inferTypeOpenE env ctx (Local id name) =
-    -- Local variables have their types registered in localTypes map
     case lookupLocalType id env of
       Just ty => pure (env, ctx, ty)
       Nothing => throw (OtherError $ "inferTypeOpenE: Local " ++ show id ++ " (" ++ show name ++ ") type not found")
@@ -523,7 +508,6 @@ mutual
     (env1, ctx1, domTy) <- inferTypeOpenE env ctx domExpr
     _ <- ensureSort env1 domTy
     let (env2, ctx2, domClosed) = closeWithPlaceholders env1 ctx1 domExpr
-    -- Use Local (free variable) instead of Const placeholder
     let localId = env2.nextLocalId
         env3 = { nextLocalId := S localId } env2
         env4 = addLocalType localId domClosed env3

@@ -100,8 +100,6 @@ covering
 isDefEqBodyWithDepth : Nat -> ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
                        TCEnv -> Expr 1 -> Expr 1 -> TC Bool
 isDefEqBodyWithDepth depth binderType recur env b1 b2 =
-  -- Use Local (free variable) for comparing lambda bodies
-  -- Local variables compare equal by ID
   let localId = env.nextLocalId
       localVar : ClosedExpr = Local localId Anonymous
       env' = addLocalType localId binderType ({ nextLocalId := S localId } env)

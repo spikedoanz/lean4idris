@@ -721,22 +721,10 @@ uint32DecLtName : Name
 uint32DecLtName = Str "decLt" uint32Name
 
 -- Try to reduce UInt32.toNat
+-- Note: This is a forward declaration - the actual implementation is below
+-- after tryGetUInt32AsNat is defined
+covering
 tryUInt32ToNat : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
-tryUInt32ToNat args whnfStep = do
-  guard (length args >= 1)
-  uVal <- listNth args 0
-  let uVal' = iterWhnfStep whnfStep uVal 100
-  case getAppConst uVal' of
-    Just (name, _, uArgs) =>
-      if name == uint32OfNatName then do
-        guard (length uArgs >= 2)
-        nArg <- listNth uArgs 1
-        let nArg' = iterWhnfStep whnfStep nArg 100
-        n <- getNatLit nArg'
-        let remaining = listDrop 1 args
-        pure (mkApp (NatLit n) remaining)
-      else Nothing
-    Nothing => Nothing
 
 -- OfNat class and ofNat function
 ofNatClassName : Name
@@ -877,6 +865,14 @@ tryGetUInt32AsNat whnfStep e =
         tryGetBitVecAsNat whnfStep bvArg
       else Nothing
     Nothing => Nothing
+
+-- Implementation of tryUInt32ToNat (uses tryGetUInt32AsNat)
+tryUInt32ToNat args whnfStep = do
+  guard (length args >= 1)
+  uVal <- listNth args 0
+  n <- tryGetUInt32AsNat whnfStep uVal
+  let remaining = listDrop 1 args
+  pure (mkApp (NatLit n) remaining)
 
 -- Make isTrue/isFalse Decidable constructors
 -- Note: We need to apply them to the proposition and proof, but for native_decide

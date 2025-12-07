@@ -357,7 +357,13 @@ normalizeType env e = do
     normalizeDeep (App f arg) = do
       f' <- normalizeType env f
       arg' <- normalizeType env arg
-      pure (App f' arg')
+      -- After normalizing arguments, we need to try reductions like iota
+      let app = App f' arg'
+      app' <- whnf env app
+      -- Only recurse if whnf actually reduced something (not still an App with same head)
+      case app' of
+        App _ _ => pure app'  -- whnf didn't reduce to a different form, so we're done
+        _ => normalizeDeep app'  -- whnf reduced, continue normalizing
     normalizeDeep (Let name ty val body) = do
       ty' <- normalizeType env ty
       val' <- normalizeType env val
@@ -445,8 +451,7 @@ mutual
             let resultTy = instantiate1 (believe_me cod) arg
             resultTy' <- whnf env2 resultTy
             pure (env2, resultTy')
-          else debugPrint ("inferTypeE App mismatch:\n  f=" ++ show f ++ "\n  arg=" ++ show arg ++ "\n  fTy=" ++ show fTy ++ "\n  dom (before whnf)=" ++ show dom ++ "\n  domWhnf=" ++ show domWhnf ++ "\n  dom' (after normalize)=" ++ show dom' ++ "\n  argTy (before whnf)=" ++ show argTy ++ "\n  argTyWhnf=" ++ show argTyWhnf ++ "\n  argTy' (after normalize)=" ++ show argTy') $
-               throw (AppTypeMismatch dom' argTy')
+          else throw (AppTypeMismatch dom' argTy')
   inferTypeE env (Lam name bi ty body) = do
     (env', _, resultTy) <- inferTypeOpenE env emptyCtx (Lam name bi ty body)
     pure (env', resultTy)

@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
-rm -rf ~/.cache/lean4idris
 SECONDS=0
 for f in ~/.cache/lean4exports/tier01-init/*.export; do
   name=$(basename "$f")
-  echo -n "$name: "
-  ./build/exec/lean4idris -f 10000 "$f" 2>&1 | grep "^TOTAL" || echo "FAILED"
+  echo "tier01-init/$name:"
+  echo "./build/exec/lean4idris --no-cache "$f" 2>&1 | tee /tmp/"$name.log" | grep "^TOTAL" || echo "FAILED""
+  timeout 120 ./build/exec/lean4idris --no-cache "$f" 2>&1 | tee /tmp/"$name.log" | grep "^TOTAL" || echo "FAILED"
 done
 cached=$SECONDS
-echo "=== WITH CACHE TOTAL: ${cached}s ==="
+echo "=== TOTAL: ${cached}s ==="

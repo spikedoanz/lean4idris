@@ -19,7 +19,7 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 - [x] Proof irrelevance (proofs of Prop are definitionally equal)
 - [x] Declaration validation (axioms, definitions, theorems)
 - [ ] Completeness.
-  - [ ] tier 1
+  - [ ] tier 1 :~97%
   - [ ] tier 2
   - [ ] tier 3
   - [ ] tier 4
@@ -32,157 +32,149 @@ A Lean 4 type checker written in Idris 2, targeting the [lean4export](https://gi
 
 
 ## Coverage
-
-Type checking coverage on Lean 4 export files:
-
-| Export File       | Decls | Passed | Failed | Coverage |
-|-------------      |--------------|--------|--------|----------|
-| Init.Prelude      | 2036  | 1832 | 204 | 90.0% |
-| Init.Core         | 3748  | 3402 | 346 | 90.8% |
-| Init.Classical    | 8044  | 6577 | 1467 | 81.8% |
-| Init.Data.Nat.Basic | 4586 | 4050 | 536 | 88.3% |
-
-
-## tier 1
+> note: by convention, lean exports are stored in ~/.cache/lean4exports/
 
 ```
-> TODO: this should be automated in CI
-> should just export it to {githash}_{pathtoexport}.log
-```
+tested on e7ef3af7b17dff418dce3e3951a5908e1c797f2b
+tier01-init/
+tier01-init/Init.Classical.export
+tier01-init/Init.Core.export
+TOTAL 3761 OK 27 FAIL 48 TIMEOUT 0 CACHED 3686 OK% 98.7
+tier01-init/Init.Data.Array.Basic.export
+tier01-init/Init.Data.Char.Basic.export
+tier01-init/Init.Data.Fin.Basic.export
+TOTAL 5222 OK 13 FAIL 145 TIMEOUT 0 CACHED 5064 OK% 97.2
+tier01-init/Init.Data.Int.Basic.export
+TOTAL 5221 OK 4 FAIL 129 TIMEOUT 0 CACHED 5088 OK% 97.5
+tier01-init/Init.Data.List.Basic.export
+TOTAL 5675 OK 5 FAIL 203 TIMEOUT 0 CACHED 5467 OK% 96.4
+tier01-init/Init.Data.List.Lemmas.export
+tier01-init/Init.Data.Nat.Basic.export
+TOTAL 4599 OK 4 FAIL 120 TIMEOUT 0 CACHED 4475 OK% 97.3
+tier01-init/Init.Data.Nat.Lemmas.export
+tier01-init/Init.Data.Option.Basic.export
+TOTAL 4201 OK 4 FAIL 60 TIMEOUT 0 CACHED 4137 OK% 98.5
+tier01-init/Init.Data.String.Basic.export
+tier01-init/Init.Data.UInt.Basic.export
+tier01-init/Init.Prelude.export
+TOTAL 2046 OK 8 FAIL 36 TIMEOUT 0 CACHED 2002 OK% 98.2
+tier01-init/Init.PropLemmas.export
 
-```
-tested on 564756727e377e7fe640b0932dcd690e027cb72d
-test/exports/tier01-init/
-test/exports/tier01-init/Init.Classical.export
-    > 6739 passed, 1305 failed
-test/exports/tier01-init/Init.Core.export
-    > 3465 passed, 283 failed
-test/exports/tier01-init/Init.Data.Array.Basic.export
-    > 5930 passed, 1195 failed
-test/exports/tier01-init/Init.Data.Char.Basic.export
-    > 4736 passed, 584 failed
-test/exports/tier01-init/Init.Data.Fin.Basic.export
-    > 4661 passed, 548 failed
-test/exports/tier01-init/Init.Data.Int.Basic.export
-    > 4692 passed, 516 failed
-test/exports/tier01-init/Init.Data.List.Basic.export
-    > 4897 passed, 765 failed
-test/exports/tier01-init/Init.Data.List.Lemmas.export
-test/exports/tier01-init/Init.Data.Nat.Basic.export
-    > 4164 passed, 422 failed
-test/exports/tier01-init/Init.Data.Nat.Lemmas.export
-    > 8555 passed, 2488 failed
-test/exports/tier01-init/Init.Data.Option.Basic.export
-    > 3851 passed, 337 failed
-test/exports/tier01-init/Init.Data.String.Basic.export
+tier02-std
+tier02-std/Std.Data.DHashMap.export
+tier02-std/Std.Data.DTreeMap.export
+tier02-std/Std.Data.HashMap.export
+tier02-std/Std.Data.HashSet.export
+tier02-std/Std.Data.TreeMap.export
+tier02-std/Std.Data.TreeSet.export
+tier02-std/Std.Sat.CNF.export
+tier02-std/Std.Tactic.BVDecide.export
 
-test/exports/tier01-init/Init.Data.UInt.Basic.export
-test/exports/tier01-init/Init.Prelude.export
-    > 1891 passed, 145 failed
-test/exports/tier01-init/Init.PropLemmas.export
-    > 6688 passed, 1297 failed
+tier03-lean
+tier03-lean/Lean.Data.Name.export
+tier03-lean/Lean.Data.PersistentHashMap.export
+tier03-lean/Lean.Data.RBMap.export
+tier03-lean/Lean.Declaration.export
+tier03-lean/Lean.Elab.Command.export
+tier03-lean/Lean.Elab.Term.export
+tier03-lean/Lean.Environment.export
+tier03-lean/Lean.Expr.export
+tier03-lean/Lean.Level.export
+tier03-lean/Lean.LocalContext.export
+tier03-lean/Lean.Meta.Basic.export
+tier03-lean/Lean.Meta.InferType.export
+tier03-lean/Lean.Meta.Reduce.export
+tier03-lean/Lean.Meta.WHNF.export
 
-test/exports/tier02-std
-test/exports/tier02-std/Std.Data.DHashMap.export
-test/exports/tier02-std/Std.Data.DTreeMap.export
-test/exports/tier02-std/Std.Data.HashMap.export
-test/exports/tier02-std/Std.Data.HashSet.export
-test/exports/tier02-std/Std.Data.TreeMap.export
-test/exports/tier02-std/Std.Data.TreeSet.export
-test/exports/tier02-std/Std.Sat.CNF.export
-test/exports/tier02-std/Std.Tactic.BVDecide.export
+tier04-batteries-data
+tier04-batteries-data/Batteries.Data.Array.Basic.export
 
-test/exports/tier03-lean
-test/exports/tier03-lean/Lean.Data.Name.export
-test/exports/tier03-lean/Lean.Data.PersistentHashMap.export
-test/exports/tier03-lean/Lean.Data.RBMap.export
-test/exports/tier03-lean/Lean.Declaration.export
-test/exports/tier03-lean/Lean.Elab.Command.export
-test/exports/tier03-lean/Lean.Elab.Term.export
-test/exports/tier03-lean/Lean.Environment.export
-test/exports/tier03-lean/Lean.Expr.export
-test/exports/tier03-lean/Lean.Level.export
-test/exports/tier03-lean/Lean.LocalContext.export
-test/exports/tier03-lean/Lean.Meta.Basic.export
-test/exports/tier03-lean/Lean.Meta.InferType.export
-test/exports/tier03-lean/Lean.Meta.Reduce.export
-test/exports/tier03-lean/Lean.Meta.WHNF.export
+tier04-batteries-data/Batteries.Data.Array.Lemmas.export
+tier04-batteries-data/Batteries.Data.BitVec.Basic.export
+tier04-batteries-data/Batteries.Data.Fin.Basic.export
+tier04-batteries-data/Batteries.Data.Fin.Lemmas.export
+tier04-batteries-data/Batteries.Data.HashMap.Basic.export
+tier04-batteries-data/Batteries.Data.Int.export
+tier04-batteries-data/Batteries.Data.List.Basic.export
+tier04-batteries-data/Batteries.Data.List.Lemmas.export
+tier04-batteries-data/Batteries.Data.Nat.Basic.export
+tier04-batteries-data/Batteries.Data.Nat.Lemmas.export
+tier04-batteries-data/Batteries.Data.RBMap.Basic.export
+tier04-batteries-data/Batteries.Data.String.Basic.export
+tier04-batteries-data/Batteries.Data.Vector.Basic.export
 
-test/exports/tier04-batteries-data
-test/exports/tier04-batteries-data/Batteries.Data.Array.Basic.export
+tier05-batteries-tactic
+tier05-batteries-tactic/Batteries.Lean.HashMap.export
+tier05-batteries-tactic/Batteries.Lean.Meta.Basic.export
+tier05-batteries-tactic/Batteries.Lean.Meta.Expr.export
+tier05-batteries-tactic/Batteries.Lean.Syntax.export
+tier05-batteries-tactic/Batteries.Tactic.Alias.export
+tier05-batteries-tactic/Batteries.Tactic.Basic.export
+tier05-batteries-tactic/Batteries.Tactic.Exact.export
+tier05-batteries-tactic/Batteries.Tactic.Lint.Basic.export
 
-test/exports/tier04-batteries-data/Batteries.Data.Array.Lemmas.export
-test/exports/tier04-batteries-data/Batteries.Data.BitVec.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.Fin.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.Fin.Lemmas.export
-test/exports/tier04-batteries-data/Batteries.Data.HashMap.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.Int.export
-test/exports/tier04-batteries-data/Batteries.Data.List.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.List.Lemmas.export
-test/exports/tier04-batteries-data/Batteries.Data.Nat.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.Nat.Lemmas.export
-test/exports/tier04-batteries-data/Batteries.Data.RBMap.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.String.Basic.export
-test/exports/tier04-batteries-data/Batteries.Data.Vector.Basic.export
+tier06-mathlib-data
+tier06-mathlib-data/Mathlib.Data.Bool.Basic.export
+tier06-mathlib-data/Mathlib.Data.Fin.Basic.export
+tier06-mathlib-data/Mathlib.Data.Int.Basic.export
+tier06-mathlib-data/Mathlib.Data.Int.Order.Basic.export
+tier06-mathlib-data/Mathlib.Data.List.Basic.export
+tier06-mathlib-data/Mathlib.Data.Nat.Basic.export
+tier06-mathlib-data/Mathlib.Data.Nat.Prime.Basic.export
+tier06-mathlib-data/Mathlib.Data.Option.Basic.export
+tier06-mathlib-data/Mathlib.Logic.Basic.export
 
-test/exports/tier05-batteries-tactic
-test/exports/tier05-batteries-tactic/Batteries.Lean.HashMap.export
-test/exports/tier05-batteries-tactic/Batteries.Lean.Meta.Basic.export
-test/exports/tier05-batteries-tactic/Batteries.Lean.Meta.Expr.export
-test/exports/tier05-batteries-tactic/Batteries.Lean.Syntax.export
-test/exports/tier05-batteries-tactic/Batteries.Tactic.Alias.export
-test/exports/tier05-batteries-tactic/Batteries.Tactic.Basic.export
-test/exports/tier05-batteries-tactic/Batteries.Tactic.Exact.export
-test/exports/tier05-batteries-tactic/Batteries.Tactic.Lint.Basic.export
+tier07-mathlib-algebra
+tier07-mathlib-algebra/Mathlib.Algebra.Field.Basic.export
+tier07-mathlib-algebra/Mathlib.Algebra.Group.Basic.export
+tier07-mathlib-algebra/Mathlib.Algebra.Group.Defs.export
+tier07-mathlib-algebra/Mathlib.Algebra.Order.Monoid.Basic.export
+tier07-mathlib-algebra/Mathlib.Algebra.Ring.Basic.export
+tier07-mathlib-algebra/Mathlib.Algebra.Ring.Defs.export
+tier07-mathlib-algebra/Mathlib.GroupTheory.Perm.Basic.export
 
-test/exports/tier06-mathlib-data
-test/exports/tier06-mathlib-data/Mathlib.Data.Bool.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.Fin.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.Int.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.Int.Order.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.List.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.Nat.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.Nat.Prime.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Data.Option.Basic.export
-test/exports/tier06-mathlib-data/Mathlib.Logic.Basic.export
+tier08-mathlib-analysis
+tier08-mathlib-analysis/Mathlib.Analysis.Normed.Field.Basic.export
+tier08-mathlib-analysis/Mathlib.Analysis.SpecialFunctions.Pow.Real.export
+tier08-mathlib-analysis/Mathlib.Order.Filter.Basic.export
+tier08-mathlib-analysis/Mathlib.Topology.Basic.export
+tier08-mathlib-analysis/Mathlib.Topology.MetricSpace.Basic.export
+tier08-mathlib-analysis/Mathlib.Topology.Order.export
 
-test/exports/tier07-mathlib-algebra
-test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Field.Basic.export
-test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Group.Basic.export
-test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Group.Defs.export
-test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Order.Monoid.Basic.export
-test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Ring.Basic.export
-test/exports/tier07-mathlib-algebra/Mathlib.Algebra.Ring.Defs.export
-test/exports/tier07-mathlib-algebra/Mathlib.GroupTheory.Perm.Basic.export
+tier09-mathlib-category
+tier09-mathlib-category/Mathlib.CategoryTheory.Category.Basic.export
+tier09-mathlib-category/Mathlib.CategoryTheory.Functor.Basic.export
+tier09-mathlib-category/Mathlib.CategoryTheory.Iso.export
+tier09-mathlib-category/Mathlib.CategoryTheory.Limits.Shapes.Terminal.export
+tier09-mathlib-category/Mathlib.CategoryTheory.NatTrans.export
+tier09-mathlib-category/Mathlib.CategoryTheory.Yoneda.export
 
-test/exports/tier08-mathlib-analysis
-test/exports/tier08-mathlib-analysis/Mathlib.Analysis.Normed.Field.Basic.export
-test/exports/tier08-mathlib-analysis/Mathlib.Analysis.SpecialFunctions.Pow.Real.export
-test/exports/tier08-mathlib-analysis/Mathlib.Order.Filter.Basic.export
-test/exports/tier08-mathlib-analysis/Mathlib.Topology.Basic.export
-test/exports/tier08-mathlib-analysis/Mathlib.Topology.MetricSpace.Basic.export
-test/exports/tier08-mathlib-analysis/Mathlib.Topology.Order.export
-
-test/exports/tier09-mathlib-category
-test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Category.Basic.export
-test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Functor.Basic.export
-test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Iso.export
-test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Limits.Shapes.Terminal.export
-test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.NatTrans.export
-test/exports/tier09-mathlib-category/Mathlib.CategoryTheory.Yoneda.export
-
-test/exports/tier10-mathlib-advanced
-test/exports/tier10-mathlib-advanced/Mathlib.Data.Tree.Basic.export
-test/exports/tier01-init/Init.Data.UInt.Basic.export
-test/exports/tier10-mathlib-advanced/Mathlib.Data.W.Basic.export
-test/exports/tier10-mathlib-advanced/Mathlib.GroupTheory.QuotientGroup.Basic.export
-test/exports/tier10-mathlib-advanced/Mathlib.Logic.Equiv.Basic.export
-test/exports/tier10-mathlib-advanced/Mathlib.SetTheory.Cardinal.Basic.export
-test/exports/tier10-mathlib-advanced/Mathlib.SetTheory.Ordinal.Basic.export
+tier10-mathlib-advanced
+tier10-mathlib-advanced/Mathlib.Data.Tree.Basic.export
+tier01-init/Init.Data.UInt.Basic.export
+tier10-mathlib-advanced/Mathlib.Data.W.Basic.export
+tier10-mathlib-advanced/Mathlib.GroupTheory.QuotientGroup.Basic.export
+tier10-mathlib-advanced/Mathlib.Logic.Equiv.Basic.export
+tier10-mathlib-advanced/Mathlib.SetTheory.Cardinal.Basic.export
+tier10-mathlib-advanced/Mathlib.SetTheory.Ordinal.Basic.export
 ```
 
 
 Known blocking issues tracked in [GitHub Issues](https://github.com/spikedoanz/lean4idris/issues).
+
+
+## Current slow checks
+
+```
+Checking: Char.isValidChar_zero...
+Checking: Array.eraseIdx.induct...
+Checking: Lean.Omega.Constraint.combo_sat...
+Checking: Nat.testBit_or...
+Checking: Lean.Omega.Constraint.combo_sat...
+Checking: Char.isValidChar_zero...
+```
+
+
 
 ### Running coverage tests
 

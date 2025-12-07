@@ -7,7 +7,6 @@ import Lean4Idris.Decl
 import Lean4Idris.Subst
 import Lean4Idris.TypeChecker.Monad
 import Data.List
-import Debug.Trace
 
 %default total
 
@@ -774,8 +773,7 @@ tryGetNatFromPossiblePow whnfStep e' =
                let expo' = iterWhnfStep whnfStep expo 100
                b <- getNatLit base'
                e <- getNatLit expo'
-               trace ("        HPow: " ++ show b ++ "^" ++ show e ++ " = " ++ show (natPow b e)) $
-                 Just (natPow b e)
+               Just (natPow b e)
              else Nothing
            _ => Nothing
 
@@ -785,111 +783,55 @@ covering
 tryGetFinAsNat : (ClosedExpr -> Maybe ClosedExpr) -> ClosedExpr -> Maybe Nat
 tryGetFinAsNat whnfStep e =
   let e' = iterWhnfStep whnfStep e 100
-  in trace "      tryGetFinAsNat: \{case getAppConst e' of Just (name, _, args) => "head=" ++ show name ++ " with " ++ show (length args) ++ " args"; Nothing => "not app const"}" $
-     case getAppConst e' of
+  in case getAppConst e' of
     Just (name, _, args) =>
-      -- Fin.mk n proof -> args would be [bound, n, proof] or similar
-      -- For Fin.mk : {n : Nat} -> (val : Nat) -> val < n -> Fin n
-      -- Actually Fin is typically represented structurally
-      -- Try projection: Fin.val fin
       let finMkName = Str "mk" finName
-      in trace "      comparing name=\{show name} vs finMkName=\{show finMkName}" $
-      if name == finMkName then do
-        trace "      matched Fin.mk with \{show (length args)} args" $ guard (length args >= 2)
+      in if name == finMkName then do
+        guard (length args >= 2)
         valArg <- listNth args 1  -- val is the second arg (after implicit bound)
-        -- Try more iterations and trace the raw valArg too
-        trace "      raw valArg: \{case getAppConst valArg of Just (n, _, a) => show n ++ " args=" ++ show (length a); Nothing => "not const app"}" $ do
         let valArg' = iterWhnfStep whnfStep valArg 500
-        let headStr = case getAppConst valArg' of
-                        Just (n, _, a) => "head=" ++ show n ++ " with " ++ show (length a) ++ " args"
-                        Nothing => case valArg' of
-                                     NatLit n => "NatLit " ++ show n
-                                     BVar _ => "BVar (impossible for closed)"
-                                     Sort _ => "Sort"
-                                     Lam _ _ _ _ => "Lam"
-                                     Pi _ _ _ _ => "Pi"
-                                     Let _ _ _ _ => "Let"
-                                     Proj sn i _ => "Proj " ++ show sn ++ " " ++ show i
-                                     StringLit _ => "StringLit"
-                                     Const n _ => "Const " ++ show n
-                                     App f x => let (head, spine) = getAppSpine (App f x)
-                                                 in "App head=" ++ (case head of
-                                                      Const n _ => show n
-                                                      Lam _ _ _ _ => "Lam"
-                                                      Proj sn i struct => "Proj " ++ show sn ++ "." ++ show i ++ " on struct=" ++
-                                                                          (case getAppConst struct of
-                                                                             Just (sn', _, sargs) => show sn' ++ " with " ++ show (length sargs) ++ " args"
-                                                                             Nothing => "non-const")
-                                                      NatLit n => "NatLit " ++ show n
-                                                      Let _ _ _ _ => "Let"
-                                                      BVar _ => "BVar"
-                                                      Sort _ => "Sort"
-                                                      Pi _ _ _ _ => "Pi"
-                                                      _ => "unknown") ++ " with " ++ show (length spine) ++ " args"
-                                     _ => "other"
         -- First try getNatLit directly
         case getNatLit valArg' of
-          Just n => trace ("      valArg' direct NatLit: " ++ show n) $ Just n
+          Just n => Just n
           Nothing =>
             -- Try to handle HMod projection pattern: (Proj HMod 0 inst) arg1 arg2
             let (head, spine) = getAppSpine valArg'
             in case head of
                  Proj sn _ _ =>
                    -- Check if this is HMod.0 projection (the hMod method)
-                   if sn == hModClassName then
-                     trace ("      found HMod projection, spine length=" ++ show (length spine)) $ do
+                   if sn == hModClassName then do
                      guard (length spine >= 2)
                      operand1 <- listNth spine 0
                      operand2 <- listNth spine 1
                      let operand1' = iterWhnfStep whnfStep operand1 100
                      let operand2' = iterWhnfStep whnfStep operand2 100
-                     let op1Str = case getAppConst operand1' of
-                                    Just (n, _, a) => show n ++ " with " ++ show (length a) ++ " args"
-                                    Nothing => case operand1' of
-                                                 NatLit n => "NatLit " ++ show n
-                                                 _ => "other"
-                     let op2Str = case getAppConst operand2' of
-                                    Just (n, _, a) => show n ++ " with " ++ show (length a) ++ " args"
-                                    Nothing => case operand2' of
-                                                 NatLit n => "NatLit " ++ show n
-                                                 Const n _ => "Const " ++ show n
-                                                 App f x => let (h, s) = getAppSpine (App f x) in
-                                                            "App head=" ++ (case h of
-                                                              Const n _ => show n
-                                                              Proj sn i _ => "Proj " ++ show sn ++ "." ++ show i
-                                                              _ => "unknown") ++ " spine=" ++ show (length s)
-                                                 _ => "other type"
-                     trace ("      operand1=" ++ op1Str ++ ", operand2=" ++ op2Str) $
                      -- Short-circuit: 0 % m = 0 for any m
                      case getNatLit operand1' of
-                       Just 0 => trace "      short-circuit: 0 % anything = 0" $ Just 0
+                       Just 0 => Just 0
                        Just n => do
                          m <- tryGetNatFromPossiblePow whnfStep operand2'
-                         trace ("      HMod operands: " ++ show n ++ " % " ++ show m ++ " = " ++ show (natMod n m)) $
-                           Just (natMod n m)
+                         Just (natMod n m)
                        Nothing => Nothing
-                   else trace ("      Proj on " ++ show sn ++ ", not HMod") Nothing
-                 _ => trace ("      valArg' " ++ headStr ++ ", not NatLit or HMod proj") Nothing
-      else trace "      Fin head doesn't match Fin.mk" Nothing
+                   else Nothing
+                 _ => Nothing
+      else Nothing
     -- Try to get from Proj expression (Fin.val projection)
     Nothing => case e' of
       Proj _ idx structVal =>
         if idx == 0 then do  -- val is typically field 0
-          trace "      found Proj, recursing" $ do
           let structVal' = iterWhnfStep whnfStep structVal 100
           tryGetFinAsNat whnfStep structVal'
-        else trace "      Proj but wrong index" Nothing
+        else Nothing
       -- If it's a NatLit directly, return it
-      NatLit n => trace "      found NatLit \{show n}" $ Just n
-      _ => trace "      not Proj or NatLit" Nothing
+      NatLit n => Just n
+      _ => Nothing
 
 -- Helper: try to extract a Nat from a BitVec expression
 covering
 tryGetBitVecAsNat : (ClosedExpr -> Maybe ClosedExpr) -> ClosedExpr -> Maybe Nat
 tryGetBitVecAsNat whnfStep e =
   let e' = iterWhnfStep whnfStep e 100
-  in trace "    tryGetBitVecAsNat: head=\{case getAppConst e' of Just (name, _, args) => show name ++ " with " ++ show (length args) ++ " args"; Nothing => "not app const"}" $
-     case getAppConst e' of
+  in case getAppConst e' of
     Just (name, _, args) =>
       -- BitVec.ofNat w n -> n (args: [w, n])
       if name == bitVecOfNatName then do
@@ -899,10 +841,10 @@ tryGetBitVecAsNat whnfStep e =
         getNatLit nArg'
       -- BitVec.ofFin w fin -> extract from Fin
       else if name == bitVecOfFinName then do
-        trace "    matched BitVec.ofFin" $ guard (length args >= 2)
+        guard (length args >= 2)
         finArg <- listNth args 1
         tryGetFinAsNat whnfStep finArg
-      else trace "    doesn't match BitVec.ofNat or BitVec.ofFin" Nothing
+      else Nothing
     Nothing => Nothing
 
 -- Helper: try to extract a Nat from a UInt32 expression
@@ -914,8 +856,7 @@ covering
 tryGetUInt32AsNat : (ClosedExpr -> Maybe ClosedExpr) -> ClosedExpr -> Maybe Nat
 tryGetUInt32AsNat whnfStep e =
   let e' = iterWhnfStep whnfStep e 100
-  in trace "  tryGetUInt32AsNat: head=\{case getAppConst e' of Just (name, _, args) => show name ++ " with " ++ show (length args) ++ " args"; Nothing => "not app const"}" $
-     case getAppConst e' of
+  in case getAppConst e' of
     Just (name, _, args) =>
       -- OfNat.ofNat ty n inst -> n (args: [ty, n, inst])
       if name == ofNatOfNatName then do
@@ -931,10 +872,9 @@ tryGetUInt32AsNat whnfStep e =
         getNatLit nArg'
       -- UInt32.ofBitVec bv -> extract from BitVec.ofNat
       else if name == uint32OfBitVecName then do
-        trace "  matched UInt32.ofBitVec" $ guard (length args >= 1)
+        guard (length args >= 1)
         bvArg <- listNth args 0
-        -- BitVec argument, try to extract as BitVec.ofNat w n
-        trace "  calling tryGetBitVecAsNat" $ tryGetBitVecAsNat whnfStep bvArg
+        tryGetBitVecAsNat whnfStep bvArg
       else Nothing
     Nothing => Nothing
 
@@ -950,16 +890,14 @@ mkIsFalse = Const isFalse []
 -- Try to reduce UInt32.decLt to isTrue/isFalse
 covering
 tryUInt32DecLt : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
-tryUInt32DecLt args whnfStep =
-  trace "tryUInt32DecLt called with \{show (length args)} args" $ do
+tryUInt32DecLt args whnfStep = do
   guard (length args >= 2)
   a <- listNth args 0
   b <- listNth args 1
-  na <- trace "  trying to get first nat" $ tryGetUInt32AsNat whnfStep a
-  nb <- trace "  got first: \{show na}, trying second" $ tryGetUInt32AsNat whnfStep b
+  na <- tryGetUInt32AsNat whnfStep a
+  nb <- tryGetUInt32AsNat whnfStep b
   -- Return isTrue or isFalse (the proof args are implicit/erased)
-  let result = trace "  got both: \{show na} < \{show nb}" $
-               if na < nb then mkIsTrue else mkIsFalse
+  let result = if na < nb then mkIsTrue else mkIsFalse
   let remaining = listDrop 2 args
   pure (mkApp result remaining)
 
@@ -1097,17 +1035,13 @@ tryNativeEval e whnfStep = do
       -- UInt32 operations
       else if name == uint32ToNatName then tryUInt32ToNat args step
       -- Decidability instances - return isTrue/isFalse directly
-      else if name == uint32DecLtName then trace "dispatch: UInt32.decLt" $ tryUInt32DecLt args step
-      else if name == natDecLtName then trace "dispatch: Nat.decLt" $ tryNatDecLt args step
-      else if name == natDecLeName then trace "dispatch: Nat.decLe" $ tryNatDecLeNative args step
+      else if name == uint32DecLtName then tryUInt32DecLt args step
+      else if name == natDecLtName then tryNatDecLt args step
+      else if name == natDecLeName then tryNatDecLeNative args step
       -- decide with decidability instances (both Decidable.decide and decide)
-      else if name == decideFnName then trace "dispatch: decide" $ tryDecide args step
-      else if name == decidableDecideName then trace "dispatch: Decidable.decide" $ tryDecide args step
-      else case name of
-             Str s _ => if s == "decide" || s == "decLt"
-                          then trace "unmatched name with decide/decLt string: \{show name}" Nothing
-                          else Nothing
-             _ => Nothing
+      else if name == decideFnName then tryDecide args step
+      else if name == decidableDecideName then tryDecide args step
+      else Nothing
 
 ------------------------------------------------------------------------
 -- WHNF
@@ -1161,15 +1095,7 @@ whnf env e = do
       Just e' => whnfPure k e'
       -- Try native eval BEFORE unfolding heads, so we can catch
       -- Decidable.decide, UInt32.decLt etc before they unfold
-      Nothing =>
-        let _ = case getAppConst e of
-                  Just (name, _, _) => case name of
-                    Str s _ => if s == "decide" || s == "decLt"
-                                 then trace "whnfPure sees \{show name}" ()
-                                 else ()
-                    _ => ()
-                  Nothing => ()
-        in case tryNativeEval e whnfStepFull of
+      Nothing => case tryNativeEval e whnfStepFull of
         Just e' => whnfPure k e'
         Nothing => case reduceAppHead e of
           Just e' => whnfPure k e'

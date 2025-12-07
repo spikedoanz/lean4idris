@@ -507,6 +507,14 @@ mutual
     -- Lazy normalization: try WHNF comparison first before full normalization
     argTyWhnf <- whnf env2 argTy
     domWhnf <- whnf env2 dom
+    -- Debug: check if dom contains decide
+    let _ = case getAppHead dom of
+              Just (name, _) => case name of
+                Str s _ => if s == "Eq"
+                             then trace "inferTypeE App comparing Eq types: dom=\{show dom}, domWhnf=\{show domWhnf}" ()
+                             else ()
+                _ => ()
+              Nothing => ()
     if alphaEq argTyWhnf domWhnf
       then do
         let resultTy = instantiate1 (believe_me cod) arg

@@ -20,15 +20,14 @@ record TCEnv where
   constructor MkTCEnv
   decls : SortedMap Name Declaration
   quotInit : Bool
-  placeholders : SortedMap Name ClosedExpr
-  nextPlaceholder : Nat
+  nextLocalId : Nat  -- Counter for generating unique Local IDs
   whnfCache : SortedMap ClosedExpr ClosedExpr
   defEqCache : SortedMap (ClosedExpr, ClosedExpr) Bool
   localTypes : SortedMap Nat ClosedExpr  -- Types of Local variables by ID
 
 public export
 emptyEnv : TCEnv
-emptyEnv = MkTCEnv empty False empty 0 empty empty empty
+emptyEnv = MkTCEnv empty False 0 empty empty empty
 
 public export
 cacheWhnf : ClosedExpr -> ClosedExpr -> TCEnv -> TCEnv
@@ -48,20 +47,6 @@ lookupDefEqCache e1 e2 env =
   case lookup (e1, e2) env.defEqCache of
     Just b => Just b
     Nothing => lookup (e2, e1) env.defEqCache
-
-public export
-addPlaceholder : Name -> ClosedExpr -> TCEnv -> TCEnv
-addPlaceholder name ty env =
-  let env' = { placeholders $= insert name ty } env
-  in { decls $= insert name (AxiomDecl name ty []) } env'
-
-public export
-lookupPlaceholder : Name -> TCEnv -> Maybe ClosedExpr
-lookupPlaceholder name env = lookup name env.placeholders
-
-public export
-clearPlaceholders : TCEnv -> TCEnv
-clearPlaceholders env = { placeholders := empty } env
 
 public export
 addLocalType : Nat -> ClosedExpr -> TCEnv -> TCEnv

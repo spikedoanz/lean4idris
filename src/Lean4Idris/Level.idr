@@ -41,6 +41,26 @@ Eq Level where
   (Param n1) == (Param n2) = n1 == n2
   _ == _ = False
 
+export covering
+Ord Level where
+  compare Zero Zero = EQ
+  compare Zero _ = LT
+  compare _ Zero = GT
+  compare (Succ l1) (Succ l2) = compare l1 l2
+  compare (Succ _) _ = LT
+  compare _ (Succ _) = GT
+  compare (Max a1 b1) (Max a2 b2) = case compare a1 a2 of
+    EQ => compare b1 b2
+    c => c
+  compare (Max _ _) _ = LT
+  compare _ (Max _ _) = GT
+  compare (IMax a1 b1) (IMax a2 b2) = case compare a1 a2 of
+    EQ => compare b1 b2
+    c => c
+  compare (IMax _ _) _ = LT
+  compare _ (IMax _ _) = GT
+  compare (Param n1) (Param n2) = compare n1 n2
+
 export
 Show Level where
   show Zero = "0"

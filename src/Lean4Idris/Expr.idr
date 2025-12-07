@@ -139,6 +139,88 @@ export
 Eq (Expr n) where
   (==) = exprEq
 
+-- Helper to compare Fin values
+compareFin : Fin n -> Fin m -> Ordering
+compareFin FZ FZ = EQ
+compareFin FZ (FS _) = LT
+compareFin (FS _) FZ = GT
+compareFin (FS i) (FS j) = compareFin i j
+
+-- Compare BinderInfo
+compareBinderInfo : BinderInfo -> BinderInfo -> Ordering
+compareBinderInfo Default Default = EQ
+compareBinderInfo Default _ = LT
+compareBinderInfo _ Default = GT
+compareBinderInfo Implicit Implicit = EQ
+compareBinderInfo Implicit _ = LT
+compareBinderInfo _ Implicit = GT
+compareBinderInfo StrictImplicit StrictImplicit = EQ
+compareBinderInfo StrictImplicit _ = LT
+compareBinderInfo _ StrictImplicit = GT
+compareBinderInfo Instance Instance = EQ
+
+||| Structural comparison of expressions
+export covering
+exprCompare : Expr n -> Expr m -> Ordering
+exprCompare (BVar i) (BVar j) = compareFin i j
+exprCompare (BVar _) _ = LT
+exprCompare _ (BVar _) = GT
+exprCompare (Sort l1) (Sort l2) = compare l1 l2
+exprCompare (Sort _) _ = LT
+exprCompare _ (Sort _) = GT
+exprCompare (Const n1 ls1) (Const n2 ls2) =
+  case compare n1 n2 of
+    EQ => compare ls1 ls2
+    c => c
+exprCompare (Const _ _) _ = LT
+exprCompare _ (Const _ _) = GT
+exprCompare (App f1 x1) (App f2 x2) =
+  case exprCompare f1 f2 of
+    EQ => exprCompare x1 x2
+    c => c
+exprCompare (App _ _) _ = LT
+exprCompare _ (App _ _) = GT
+exprCompare (Lam _ bi1 ty1 b1) (Lam _ bi2 ty2 b2) =
+  case compareBinderInfo bi1 bi2 of
+    EQ => case exprCompare ty1 ty2 of
+            EQ => exprCompare b1 b2
+            c => c
+    c => c
+exprCompare (Lam _ _ _ _) _ = LT
+exprCompare _ (Lam _ _ _ _) = GT
+exprCompare (Pi _ bi1 ty1 b1) (Pi _ bi2 ty2 b2) =
+  case compareBinderInfo bi1 bi2 of
+    EQ => case exprCompare ty1 ty2 of
+            EQ => exprCompare b1 b2
+            c => c
+    c => c
+exprCompare (Pi _ _ _ _) _ = LT
+exprCompare _ (Pi _ _ _ _) = GT
+exprCompare (Let _ ty1 v1 b1) (Let _ ty2 v2 b2) =
+  case exprCompare ty1 ty2 of
+    EQ => case exprCompare v1 v2 of
+            EQ => exprCompare b1 b2
+            c => c
+    c => c
+exprCompare (Let _ _ _ _) _ = LT
+exprCompare _ (Let _ _ _ _) = GT
+exprCompare (Proj n1 i1 s1) (Proj n2 i2 s2) =
+  case compare n1 n2 of
+    EQ => case compare i1 i2 of
+            EQ => exprCompare s1 s2
+            c => c
+    c => c
+exprCompare (Proj _ _ _) _ = LT
+exprCompare _ (Proj _ _ _) = GT
+exprCompare (NatLit n1) (NatLit n2) = compare n1 n2
+exprCompare (NatLit _) _ = LT
+exprCompare _ (NatLit _) = GT
+exprCompare (StringLit s1) (StringLit s2) = compare s1 s2
+
+export covering
+Ord (Expr n) where
+  compare = exprCompare
+
 ||| Is this expression a sort?
 public export
 isSort : Expr n -> Bool

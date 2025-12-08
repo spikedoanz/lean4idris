@@ -4,6 +4,7 @@ reference/
 build/
 results/
 *export.log
+*fail.txt
 # Large Lean exports (use scripts to regenerate)
 test/exports/
 tools/mathlib-exporter/

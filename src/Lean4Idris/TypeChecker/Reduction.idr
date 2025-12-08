@@ -433,6 +433,44 @@ stringAppendName = Str "append" stringName
 stringLengthName : Name
 stringLengthName = Str "length" stringName
 
+stringBytesName : Name
+stringBytesName = Str "bytes" stringName
+
+-- ByteArray and related type names
+byteArrayName : Name
+byteArrayName = Str "ByteArray" Anonymous
+
+byteArrayMkName : Name
+byteArrayMkName = Str "mk" byteArrayName
+
+arrayName : Name
+arrayName = Str "Array" Anonymous
+
+arrayMkName : Name
+arrayMkName = Str "mk" arrayName
+
+uint8Name : Name
+uint8Name = Str "UInt8" Anonymous
+
+uint8OfBitVecName : Name
+uint8OfBitVecName = Str "ofBitVec" uint8Name
+
+-- BitVec (defined early for use in mkUInt8)
+bitVecName : Name
+bitVecName = Str "BitVec" Anonymous
+
+bitVecOfNatName : Name
+bitVecOfNatName = Str "ofNat" bitVecName
+
+listName : Name
+listName = Str "List" Anonymous
+
+listNilName : Name
+listNilName = Str "nil" listName
+
+listConsName : Name
+listConsName = Str "cons" listName
+
 -- Helper to extract Nat from NatLit
 getNatLit : ClosedExpr -> Maybe Nat
 getNatLit (NatLit n) = Just n
@@ -731,6 +769,86 @@ tryNatTestBit args whnfStep = do
   let remaining = listDrop 2 args
   pure (mkApp result remaining)
 
+------------------------------------------------------------------------
+-- String.bytes native support
+------------------------------------------------------------------------
+
+-- UTF-8 encoding: Convert a single Unicode code point to UTF-8 bytes
+-- Uses natShiftRightNat and natMod which are defined above
+encodeCharUtf8 : Char -> List Nat
+encodeCharUtf8 c =
+  let cp = cast {to=Nat} (ord c)
+  in if cp < 0x80 then
+       [cp]
+     else if cp < 0x800 then
+       [0xC0 + natShiftRightNat cp 6, 0x80 + natMod cp 64]
+     else if cp < 0x10000 then
+       [0xE0 + natShiftRightNat cp 12, 0x80 + natMod (natShiftRightNat cp 6) 64, 0x80 + natMod cp 64]
+     else
+       [0xF0 + natShiftRightNat cp 18, 0x80 + natMod (natShiftRightNat cp 12) 64, 0x80 + natMod (natShiftRightNat cp 6) 64, 0x80 + natMod cp 64]
+
+-- Encode an entire string to UTF-8 bytes
+encodeStringUtf8 : String -> List Nat
+encodeStringUtf8 s = concatMap encodeCharUtf8 (unpack s)
+
+-- UInt8 type expression: UInt8
+uint8Type : ClosedExpr
+uint8Type = Const uint8Name []
+
+-- Make a UInt8 literal: UInt8.ofBitVec (BitVec.ofNat 8 n)
+mkUInt8 : Nat -> ClosedExpr
+mkUInt8 n =
+  let n' = natMod n 256  -- Ensure it fits in 8 bits
+  in App (Const uint8OfBitVecName []) (App (App (Const bitVecOfNatName []) (NatLit 8)) (NatLit n'))
+
+-- Make List UInt8 type
+listUInt8Type : ClosedExpr
+listUInt8Type = App (Const listName [Level.Zero]) uint8Type
+
+-- Make List.nil {UInt8}
+mkListNil : ClosedExpr
+mkListNil = App (Const listNilName [Level.Zero]) uint8Type
+
+-- Make List.cons {UInt8} head tail
+mkListCons : ClosedExpr -> ClosedExpr -> ClosedExpr
+mkListCons head tail = App (App (App (Const listConsName [Level.Zero]) uint8Type) head) tail
+
+-- Make a List of UInt8 from a list of byte values
+mkUInt8List : List Nat -> ClosedExpr
+mkUInt8List [] = mkListNil
+mkUInt8List (b :: bs) = mkListCons (mkUInt8 b) (mkUInt8List bs)
+
+-- Make Array UInt8 type
+arrayUInt8Type : ClosedExpr
+arrayUInt8Type = App (Const arrayName [Level.Zero]) uint8Type
+
+-- Make Array.mk {UInt8} list
+mkArrayMk : ClosedExpr -> ClosedExpr
+mkArrayMk listExpr = App (App (Const arrayMkName [Level.Zero]) uint8Type) listExpr
+
+-- Make ByteArray.mk array
+mkByteArrayMk : ClosedExpr -> ClosedExpr
+mkByteArrayMk arrayExpr = App (Const byteArrayMkName []) arrayExpr
+
+-- Make a ByteArray from a string's UTF-8 encoding
+mkByteArray : String -> ClosedExpr
+mkByteArray s =
+  let bytes = encodeStringUtf8 s
+      listExpr = mkUInt8List bytes
+      arrayExpr = mkArrayMk listExpr
+  in mkByteArrayMk arrayExpr
+
+-- Try to reduce String.bytes s to ByteArray.mk (Array.mk [bytes...])
+tryStringBytes : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryStringBytes args whnfStep = do
+  guard (length args >= 1)
+  arg0 <- listNth args 0
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  s <- getStringLit arg0'
+  let result = mkByteArray s
+  let remaining = listDrop 1 args
+  pure (mkApp result remaining)
+
 -- HMod class and method
 hModClassName : Name
 hModClassName = Str "HMod" Anonymous
@@ -875,14 +993,8 @@ tryFinVal args whnfStep = do
     Nothing => Nothing
 
 -- BitVec operations
-bitVecName : Name
-bitVecName = Str "BitVec" Anonymous
-
 bitVecToNatName : Name
 bitVecToNatName = Str "toNat" bitVecName
-
-bitVecOfNatName : Name
-bitVecOfNatName = Str "ofNat" bitVecName
 
 -- Try to reduce BitVec.toNat
 tryBitVecToNat : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
@@ -1248,6 +1360,7 @@ tryNativeEval e whnfStep = do
       else if name == stringBeqName then tryStringBeq args step
       else if name == stringAppendName then tryStringAppend args step
       else if name == stringLengthName then tryStringLength args step
+      else if name == stringBytesName then tryStringBytes args step
       -- Fin operations
       else if name == finValName then tryFinVal args step
       -- BitVec operations

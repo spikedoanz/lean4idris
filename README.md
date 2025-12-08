@@ -54,134 +54,46 @@ cat /tmp/Init.PropLemmas.export.log | grep CHECKING | grep FAIL
 > this obviously also works for `ok`
 > also useful, is to inverse grep for `ok` and `FAIL` which will get theorems which are stuck
 
-the last time coverage for tier01 was checked was in e7ef3af7b17dff418dce3e3951a5908e1c797f2b
-
-current failed checks are stored in FAIL.txt
-> these don't include the ones that come after the hanged checks, so it might
-be undercounting
-
-current hanged checks are stored in HANG.txt
-> hang also just takes a very long time, so hanging doesn't necessarily
-mean fail, it more likely means inefficiency on the part of the type checker
-
 ```
-tier01-init/Init.Classical.export
-> hangs
-tier01-init/Init.Core.export
-TOTAL 3761 OK 27 FAIL 48 TIMEOUT 0 CACHED 3686 OK% 98.7
-tier01-init/Init.Data.Array.Basic.export
-> hangs
-tier01-init/Init.Data.Char.Basic.export
-> hangs
-tier01-init/Init.Data.Fin.Basic.export
-TOTAL 5222 OK 13 FAIL 145 TIMEOUT 0 CACHED 5064 OK% 97.2
-tier01-init/Init.Data.Int.Basic.export
-TOTAL 5221 OK 4 FAIL 129 TIMEOUT 0 CACHED 5088 OK% 97.5
-tier01-init/Init.Data.List.Basic.export
-TOTAL 5675 OK 5 FAIL 203 TIMEOUT 0 CACHED 5467 OK% 96.4
-tier01-init/Init.Data.List.Lemmas.export
-tier01-init/Init.Data.Nat.Basic.export
-TOTAL 4599 OK 4 FAIL 120 TIMEOUT 0 CACHED 4475 OK% 97.3
-tier01-init/Init.Data.Nat.Lemmas.export
-tier01-init/Init.Data.Option.Basic.export
-TOTAL 4201 OK 4 FAIL 60 TIMEOUT 0 CACHED 4137 OK% 98.5
-tier01-init/Init.Data.String.Basic.export
-> hangs
-tier01-init/Init.Data.UInt.Basic.export
-> hangs
-tier01-init/Init.Prelude.export
-TOTAL 2046 OK 8 FAIL 36 TIMEOUT 0 CACHED 2002 OK% 98.2
-tier01-init/Init.PropLemmas.export
-> hangs
-
-tier02-std/Std.Data.DHashMap.export
-tier02-std/Std.Data.DTreeMap.export
-tier02-std/Std.Data.HashMap.export
-tier02-std/Std.Data.HashSet.export
-tier02-std/Std.Data.TreeMap.export
-tier02-std/Std.Data.TreeSet.export
-tier02-std/Std.Sat.CNF.export
-tier02-std/Std.Tactic.BVDecide.export
-
-tier03-lean/Lean.Data.Name.export
-tier03-lean/Lean.Data.PersistentHashMap.export
-tier03-lean/Lean.Data.RBMap.export
-tier03-lean/Lean.Declaration.export
-tier03-lean/Lean.Elab.Command.export
-tier03-lean/Lean.Elab.Term.export
-tier03-lean/Lean.Environment.export
-tier03-lean/Lean.Expr.export
-tier03-lean/Lean.Level.export
-tier03-lean/Lean.LocalContext.export
-tier03-lean/Lean.Meta.Basic.export
-tier03-lean/Lean.Meta.InferType.export
-tier03-lean/Lean.Meta.Reduce.export
-tier03-lean/Lean.Meta.WHNF.export
-
-tier04-batteries-data/Batteries.Data.Array.Basic.export
-
-tier04-batteries-data/Batteries.Data.Array.Lemmas.export
-tier04-batteries-data/Batteries.Data.BitVec.Basic.export
-tier04-batteries-data/Batteries.Data.Fin.Basic.export
-tier04-batteries-data/Batteries.Data.Fin.Lemmas.export
-tier04-batteries-data/Batteries.Data.HashMap.Basic.export
-tier04-batteries-data/Batteries.Data.Int.export
-tier04-batteries-data/Batteries.Data.List.Basic.export
-tier04-batteries-data/Batteries.Data.List.Lemmas.export
-tier04-batteries-data/Batteries.Data.Nat.Basic.export
-tier04-batteries-data/Batteries.Data.Nat.Lemmas.export
-tier04-batteries-data/Batteries.Data.RBMap.Basic.export
-tier04-batteries-data/Batteries.Data.String.Basic.export
-tier04-batteries-data/Batteries.Data.Vector.Basic.export
-
-tier05-batteries-tactic/Batteries.Lean.HashMap.export
-tier05-batteries-tactic/Batteries.Lean.Meta.Basic.export
-tier05-batteries-tactic/Batteries.Lean.Meta.Expr.export
-tier05-batteries-tactic/Batteries.Lean.Syntax.export
-tier05-batteries-tactic/Batteries.Tactic.Alias.export
-tier05-batteries-tactic/Batteries.Tactic.Basic.export
-tier05-batteries-tactic/Batteries.Tactic.Exact.export
-tier05-batteries-tactic/Batteries.Tactic.Lint.Basic.export
-
-tier06-mathlib-data/Mathlib.Data.Bool.Basic.export
-tier06-mathlib-data/Mathlib.Data.Fin.Basic.export
-tier06-mathlib-data/Mathlib.Data.Int.Basic.export
-tier06-mathlib-data/Mathlib.Data.Int.Order.Basic.export
-tier06-mathlib-data/Mathlib.Data.List.Basic.export
-tier06-mathlib-data/Mathlib.Data.Nat.Basic.export
-tier06-mathlib-data/Mathlib.Data.Nat.Prime.Basic.export
-tier06-mathlib-data/Mathlib.Data.Option.Basic.export
-tier06-mathlib-data/Mathlib.Logic.Basic.export
-
-tier07-mathlib-algebra/Mathlib.Algebra.Field.Basic.export
-tier07-mathlib-algebra/Mathlib.Algebra.Group.Basic.export
-tier07-mathlib-algebra/Mathlib.Algebra.Group.Defs.export
-tier07-mathlib-algebra/Mathlib.Algebra.Order.Monoid.Basic.export
-tier07-mathlib-algebra/Mathlib.Algebra.Ring.Basic.export
-tier07-mathlib-algebra/Mathlib.Algebra.Ring.Defs.export
-tier07-mathlib-algebra/Mathlib.GroupTheory.Perm.Basic.export
-
-tier08-mathlib-analysis/Mathlib.Analysis.Normed.Field.Basic.export
-tier08-mathlib-analysis/Mathlib.Analysis.SpecialFunctions.Pow.Real.export
-tier08-mathlib-analysis/Mathlib.Order.Filter.Basic.export
-tier08-mathlib-analysis/Mathlib.Topology.Basic.export
-tier08-mathlib-analysis/Mathlib.Topology.MetricSpace.Basic.export
-tier08-mathlib-analysis/Mathlib.Topology.Order.export
-
-tier09-mathlib-category/Mathlib.CategoryTheory.Category.Basic.export
-tier09-mathlib-category/Mathlib.CategoryTheory.Functor.Basic.export
-tier09-mathlib-category/Mathlib.CategoryTheory.Iso.export
-tier09-mathlib-category/Mathlib.CategoryTheory.Limits.Shapes.Terminal.export
-tier09-mathlib-category/Mathlib.CategoryTheory.NatTrans.export
-tier09-mathlib-category/Mathlib.CategoryTheory.Yoneda.export
-
-tier10-mathlib-advanced/Mathlib.Data.Tree.Basic.export
-tier01-init/Init.Data.UInt.Basic.export
-tier10-mathlib-advanced/Mathlib.Data.W.Basic.export
-tier10-mathlib-advanced/Mathlib.GroupTheory.QuotientGroup.Basic.export
-tier10-mathlib-advanced/Mathlib.Logic.Equiv.Basic.export
-tier10-mathlib-advanced/Mathlib.SetTheory.Cardinal.Basic.export
-tier10-mathlib-advanced/Mathlib.SetTheory.Ordinal.Basic.export
+Commit hash: 9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3
+------------------------------------------------------------
+Total:    24668
+OK:    24045
+Fail:      621
+OK%: 97.48%
+------------------------------------------------------------
+Hang:
+Nat.testBit_one_zero...
+String.bytes_append...
+------------------------------------------------------------
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.String.Basic.export.log
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Option.Basic.export.log
+TOTAL 4201 OK 4 FAIL 46 TIMEOUT 0 CACHED 4151 OK% 98.9
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Prelude.export.log
+TOTAL 2046 OK 4 FAIL 21 TIMEOUT 0 CACHED 2021 OK% 98.9
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Nat.Lemmas.export.log
+TOTAL 11126 OK 2261 FAIL 392 TIMEOUT 0 CACHED 8473 OK% 96.4
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Char.Basic.export.log
+TOTAL 5333 OK 4 FAIL 144 TIMEOUT 0 CACHED 5185 OK% 97.2
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Int.Basic.export.log
+TOTAL 5221 OK 4 FAIL 114 TIMEOUT 0 CACHED 5103 OK% 97.8
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Classical.export.log
+TOTAL 8127 OK 7873 FAIL 254 TIMEOUT 0 CACHED 0 OK% 96.8
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Nat.Basic.export.log
+TOTAL 4599 OK 4 FAIL 106 TIMEOUT 0 CACHED 4489 OK% 97.6
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Core.export.log
+TOTAL 3761 OK 4 FAIL 33 TIMEOUT 0 CACHED 3724 OK% 99.1
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.List.Lemmas.export.log
+TOTAL 10953 OK 2651 FAIL 433 TIMEOUT 0 CACHED 7869 OK% 96.0
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.PropLemmas.export.log
+TOTAL 8068 OK 4 FAIL 246 TIMEOUT 0 CACHED 7818 OK% 96.9
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Fin.Basic.export.log
+TOTAL 5222 OK 4 FAIL 130 TIMEOUT 0 CACHED 5088 OK% 97.5
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.Array.Basic.export.log
+TOTAL 7175 OK 4 FAIL 241 TIMEOUT 0 CACHED 6930 OK% 96.6
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.UInt.Basic.export.log
+9d55ff36e07e60cfa2d558e9ad3a44c5f1bbddc3/Init.Data.List.Basic.export.log
+TOTAL 5675 OK 4 FAIL 159 TIMEOUT 0 CACHED 5512 OK% 97.1
 ```
 
 

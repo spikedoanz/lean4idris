@@ -402,6 +402,126 @@ alphaEq = go
     go _ _ = False
 
 ------------------------------------------------------------------------
+-- Level Equality (for isDefEqSimple)
+------------------------------------------------------------------------
+
+flattenMax : Level -> List Level
+flattenMax (Max a b) = flattenMax a ++ flattenMax b
+flattenMax l = [l]
+
+sortLevels : List Level -> List Level
+sortLevels = sortBy (\a, b => if levelLt a b then LT else if a == b then EQ else GT)
+
+covering
+levelEqCore : Level -> Level -> Bool
+
+covering
+levelListEqCore : List Level -> List Level -> Bool
+levelListEqCore [] [] = True
+levelListEqCore (x :: xs) (y :: ys) = levelEqCore x y && levelListEqCore xs ys
+levelListEqCore _ _ = False
+
+levelEqCore Zero Zero = True
+levelEqCore (Succ l1) (Succ l2) = levelEqCore l1 l2
+levelEqCore l1@(Max _ _) l2@(Max _ _) =
+  let terms1 = sortLevels (flattenMax l1)
+      terms2 = sortLevels (flattenMax l2)
+  in levelListEqCore terms1 terms2
+levelEqCore (IMax a1 b1) (IMax a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
+levelEqCore (Param n1) (Param n2) = n1 == n2
+levelEqCore _ _ = False
+
+covering
+levelEq : Level -> Level -> Bool
+levelEq l1 l2 = let l1' = simplify l1
+                    l2' = simplify l2
+                in levelEqCore l1' l2'
+
+covering
+levelListEq : List Level -> List Level -> Bool
+levelListEq [] [] = True
+levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2
+levelListEq _ _ = False
+
+------------------------------------------------------------------------
+-- Simple Definitional Equality (without proof irrelevance)
+------------------------------------------------------------------------
+
+-- Body comparison helper for binders
+covering
+isDefEqBodySimple : ClosedExpr -> (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                    TCEnv -> Expr 1 -> Expr 1 -> TC Bool
+isDefEqBodySimple binderType recur env b1 b2 =
+  let localId = env.nextLocalId
+      localVar : ClosedExpr = Local localId Anonymous
+      env' = addLocalType localId binderType ({ nextLocalId := S localId } env)
+      e1' : ClosedExpr = instantiate1 (believe_me b1) localVar
+      e2' : ClosedExpr = instantiate1 (believe_me b2) localVar
+  in recur env' e1' e2'
+
+-- Eta expansion for lambdas
+covering
+tryEtaExpansionSimple : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                        TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryEtaExpansionSimple recurEq env t s = case t of
+  Lam name bi ty body => case s of
+    Lam _ _ _ _ => pure Nothing
+    _ => do
+      -- Eta-expand s: λx. s x
+      let sExpanded : ClosedExpr = Lam name bi ty (App (weaken1 s) (BVar FZ))
+      result <- recurEq env t sExpanded
+      pure (Just result)
+  _ => case s of
+    Lam name bi ty body => do
+      -- Eta-expand t: λx. t x
+      let tExpanded : ClosedExpr = Lam name bi ty (App (weaken1 t) (BVar FZ))
+      result <- recurEq env tExpanded s
+      pure (Just result)
+    _ => pure Nothing
+
+-- Simple definitional equality: WHNF + structural comparison
+-- Does not include proof irrelevance (to avoid circular dependency with inferType)
+export covering
+isDefEqSimple : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
+isDefEqSimple env e1 e2 =
+  -- Fast path: syntactic equality check before any reduction
+  if exprEq e1 e2
+    then pure True
+    else do
+      e1' <- whnf env e1
+      e2' <- whnf env e2
+      isDefEqWhnf e1' e2'
+  where
+    covering
+    isDefEqWhnf : ClosedExpr -> ClosedExpr -> TC Bool
+    isDefEqWhnf (Sort l1) (Sort l2) = pure (levelEq l1 l2)
+    isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
+      pure (n1 == n2 && levelListEq ls1 ls2)
+    isDefEqWhnf (Local id1 _) (Local id2 _) = pure (id1 == id2)
+    isDefEqWhnf (App f1 a1) (App f2 a2) = do
+      eqF <- isDefEqSimple env f1 f2
+      if eqF then isDefEqSimple env a1 a2 else pure False
+    isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
+      eqTy <- isDefEqSimple env ty1 ty2
+      if eqTy then isDefEqBodySimple ty1 isDefEqSimple env body1 body2 else pure False
+    isDefEqWhnf (Pi name1 _ dom1 cod1) (Pi _ _ dom2 cod2) = do
+      eqDom <- isDefEqSimple env dom1 dom2
+      if eqDom then isDefEqBodySimple dom1 isDefEqSimple env cod1 cod2 else pure False
+    isDefEqWhnf (Let name1 ty1 v1 b1) (Let _ ty2 v2 b2) = do
+      eqTy <- isDefEqSimple env ty1 ty2
+      eqV <- isDefEqSimple env v1 v2
+      if eqTy && eqV then isDefEqBodySimple ty1 isDefEqSimple env b1 b2 else pure False
+    isDefEqWhnf (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
+      if sn1 == sn2 && i1 == i2 then isDefEqSimple env s1 s2 else pure False
+    isDefEqWhnf (NatLit n1) (NatLit n2) = pure (n1 == n2)
+    isDefEqWhnf (StringLit s1) (StringLit s2) = pure (s1 == s2)
+    isDefEqWhnf t s = do
+      etaResult <- tryEtaExpansionSimple isDefEqSimple env t s
+      case etaResult of
+        Just b => pure b
+        Nothing => pure False
+
+------------------------------------------------------------------------
 -- Type Inference
 ------------------------------------------------------------------------
 
@@ -434,27 +554,19 @@ mutual
     (env1, fTy) <- inferTypeE env f
     (_, _, dom, cod) <- ensurePi env1 fTy
     (env2, argTy) <- inferTypeE env1 arg
-    -- Lazy normalization: try WHNF comparison first before full normalization
-    argTyWhnf <- whnf env2 argTy
-    domWhnf <- whnf env2 dom
-    -- Debug: check if dom contains decide
-    let _ = case getAppHead dom of
-              Just (name, _) => case name of
-                Str s _ => if s == "Eq"
-                             then trace "inferTypeE App comparing Eq types: dom=\{show dom}, domWhnf=\{show domWhnf}" ()
-                             else ()
-                _ => ()
-              Nothing => ()
-    if alphaEq argTyWhnf domWhnf
+    -- Use definitional equality for type comparison (like nanoda)
+    eq <- isDefEqSimple env2 argTy dom
+    if eq
       then do
         let resultTy = instantiate1 (believe_me cod) arg
         resultTy' <- whnf env2 resultTy
         pure (env2, resultTy')
       else do
-        -- WHNF comparison failed, try full normalization
-        argTy' <- normalizeType env2 argTyWhnf
-        dom' <- normalizeType env2 domWhnf
-        if alphaEq argTy' dom'
+        -- WHNF-based isDefEqSimple failed, try full normalization as fallback
+        argTy' <- normalizeType env2 argTy
+        dom' <- normalizeType env2 dom
+        eq' <- isDefEqSimple env2 argTy' dom'
+        if eq'
           then do
             let resultTy = instantiate1 (believe_me cod) arg
             resultTy' <- whnf env2 resultTy
@@ -545,25 +657,19 @@ mutual
     let (env2, ctx2, tyClosed) = closeWithPlaceholders env1 ctx1 tyExpr
     let (env3, ctx3, valClosed) = closeWithPlaceholders env2 ctx2 valExpr
     (env4, ctx4, valTy) <- inferTypeOpenE env3 ctx3 valExpr
-    -- Lazy normalization: try WHNF comparison first
-    tyClosedWhnf <- whnf env4 tyClosed
-    valTyWhnf <- whnf env4 valTy
-    -- Convert both to BVars for comparison
-    let tyWithBVarsWhnf = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosedWhnf
-    let valTyWithBVarsWhnf = replaceAllPlaceholdersWithBVars' (toList ctx4) valTyWhnf
-    if alphaEq tyWithBVarsWhnf valTyWithBVarsWhnf
+    -- Use definitional equality for type comparison
+    eq <- isDefEqSimple env4 tyClosed valTy
+    if eq
       then do
         let ctx' = extendCtxLet name tyClosed valClosed ctx4
         (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
         pure (env5, ctx4, bodyTy)
       else do
-        -- WHNF comparison failed, try full normalization
-        tyClosed' <- normalizeType env4 tyClosedWhnf
-        valTy' <- normalizeType env4 valTyWhnf
-        -- Convert both to BVars for comparison
-        let tyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) tyClosed'
-        let valTyWithBVars = replaceAllPlaceholdersWithBVars' (toList ctx4) valTy'
-        if alphaEq tyWithBVars valTyWithBVars
+        -- WHNF-based isDefEqSimple failed, try full normalization as fallback
+        tyClosed' <- normalizeType env4 tyClosed
+        valTy' <- normalizeType env4 valTy
+        eq' <- isDefEqSimple env4 tyClosed' valTy'
+        if eq'
           then do
             let ctx' = extendCtxLet name tyClosed valClosed ctx4
             (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body

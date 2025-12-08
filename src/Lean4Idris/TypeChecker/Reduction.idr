@@ -1088,7 +1088,7 @@ whnf env e = do
         Just e' => Just e'
         Nothing => case tryNativeEval e whnfStepFull of
           Just e' => Just e'
-          Nothing => case tryIotaReduction env e whnfStepWithDelta of
+          Nothing => case tryIotaReduction env e whnfStepFull of
             Just e' => Just e'
             Nothing => unfoldHead env e
 

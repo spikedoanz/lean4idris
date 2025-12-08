@@ -151,6 +151,20 @@ closeWithPlaceholders env ctx e =
   let (env', ctx', placeholders) = buildPlaceholders env ctx
   in (env', ctx', substAll placeholders e)
 
+-- Extract the Local ID from a placeholder if present
+getLocalId : Maybe ClosedExpr -> Maybe Nat
+getLocalId (Just (Local id _)) = Just id
+getLocalId _ = Nothing
+
+-- Substitute a let-bound placeholder in the body type with its value
+-- This is used when inferring Let types to avoid escaping Local placeholders
+covering
+substLetPlaceholder : LocalCtx (S n) -> ClosedExpr -> ClosedExpr -> ClosedExpr
+substLetPlaceholder (entry :: _) valClosed bodyTy =
+  case getLocalId entry.placeholder of
+    Just localId => substLocal localId valClosed bodyTy
+    Nothing => bodyTy
+
 findLocalIdx : List LocalEntry -> Nat -> Nat -> Maybe Nat
 findLocalIdx [] _ _ = Nothing
 findLocalIdx (entry :: rest) targetId idx = case entry.placeholder of
@@ -717,8 +731,10 @@ mutual
     if eq
       then do
         let ctx' = extendCtxLet name tyClosed valClosed ctx4
-        (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
-        pure (env5, ctx4, bodyTy)
+        (env5, ctx'', bodyTy) <- inferTypeOpenE env4 ctx' body
+        -- Substitute any escaping Local placeholder for the let-bound variable with its value
+        let bodyTy' = substLetPlaceholder ctx'' valClosed bodyTy
+        pure (env5, ctx4, bodyTy')
       else do
         -- WHNF-based isDefEqSimple failed, try full normalization as fallback
         tyClosed' <- normalizeType env4 tyClosed
@@ -727,8 +743,10 @@ mutual
         if eq'
           then do
             let ctx' = extendCtxLet name tyClosed valClosed ctx4
-            (env5, _, bodyTy) <- inferTypeOpenE env4 ctx' body
-            pure (env5, ctx4, bodyTy)
+            (env5, ctx'', bodyTy) <- inferTypeOpenE env4 ctx' body
+            -- Substitute any escaping Local placeholder for the let-bound variable with its value
+            let bodyTy' = substLetPlaceholder ctx'' valClosed bodyTy
+            pure (env5, ctx4, bodyTy')
           else throw (LetTypeMismatch tyClosed' valTy')
   inferTypeOpenE env ctx (Proj structName idx structExpr) = do
     (env1, ctx1, structTy) <- inferTypeOpenE env ctx structExpr

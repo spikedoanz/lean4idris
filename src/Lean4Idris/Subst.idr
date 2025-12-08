@@ -249,3 +249,49 @@ subst0SingleN body arg = believe_me (goSubstAll 0 [believe_me arg] (believe_me b
 covering export
 instantiate1N : {n : Nat} -> Expr (S n) -> Expr n -> Expr n
 instantiate1N body arg = believe_me (instantiate1 (believe_me body) (believe_me arg))
+
+------------------------------------------------------------------------
+-- Local substitution (replacing Local placeholders)
+------------------------------------------------------------------------
+
+||| Check if a specific Local ID exists in an expression.
+||| Used to short-circuit substLocal on expressions that don't contain the target.
+covering export
+containsLocal : Nat -> ClosedExpr -> Bool
+containsLocal targetId = go
+  where
+    go : ClosedExpr -> Bool
+    go (Local id _) = id == targetId
+    go (BVar _) = False
+    go (Sort _) = False
+    go (Const _ _) = False
+    go (App f x) = go f || go x
+    go (Lam _ _ ty body) = go ty || go (believe_me body)
+    go (Pi _ _ dom cod) = go dom || go (believe_me cod)
+    go (Let _ ty val body) = go ty || go val || go (believe_me body)
+    go (Proj _ _ s) = go s
+    go (NatLit _) = False
+    go (StringLit _) = False
+
+||| Substitute a specific Local ID with a replacement expression.
+||| This is used to replace escaped Local placeholders in inferred types.
+||| Short-circuits if the target Local doesn't exist in the expression.
+covering export
+substLocal : Nat -> ClosedExpr -> ClosedExpr -> ClosedExpr
+substLocal targetId replacement expr =
+  if containsLocal targetId expr
+    then go expr
+    else expr
+  where
+    go : ClosedExpr -> ClosedExpr
+    go (Local id name) = if id == targetId then replacement else Local id name
+    go (BVar i) = BVar i
+    go (Sort l) = Sort l
+    go (Const name lvls) = Const name lvls
+    go (App f x) = App (go f) (go x)
+    go (Lam name bi ty body) = Lam name bi (go ty) (believe_me (go (believe_me body)))
+    go (Pi name bi dom cod) = Pi name bi (go dom) (believe_me (go (believe_me cod)))
+    go (Let name ty val body) = Let name (go ty) (go val) (believe_me (go (believe_me body)))
+    go (Proj sname idx s) = Proj sname idx (go s)
+    go (NatLit k) = NatLit k
+    go (StringLit s) = StringLit s

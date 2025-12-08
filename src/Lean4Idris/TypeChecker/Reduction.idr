@@ -6,7 +6,9 @@ import Lean4Idris.Expr
 import Lean4Idris.Decl
 import Lean4Idris.Subst
 import Lean4Idris.TypeChecker.Monad
+import Lean4Idris.Pretty
 import Data.List
+import Debug.Trace
 
 %default total
 
@@ -139,6 +141,29 @@ getNthPiDomSubst (S k) (arg :: args) (Pi _ _ _ cod) =
   getNthPiDomSubst k args (believe_me result)
 getNthPiDomSubst _ _ _ = Nothing
 
+-- Debug flag: set to True to enable tracing
+debugIota : Bool
+debugIota = False
+
+-- Names for Nat constructors (used in iota reduction for NatLit handling)
+iotaNatName : Name
+iotaNatName = Str "Nat" Anonymous
+
+iotaNatZeroName : Name
+iotaNatZeroName = Str "zero" iotaNatName
+
+iotaNatSuccName : Name
+iotaNatSuccName = Str "succ" iotaNatName
+
+-- Helper: extract constructor info from major premise head
+-- Handles NatLit as Nat.zero/Nat.succ
+-- Returns: (ctorName, ctorLevels, ctorArgs for fields only)
+getCtorFromMajor : ClosedExpr -> List ClosedExpr -> Maybe (Name, List Level, List ClosedExpr)
+getCtorFromMajor (NatLit Z) args = Just (iotaNatZeroName, [], [])
+getCtorFromMajor (NatLit (S n)) args = Just (iotaNatSuccName, [], [NatLit n])
+getCtorFromMajor (Const name levels) args = Just (name, levels, args)
+getCtorFromMajor _ _ = Nothing
+
 export covering
 tryIotaReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryIotaReduction env e whnfStep = do
@@ -146,19 +171,30 @@ tryIotaReduction env e whnfStep = do
   (recName, recLevels) <- getConstHead head
   (recInfo, recLevelParams) <- getRecursorInfoWithLevels env recName
   let majorIdx = getMajorIdx recInfo
+  let _ = if debugIota then trace "IOTA: recursor=\{show recName} majorIdx=\{show majorIdx} numArgs=\{show (length args)}" () else ()
   major <- listNth args majorIdx
   let major' = iterWhnfStep whnfStep major 100
+  let _ = if debugIota then trace "IOTA: major after whnf=\{ppClosedExpr major'}" () else ()
   let (majorHead, majorArgs) = getAppSpine major'
-  (ctorName, _) <- getConstHead majorHead
-  (_, _, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
+  -- Use getCtorFromMajor to handle NatLit as well as regular constructors
+  (ctorName, _, ctorFieldArgs) <- getCtorFromMajor majorHead majorArgs
+  let _ = if debugIota then trace "IOTA: constructor=\{show ctorName}" () else ()
+  (_, ctorIdx, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
+  let _ = if debugIota then trace "IOTA: ctorIdx=\{show ctorIdx} ctorNumParams=\{show ctorNumParams} ctorNumFields=\{show ctorNumFields}" () else ()
   rule <- findRecRule recInfo.rules ctorName
-  guard (length majorArgs >= ctorNumParams + ctorNumFields)
+  let _ = if debugIota then trace "IOTA: found rule for \{show ctorName}" () else ()
+  -- For NatLit case, ctorFieldArgs already contains just the fields (no params)
+  -- For regular constructor, majorArgs contains params + fields
+  let ctorFields = case majorHead of
+                     NatLit _ => ctorFieldArgs
+                     _ => listDrop ctorNumParams majorArgs
+  guard (length ctorFields >= ctorNumFields)
   let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
   let rhs = instantiateLevelParams recLevelParams recLevels rule.rhs
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
-  let ctorFields = listDrop ctorNumParams majorArgs
   let rhsWithFields = mkApp rhsWithParamsMotivesMinors ctorFields
   let remainingArgs = listDrop (majorIdx + 1) args
+  let _ = if debugIota then trace "IOTA: SUCCESS" () else ()
   pure (mkApp rhsWithFields remainingArgs)
 
 ------------------------------------------------------------------------

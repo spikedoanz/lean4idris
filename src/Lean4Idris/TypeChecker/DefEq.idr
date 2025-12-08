@@ -159,48 +159,81 @@ tryEtaExpansion recurEq env t s = do
 -- Definitional Equality
 ------------------------------------------------------------------------
 
-export covering
-isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
-isDefEq env e1 e2 =
-  -- Fast path: syntactic equality check before any reduction
-  if exprEq e1 e2
-    then pure True
-    else do
-      e1' <- whnf env e1
-      e2' <- whnf env e2
-      proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
-      case proofIrrel of
-        Just result => pure result
-        Nothing => isDefEqWhnf e1' e2'
-  where
-    covering
-    isDefEqWhnf : ClosedExpr -> ClosedExpr -> TC Bool
-    isDefEqWhnf (Sort l1) (Sort l2) = pure (levelEq l1 l2)
-    isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
-      pure (n1 == n2 && levelListEq ls1 ls2)
-    isDefEqWhnf (Local id1 _) (Local id2 _) = pure (id1 == id2)
-    isDefEqWhnf (App f1 a1) (App f2 a2) = do
-      eqF <- isDefEq env f1 f2
-      if eqF then isDefEq env a1 a2 else pure False
-    isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
-      eqTy <- isDefEq env ty1 ty2
-      if eqTy then isDefEqBodyWithNameAndType name1 ty1 isDefEq env body1 body2 else pure False
-    isDefEqWhnf (Pi name1 _ dom1 cod1) (Pi _ _ dom2 cod2) = do
-      eqDom <- isDefEq env dom1 dom2
-      if eqDom then isDefEqBodyWithNameAndType name1 dom1 isDefEq env cod1 cod2 else pure False
-    isDefEqWhnf (Let name1 ty1 v1 b1) (Let _ ty2 v2 b2) = do
-      eqTy <- isDefEq env ty1 ty2
-      eqV <- isDefEq env v1 v2
-      if eqTy && eqV then isDefEqBodyWithNameAndType name1 ty1 isDefEq env b1 b2 else pure False
-    isDefEqWhnf (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
-      if sn1 == sn2 && i1 == i2 then isDefEq env s1 s2 else pure False
-    isDefEqWhnf (NatLit n1) (NatLit n2) = pure (n1 == n2)
-    isDefEqWhnf (StringLit s1) (StringLit s2) = pure (s1 == s2)
-    isDefEqWhnf t s = do
-      etaResult <- tryEtaExpansion isDefEq env t s
-      case etaResult of
-        Just b => pure b
-        Nothing => pure False
+mutual
+  covering
+  isDefEqNormalized : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
+  isDefEqNormalized env (Sort l1) (Sort l2) = pure (levelEq l1 l2)
+  isDefEqNormalized env (Const n1 ls1) (Const n2 ls2) =
+    pure (n1 == n2 && levelListEq ls1 ls2)
+  isDefEqNormalized env (Local id1 _) (Local id2 _) = pure (id1 == id2)
+  isDefEqNormalized env (App f1 a1) (App f2 a2) = do
+    eqF <- isDefEq env f1 f2
+    if eqF then isDefEq env a1 a2 else pure False
+  isDefEqNormalized env (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
+    eqTy <- isDefEq env ty1 ty2
+    if eqTy then isDefEqBodyWithNameAndType name1 ty1 isDefEq env body1 body2 else pure False
+  isDefEqNormalized env (Pi name1 _ dom1 cod1) (Pi _ _ dom2 cod2) = do
+    eqDom <- isDefEq env dom1 dom2
+    if eqDom then isDefEqBodyWithNameAndType name1 dom1 isDefEq env cod1 cod2 else pure False
+  isDefEqNormalized env (Let name1 ty1 v1 b1) (Let _ ty2 v2 b2) = do
+    eqTy <- isDefEq env ty1 ty2
+    eqV <- isDefEq env v1 v2
+    if eqTy && eqV then isDefEqBodyWithNameAndType name1 ty1 isDefEq env b1 b2 else pure False
+  isDefEqNormalized env (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
+    if sn1 == sn2 && i1 == i2 then isDefEq env s1 s2 else pure False
+  isDefEqNormalized env (NatLit n1) (NatLit n2) = pure (n1 == n2)
+  isDefEqNormalized env (StringLit s1) (StringLit s2) = pure (s1 == s2)
+  isDefEqNormalized env _ _ = pure False
+
+  export covering
+  isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
+  isDefEq env e1 e2 =
+    -- Fast path: syntactic equality check before any reduction
+    if exprEq e1 e2
+      then pure True
+      else do
+        e1' <- whnf env e1
+        e2' <- whnf env e2
+        proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
+        case proofIrrel of
+          Just result => pure result
+          Nothing => isDefEqWhnf e1' e2'
+    where
+      covering
+      isDefEqWhnf : ClosedExpr -> ClosedExpr -> TC Bool
+      isDefEqWhnf (Sort l1) (Sort l2) = pure (levelEq l1 l2)
+      isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
+        pure (n1 == n2 && levelListEq ls1 ls2)
+      isDefEqWhnf (Local id1 _) (Local id2 _) = pure (id1 == id2)
+      isDefEqWhnf (App f1 a1) (App f2 a2) = do
+        eqF <- isDefEq env f1 f2
+        if eqF then isDefEq env a1 a2 else pure False
+      isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
+        eqTy <- isDefEq env ty1 ty2
+        if eqTy then isDefEqBodyWithNameAndType name1 ty1 isDefEq env body1 body2 else pure False
+      isDefEqWhnf (Pi name1 _ dom1 cod1) (Pi _ _ dom2 cod2) = do
+        eqDom <- isDefEq env dom1 dom2
+        if eqDom then isDefEqBodyWithNameAndType name1 dom1 isDefEq env cod1 cod2 else pure False
+      isDefEqWhnf (Let name1 ty1 v1 b1) (Let _ ty2 v2 b2) = do
+        eqTy <- isDefEq env ty1 ty2
+        eqV <- isDefEq env v1 v2
+        if eqTy && eqV then isDefEqBodyWithNameAndType name1 ty1 isDefEq env b1 b2 else pure False
+      isDefEqWhnf (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
+        if sn1 == sn2 && i1 == i2 then isDefEq env s1 s2 else pure False
+      isDefEqWhnf (NatLit n1) (NatLit n2) = pure (n1 == n2)
+      isDefEqWhnf (StringLit s1) (StringLit s2) = pure (s1 == s2)
+      isDefEqWhnf t s = do
+        etaResult <- tryEtaExpansion isDefEq env t s
+        case etaResult of
+          Just b => pure b
+          Nothing => do
+            -- WHNF structural comparison failed, try full normalization as fallback
+            t' <- normalizeType env t
+            s' <- normalizeType env s
+            -- Check if normalization made progress
+            if exprEq t t' && exprEq s s'
+              then pure False  -- No progress, give up
+              else isDefEqNormalized env t' s'
 
 ------------------------------------------------------------------------
 -- Convenience Functions

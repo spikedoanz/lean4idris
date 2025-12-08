@@ -539,7 +539,14 @@ isDefEqSimple env e1 e2 =
     isDefEqWhnf (Sort l1) (Sort l2) = pure (levelEq l1 l2)
     isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
       pure (n1 == n2 && levelListEq ls1 ls2)
-    isDefEqWhnf (Local id1 _) (Local id2 _) = pure (id1 == id2)
+    isDefEqWhnf (Local id1 _) (Local id2 _) =
+      if id1 == id2
+        then pure True
+        else do
+          -- Try comparing by types when IDs differ
+          case (lookupLocalType id1 env, lookupLocalType id2 env) of
+            (Just ty1, Just ty2) => isDefEqSimple env ty1 ty2
+            _ => pure False
     isDefEqWhnf (App f1 a1) (App f2 a2) = do
       eqF <- isDefEqSimple env f1 f2
       if eqF then isDefEqSimple env a1 a2 else pure False

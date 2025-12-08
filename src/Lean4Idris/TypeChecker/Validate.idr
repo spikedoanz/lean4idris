@@ -159,7 +159,9 @@ checkThmDecl env name ty value levelParams = do
       eq <- isDefEq env' valueTy ty
       if eq
         then pure ()
-        else throw (OtherError $ "theorem proof type mismatch for " ++ show name)
+        else throw (OtherError $ "theorem proof type mismatch for " ++ show name
+                   ++ "\n  inferred: " ++ show valueTy
+                   ++ "\n  declared: " ++ show ty)
 
 ------------------------------------------------------------------------
 -- Add Validated Declarations

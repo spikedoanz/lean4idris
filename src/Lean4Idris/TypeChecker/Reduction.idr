@@ -378,6 +378,9 @@ natDivName = Str "div" natName
 natModName : Name
 natModName = Str "mod" natName
 
+natSuccName : Name
+natSuccName = Str "succ" natName
+
 -- Nat bitwise operations
 natLandName : Name
 natLandName = Str "land" natName
@@ -574,6 +577,18 @@ tryNatMul args whnfStep = do
   m <- getNatLit arg1'
   let result = NatLit (n * m)
   let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.succ n to a NatLit
+-- Nat.succ : Nat → Nat
+tryNatSucc : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatSucc args whnfStep = do
+  guard (length args >= 1)
+  arg0 <- listNth args 0
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  n <- getNatLit arg0'
+  let result = NatLit (S n)
+  let remaining = listDrop 1 args
   pure (mkApp result remaining)
 
 -- Helper: Nat division (Lean-style: div by 0 returns 0)
@@ -1344,6 +1359,7 @@ tryNativeEval e whnfStep = do
       else if name == natAddName then tryNatAdd args step
       else if name == natSubName then tryNatSub args step
       else if name == natMulName then tryNatMul args step
+      else if name == natSuccName then tryNatSucc args step
       else if name == natDivName then tryNatDiv args step
       else if name == natModName then tryNatMod args step
       -- Nat bitwise operations

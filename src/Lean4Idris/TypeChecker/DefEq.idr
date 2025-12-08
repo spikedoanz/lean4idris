@@ -165,7 +165,14 @@ mutual
   isDefEqNormalized env (Sort l1) (Sort l2) = pure (levelEq l1 l2)
   isDefEqNormalized env (Const n1 ls1) (Const n2 ls2) =
     pure (n1 == n2 && levelListEq ls1 ls2)
-  isDefEqNormalized env (Local id1 _) (Local id2 _) = pure (id1 == id2)
+  isDefEqNormalized env (Local id1 _) (Local id2 _) =
+    if id1 == id2
+      then pure True
+      else do
+        -- Try comparing by types when IDs differ
+        case (lookupLocalType id1 env, lookupLocalType id2 env) of
+          (Just ty1, Just ty2) => isDefEq env ty1 ty2
+          _ => pure False
   isDefEqNormalized env (App f1 a1) (App f2 a2) = do
     eqF <- isDefEq env f1 f2
     if eqF then isDefEq env a1 a2 else pure False
@@ -204,7 +211,13 @@ mutual
       isDefEqWhnf (Sort l1) (Sort l2) = pure (levelEq l1 l2)
       isDefEqWhnf (Const n1 ls1) (Const n2 ls2) =
         pure (n1 == n2 && levelListEq ls1 ls2)
-      isDefEqWhnf (Local id1 _) (Local id2 _) = pure (id1 == id2)
+      isDefEqWhnf (Local id1 _) (Local id2 _) =
+        if id1 == id2
+          then pure True
+          else do
+            case (lookupLocalType id1 env, lookupLocalType id2 env) of
+              (Just ty1, Just ty2) => isDefEq env ty1 ty2
+              _ => pure False
       isDefEqWhnf (App f1 a1) (App f2 a2) = do
         eqF <- isDefEq env f1 f2
         if eqF then isDefEq env a1 a2 else pure False

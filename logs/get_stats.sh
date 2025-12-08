@@ -17,5 +17,5 @@ echo "$HANG"
 echo "------------------------------------------------------------"
 for f in $FILES; do
   echo $f
-  cat $f | grep TOTAL
+  cat $f | grep TOTAL || echo "Hanged on $(tail -1 $f)"
 done

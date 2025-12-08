@@ -378,6 +378,25 @@ natDivName = Str "div" natName
 natModName : Name
 natModName = Str "mod" natName
 
+-- Nat bitwise operations
+natLandName : Name
+natLandName = Str "land" natName
+
+natLorName : Name
+natLorName = Str "lor" natName
+
+natXorName : Name
+natXorName = Str "xor" natName
+
+natShiftLeftName : Name
+natShiftLeftName = Str "shiftLeft" natName
+
+natShiftRightName : Name
+natShiftRightName = Str "shiftRight" natName
+
+natTestBitName : Name
+natTestBitName = Str "testBit" natName
+
 -- Bool constructors
 boolName : Name
 boolName = Str "Bool" Anonymous
@@ -564,6 +583,151 @@ tryNatMod args whnfStep = do
   n <- getNatLit arg0'
   m <- getNatLit arg1'
   let result = NatLit (natMod n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Bitwise helper functions for Nat
+-- These implement the operations natively since Idris2 doesn't have a Bits instance for Nat
+-- Note: natDiv and natMod defined above are used (not backtick operators)
+-- Uses fuel-based approach to satisfy totality checker
+
+-- Nat shift right: n >> k = n / (2^k)
+-- Uses shift amount k as the decreasing argument
+natShiftRightNat : Nat -> Nat -> Nat
+natShiftRightNat n 0 = n
+natShiftRightNat n (S k) = natShiftRightNat (natDiv n 2) k
+
+-- Nat shift left: n << k = n * (2^k)
+-- Uses shift amount k as the decreasing argument
+natShiftLeftNat : Nat -> Nat -> Nat
+natShiftLeftNat n 0 = n
+natShiftLeftNat n (S k) = natShiftLeftNat (n * 2) k
+
+-- Nat bitwise AND (implemented via standard bit-by-bit algorithm)
+-- Uses max(n, m) as fuel since we divide by 2 each step
+natLandNat : Nat -> Nat -> Nat
+natLandNat n m = go (n + m) n m
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted (shouldn't happen with proper fuel)
+    go _ Z _ = 0  -- base case: 0 AND x = 0
+    go _ _ Z = 0  -- base case: x AND 0 = 0
+    go (S fuel) n' m' =
+      let bit = if (natMod n' 2 == 1) && (natMod m' 2 == 1) then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Nat bitwise OR
+-- Uses n + m as fuel
+natLorNat : Nat -> Nat -> Nat
+natLorNat n m = go (n + m) n m
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted
+    go _ Z m' = m'  -- base case: 0 OR m = m
+    go _ n' Z = n'  -- base case: n OR 0 = n
+    go (S fuel) n' m' =
+      let bit = if (natMod n' 2 == 1) || (natMod m' 2 == 1) then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Nat bitwise XOR
+-- Uses n + m as fuel
+natXorNat : Nat -> Nat -> Nat
+natXorNat n m = go (n + m) n m
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted
+    go _ Z m' = m'  -- base case: 0 XOR m = m
+    go _ n' Z = n'  -- base case: n XOR 0 = n
+    go (S fuel) n' m' =
+      let bit = if (natMod n' 2 == 1) /= (natMod m' 2 == 1) then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Try to reduce Nat.shiftRight n k to a NatLit
+tryNatShiftRight : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatShiftRight args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  k <- getNatLit arg1'
+  let result = NatLit (natShiftRightNat n k)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.shiftLeft n k to a NatLit
+tryNatShiftLeft : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatShiftLeft args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  k <- getNatLit arg1'
+  let result = NatLit (natShiftLeftNat n k)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.land n m to a NatLit
+tryNatLand : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatLand args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natLandNat n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.lor n m to a NatLit
+tryNatLor : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatLor args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natLorNat n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.xor n m to a NatLit
+tryNatXor : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatXor args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natXorNat n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Nat.testBit: testBit n i = ((n >>> i) &&& 1) != 0
+-- Returns true if the i-th bit of n is 1
+natTestBit : Nat -> Nat -> Bool
+natTestBit n i = natMod (natShiftRightNat n i) 2 == 1
+
+-- Try to reduce Nat.testBit n i to true/false
+tryNatTestBit : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatTestBit args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  i <- getNatLit arg1'
+  let result = mkBool (natTestBit n i)
   let remaining = listDrop 2 args
   pure (mkApp result remaining)
 
@@ -1070,6 +1234,13 @@ tryNativeEval e whnfStep = do
       else if name == natMulName then tryNatMul args step
       else if name == natDivName then tryNatDiv args step
       else if name == natModName then tryNatMod args step
+      -- Nat bitwise operations
+      else if name == natLandName then tryNatLand args step
+      else if name == natLorName then tryNatLor args step
+      else if name == natXorName then tryNatXor args step
+      else if name == natShiftLeftName then tryNatShiftLeft args step
+      else if name == natShiftRightName then tryNatShiftRight args step
+      else if name == natTestBitName then tryNatTestBit args step
       else if name == hModHModName then tryHModHMod args step
       else if name == natPowName then tryNatPow args step
       else if name == hPowHPowName then tryHPowHPow args step

@@ -1,6 +1,6 @@
 #!/bin/bash
 echo "Commit hash: $1"
-FILES=$(find "$1" | grep "log")
+FILES=$(find "$1" | grep "log" | sort)
 ALL_CHECKED=$(echo "$FILES" | xargs cat | sed 's/\[cached\]//g')
 TOTAL=$(echo "$ALL_CHECKED" | grep Checking             | sort | uniq | wc -l)
 FAIL=$(echo "$ALL_CHECKED"  | grep Checking | grep FAIL | sort | uniq | wc -l)

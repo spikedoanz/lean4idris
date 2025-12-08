@@ -378,6 +378,25 @@ natDivName = Str "div" natName
 natModName : Name
 natModName = Str "mod" natName
 
+-- Nat bitwise operations
+natLandName : Name
+natLandName = Str "land" natName
+
+natLorName : Name
+natLorName = Str "lor" natName
+
+natXorName : Name
+natXorName = Str "xor" natName
+
+natShiftLeftName : Name
+natShiftLeftName = Str "shiftLeft" natName
+
+natShiftRightName : Name
+natShiftRightName = Str "shiftRight" natName
+
+natTestBitName : Name
+natTestBitName = Str "testBit" natName
+
 -- Bool constructors
 boolName : Name
 boolName = Str "Bool" Anonymous
@@ -413,6 +432,44 @@ stringAppendName = Str "append" stringName
 
 stringLengthName : Name
 stringLengthName = Str "length" stringName
+
+stringBytesName : Name
+stringBytesName = Str "bytes" stringName
+
+-- ByteArray and related type names
+byteArrayName : Name
+byteArrayName = Str "ByteArray" Anonymous
+
+byteArrayMkName : Name
+byteArrayMkName = Str "mk" byteArrayName
+
+arrayName : Name
+arrayName = Str "Array" Anonymous
+
+arrayMkName : Name
+arrayMkName = Str "mk" arrayName
+
+uint8Name : Name
+uint8Name = Str "UInt8" Anonymous
+
+uint8OfBitVecName : Name
+uint8OfBitVecName = Str "ofBitVec" uint8Name
+
+-- BitVec (defined early for use in mkUInt8)
+bitVecName : Name
+bitVecName = Str "BitVec" Anonymous
+
+bitVecOfNatName : Name
+bitVecOfNatName = Str "ofNat" bitVecName
+
+listName : Name
+listName = Str "List" Anonymous
+
+listNilName : Name
+listNilName = Str "nil" listName
+
+listConsName : Name
+listConsName = Str "cons" listName
 
 -- Helper to extract Nat from NatLit
 getNatLit : ClosedExpr -> Maybe Nat
@@ -567,6 +624,231 @@ tryNatMod args whnfStep = do
   let remaining = listDrop 2 args
   pure (mkApp result remaining)
 
+-- Bitwise helper functions for Nat
+-- These implement the operations natively since Idris2 doesn't have a Bits instance for Nat
+-- Note: natDiv and natMod defined above are used (not backtick operators)
+-- Uses fuel-based approach to satisfy totality checker
+
+-- Nat shift right: n >> k = n / (2^k)
+-- Uses shift amount k as the decreasing argument
+natShiftRightNat : Nat -> Nat -> Nat
+natShiftRightNat n 0 = n
+natShiftRightNat n (S k) = natShiftRightNat (natDiv n 2) k
+
+-- Nat shift left: n << k = n * (2^k)
+-- Uses shift amount k as the decreasing argument
+natShiftLeftNat : Nat -> Nat -> Nat
+natShiftLeftNat n 0 = n
+natShiftLeftNat n (S k) = natShiftLeftNat (n * 2) k
+
+-- Nat bitwise AND (implemented via standard bit-by-bit algorithm)
+-- Uses max(n, m) as fuel since we divide by 2 each step
+natLandNat : Nat -> Nat -> Nat
+natLandNat n m = go (n + m) n m
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted (shouldn't happen with proper fuel)
+    go _ Z _ = 0  -- base case: 0 AND x = 0
+    go _ _ Z = 0  -- base case: x AND 0 = 0
+    go (S fuel) n' m' =
+      let bit = if (natMod n' 2 == 1) && (natMod m' 2 == 1) then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Nat bitwise OR
+-- Uses n + m as fuel
+natLorNat : Nat -> Nat -> Nat
+natLorNat n m = go (n + m) n m
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted
+    go _ Z m' = m'  -- base case: 0 OR m = m
+    go _ n' Z = n'  -- base case: n OR 0 = n
+    go (S fuel) n' m' =
+      let bit = if (natMod n' 2 == 1) || (natMod m' 2 == 1) then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Nat bitwise XOR
+-- Uses n + m as fuel
+natXorNat : Nat -> Nat -> Nat
+natXorNat n m = go (n + m) n m
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted
+    go _ Z m' = m'  -- base case: 0 XOR m = m
+    go _ n' Z = n'  -- base case: n XOR 0 = n
+    go (S fuel) n' m' =
+      let bit = if (natMod n' 2 == 1) /= (natMod m' 2 == 1) then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Try to reduce Nat.shiftRight n k to a NatLit
+tryNatShiftRight : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatShiftRight args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  k <- getNatLit arg1'
+  let result = NatLit (natShiftRightNat n k)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.shiftLeft n k to a NatLit
+tryNatShiftLeft : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatShiftLeft args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  k <- getNatLit arg1'
+  let result = NatLit (natShiftLeftNat n k)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.land n m to a NatLit
+tryNatLand : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatLand args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natLandNat n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.lor n m to a NatLit
+tryNatLor : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatLor args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natLorNat n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Try to reduce Nat.xor n m to a NatLit
+tryNatXor : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatXor args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natXorNat n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Nat.testBit: testBit n i = ((n >>> i) &&& 1) != 0
+-- Returns true if the i-th bit of n is 1
+natTestBit : Nat -> Nat -> Bool
+natTestBit n i = natMod (natShiftRightNat n i) 2 == 1
+
+-- Try to reduce Nat.testBit n i to true/false
+tryNatTestBit : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatTestBit args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  i <- getNatLit arg1'
+  let result = mkBool (natTestBit n i)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+------------------------------------------------------------------------
+-- String.bytes native support
+------------------------------------------------------------------------
+
+-- UTF-8 encoding: Convert a single Unicode code point to UTF-8 bytes
+-- Uses natShiftRightNat and natMod which are defined above
+encodeCharUtf8 : Char -> List Nat
+encodeCharUtf8 c =
+  let cp = cast {to=Nat} (ord c)
+  in if cp < 0x80 then
+       [cp]
+     else if cp < 0x800 then
+       [0xC0 + natShiftRightNat cp 6, 0x80 + natMod cp 64]
+     else if cp < 0x10000 then
+       [0xE0 + natShiftRightNat cp 12, 0x80 + natMod (natShiftRightNat cp 6) 64, 0x80 + natMod cp 64]
+     else
+       [0xF0 + natShiftRightNat cp 18, 0x80 + natMod (natShiftRightNat cp 12) 64, 0x80 + natMod (natShiftRightNat cp 6) 64, 0x80 + natMod cp 64]
+
+-- Encode an entire string to UTF-8 bytes
+encodeStringUtf8 : String -> List Nat
+encodeStringUtf8 s = concatMap encodeCharUtf8 (unpack s)
+
+-- UInt8 type expression: UInt8
+uint8Type : ClosedExpr
+uint8Type = Const uint8Name []
+
+-- Make a UInt8 literal: UInt8.ofBitVec (BitVec.ofNat 8 n)
+mkUInt8 : Nat -> ClosedExpr
+mkUInt8 n =
+  let n' = natMod n 256  -- Ensure it fits in 8 bits
+  in App (Const uint8OfBitVecName []) (App (App (Const bitVecOfNatName []) (NatLit 8)) (NatLit n'))
+
+-- Make List UInt8 type
+listUInt8Type : ClosedExpr
+listUInt8Type = App (Const listName [Level.Zero]) uint8Type
+
+-- Make List.nil {UInt8}
+mkListNil : ClosedExpr
+mkListNil = App (Const listNilName [Level.Zero]) uint8Type
+
+-- Make List.cons {UInt8} head tail
+mkListCons : ClosedExpr -> ClosedExpr -> ClosedExpr
+mkListCons head tail = App (App (App (Const listConsName [Level.Zero]) uint8Type) head) tail
+
+-- Make a List of UInt8 from a list of byte values
+mkUInt8List : List Nat -> ClosedExpr
+mkUInt8List [] = mkListNil
+mkUInt8List (b :: bs) = mkListCons (mkUInt8 b) (mkUInt8List bs)
+
+-- Make Array UInt8 type
+arrayUInt8Type : ClosedExpr
+arrayUInt8Type = App (Const arrayName [Level.Zero]) uint8Type
+
+-- Make Array.mk {UInt8} list
+mkArrayMk : ClosedExpr -> ClosedExpr
+mkArrayMk listExpr = App (App (Const arrayMkName [Level.Zero]) uint8Type) listExpr
+
+-- Make ByteArray.mk array
+mkByteArrayMk : ClosedExpr -> ClosedExpr
+mkByteArrayMk arrayExpr = App (Const byteArrayMkName []) arrayExpr
+
+-- Make a ByteArray from a string's UTF-8 encoding
+mkByteArray : String -> ClosedExpr
+mkByteArray s =
+  let bytes = encodeStringUtf8 s
+      listExpr = mkUInt8List bytes
+      arrayExpr = mkArrayMk listExpr
+  in mkByteArrayMk arrayExpr
+
+-- Try to reduce String.bytes s to ByteArray.mk (Array.mk [bytes...])
+tryStringBytes : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryStringBytes args whnfStep = do
+  guard (length args >= 1)
+  arg0 <- listNth args 0
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  s <- getStringLit arg0'
+  let result = mkByteArray s
+  let remaining = listDrop 1 args
+  pure (mkApp result remaining)
+
 -- HMod class and method
 hModClassName : Name
 hModClassName = Str "HMod" Anonymous
@@ -711,14 +993,8 @@ tryFinVal args whnfStep = do
     Nothing => Nothing
 
 -- BitVec operations
-bitVecName : Name
-bitVecName = Str "BitVec" Anonymous
-
 bitVecToNatName : Name
 bitVecToNatName = Str "toNat" bitVecName
-
-bitVecOfNatName : Name
-bitVecOfNatName = Str "ofNat" bitVecName
 
 -- Try to reduce BitVec.toNat
 tryBitVecToNat : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
@@ -1070,6 +1346,13 @@ tryNativeEval e whnfStep = do
       else if name == natMulName then tryNatMul args step
       else if name == natDivName then tryNatDiv args step
       else if name == natModName then tryNatMod args step
+      -- Nat bitwise operations
+      else if name == natLandName then tryNatLand args step
+      else if name == natLorName then tryNatLor args step
+      else if name == natXorName then tryNatXor args step
+      else if name == natShiftLeftName then tryNatShiftLeft args step
+      else if name == natShiftRightName then tryNatShiftRight args step
+      else if name == natTestBitName then tryNatTestBit args step
       else if name == hModHModName then tryHModHMod args step
       else if name == natPowName then tryNatPow args step
       else if name == hPowHPowName then tryHPowHPow args step
@@ -1077,6 +1360,7 @@ tryNativeEval e whnfStep = do
       else if name == stringBeqName then tryStringBeq args step
       else if name == stringAppendName then tryStringAppend args step
       else if name == stringLengthName then tryStringLength args step
+      else if name == stringBytesName then tryStringBytes args step
       -- Fin operations
       else if name == finValName then tryFinVal args step
       -- BitVec operations

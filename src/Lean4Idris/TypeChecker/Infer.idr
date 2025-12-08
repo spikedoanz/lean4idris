@@ -199,6 +199,48 @@ export covering
 replaceAllPlaceholdersWithBVars : {n : Nat} -> LocalCtx n -> ClosedExpr -> Expr n
 replaceAllPlaceholdersWithBVars {n} ctx e = believe_me (replaceLocalsWithBVars (toList ctx) 0 e)
 
+-- Replace BVars that reference context entries with placeholders
+-- This handles the case where a ClosedExpr actually has dangling BVars
+-- (due to believe_me casts) that should be represented as placeholders
+covering
+replaceBVarsWithPlaceholders : List LocalEntry -> Nat -> ClosedExpr -> ClosedExpr
+replaceBVarsWithPlaceholders entries depth (Sort l) = Sort l
+replaceBVarsWithPlaceholders entries depth (BVar i) =
+  let idx = finToNat i in
+  -- If the BVar index goes past the current depth, it references a context entry
+  if idx >= depth
+    then case getPlaceholderAt entries (minus idx depth) of
+           Just ph => ph
+           Nothing => BVar i  -- Keep as is if no placeholder found
+    else BVar i  -- BVar is bound locally, keep it
+  where
+    getPlaceholderAt : List LocalEntry -> Nat -> Maybe ClosedExpr
+    getPlaceholderAt [] _ = Nothing
+    getPlaceholderAt (e :: es) Z = e.placeholder
+    getPlaceholderAt (e :: es) (S k) = getPlaceholderAt es k
+replaceBVarsWithPlaceholders entries depth (Local id name) = Local id name
+replaceBVarsWithPlaceholders entries depth (Const name ls) = Const name ls
+replaceBVarsWithPlaceholders entries depth (App f x) =
+  App (replaceBVarsWithPlaceholders entries depth f) (replaceBVarsWithPlaceholders entries depth x)
+replaceBVarsWithPlaceholders entries depth (Lam name bi ty body) =
+  Lam name bi (replaceBVarsWithPlaceholders entries depth ty)
+              (believe_me (replaceBVarsWithPlaceholders entries (S depth) (believe_me body)))
+replaceBVarsWithPlaceholders entries depth (Pi name bi dom cod) =
+  Pi name bi (replaceBVarsWithPlaceholders entries depth dom)
+             (believe_me (replaceBVarsWithPlaceholders entries (S depth) (believe_me cod)))
+replaceBVarsWithPlaceholders entries depth (Let name ty val body) =
+  Let name (replaceBVarsWithPlaceholders entries depth ty)
+           (replaceBVarsWithPlaceholders entries depth val)
+           (believe_me (replaceBVarsWithPlaceholders entries (S depth) (believe_me body)))
+replaceBVarsWithPlaceholders entries depth (Proj sn i s) =
+  Proj sn i (replaceBVarsWithPlaceholders entries depth s)
+replaceBVarsWithPlaceholders entries depth (NatLit k) = NatLit k
+replaceBVarsWithPlaceholders entries depth (StringLit s) = StringLit s
+
+export covering
+closeBVarsInType : List LocalEntry -> ClosedExpr -> ClosedExpr
+closeBVarsInType entries e = replaceBVarsWithPlaceholders entries 0 e
+
 ------------------------------------------------------------------------
 -- Structure/Projection Helpers
 ------------------------------------------------------------------------
@@ -654,11 +696,17 @@ mutual
   inferTypeOpenE env ctx (Let name tyExpr valExpr body) = do
     (env1, ctx1, tyTy) <- inferTypeOpenE env ctx tyExpr
     _ <- ensureSort env1 tyTy
+    -- Close the type expression with placeholders first
     let (env2, ctx2, tyClosed) = closeWithPlaceholders env1 ctx1 tyExpr
-    let (env3, ctx3, valClosed) = closeWithPlaceholders env2 ctx2 valExpr
-    (env4, ctx4, valTy) <- inferTypeOpenE env3 ctx3 valExpr
-    -- Use definitional equality for type comparison
-    eq <- isDefEqSimple env4 tyClosed valTy
+    -- Infer the type of the value AFTER closing tyExpr
+    -- This ensures valTy uses the same placeholders as tyClosed
+    (env3, ctx3, valTy) <- inferTypeOpenE env2 ctx2 valExpr
+    -- Close the value expression
+    let (env4, ctx4, valClosed) = closeWithPlaceholders env3 ctx3 valExpr
+    -- Convert any dangling BVars in valTy to placeholders for comparison
+    let valTyClosed = closeBVarsInType (toList ctx4) valTy
+    -- Compare the types using definitional equality
+    eq <- isDefEqSimple env4 tyClosed valTyClosed
     if eq
       then do
         let ctx' = extendCtxLet name tyClosed valClosed ctx4

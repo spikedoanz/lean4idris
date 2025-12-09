@@ -42,15 +42,21 @@ mutual
   ensureSortOfApp env' ty args = case ty of
     Sort l => pure l
     Pi _ _ _ cod => pure Zero
-    Const name _ => case lookupDecl name env' of
+    Const name levels => case lookupDecl name env' of
       Just decl => case declType decl of
-        Just dty => ensureSortOfApp env' dty args
+        Just dty =>
+          let params = declLevelParams decl
+              dty' = instantiateLevelParams params levels dty
+          in ensureSortOfApp env' dty' args
         Nothing => throw (OtherError $ "ensureSort: const " ++ show name ++ " has no type")
       Nothing => throw (OtherError $ "ensureSort: unknown const " ++ show name)
     App _ _ => case getAppHead ty of
-      Just (name, innerArgs) => case lookupDecl name env' of
+      Just (name, levels, innerArgs) => case lookupDecl name env' of
         Just decl => case declType decl of
-          Just dty => ensureSortOfApp env' dty (innerArgs ++ args)
+          Just dty =>
+            let params = declLevelParams decl
+                dty' = instantiateLevelParams params levels dty
+            in ensureSortOfApp env' dty' (innerArgs ++ args)
           Nothing => throw (TypeExpected ty)
         Nothing => throw (TypeExpected ty)
       Nothing => throw (TypeExpected ty)
@@ -64,9 +70,12 @@ mutual
       Just ty => ensureSortWhnf env' ty
       Nothing => throw (OtherError $ "ensureSortWhnf: Local " ++ show id ++ " type not found")
   ensureSortWhnf env' expr@(App _ _) = case getAppHead expr of
-    Just (name, args) => case lookupDecl name env' of
+    Just (name, levels, args) => case lookupDecl name env' of
       Just decl => case declType decl of
-        Just ty => ensureSortOfApp env' ty args
+        Just ty =>
+          let params = declLevelParams decl
+              ty' = instantiateLevelParams params levels ty
+          in ensureSortOfApp env' ty' args
         Nothing => throw (TypeExpected expr)
       Nothing => throw (OtherError $ "ensureSort: stuck App with unknown head " ++ show name)
     Nothing => throw (TypeExpected expr)
@@ -106,9 +115,12 @@ mutual
         Nothing => throw (FunctionExpected expr)
       Nothing => throw (OtherError $ "ensurePiWhnf Const: " ++ show name ++ " not found")
     App _ _ => case getAppHead expr of
-      Just (name, args) => case lookupDecl name env' of
+      Just (name, levels, args) => case lookupDecl name env' of
         Just decl => case declType decl of
-          Just ty => ensurePiOfApp env' ty args
+          Just ty =>
+            let params = declLevelParams decl
+                ty' = instantiateLevelParams params levels ty
+            in ensurePiOfApp env' ty' args
           Nothing => throw (FunctionExpected expr)
         Nothing => throw (OtherError $ "ensurePi: stuck App with unknown head " ++ show name)
       Nothing => throw (FunctionExpected expr)

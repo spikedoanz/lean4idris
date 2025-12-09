@@ -378,6 +378,9 @@ natDivName = Str "div" natName
 natModName : Name
 natModName = Str "mod" natName
 
+natGcdName : Name
+natGcdName = Str "gcd" natName
+
 natSuccName : Name
 natSuccName = Str "succ" natName
 
@@ -636,6 +639,31 @@ tryNatMod args whnfStep = do
   n <- getNatLit arg0'
   m <- getNatLit arg1'
   let result = NatLit (natMod n m)
+  let remaining = listDrop 2 args
+  pure (mkApp result remaining)
+
+-- Helper: Nat gcd (using Euclidean algorithm)
+natGcd : Nat -> Nat -> Nat
+natGcd a 0 = a
+natGcd a (S b) = go (a + S b) a (S b)
+  where
+    go : Nat -> Nat -> Nat -> Nat
+    go 0 x _ = x  -- fuel exhausted
+    go _ x 0 = x  -- gcd(x, 0) = x
+    go (S fuel) x y = go fuel y (natMod x y)
+
+-- Try to reduce Nat.gcd n m to a NatLit
+-- Nat.gcd : Nat → Nat → Nat
+tryNatGcd : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatGcd args whnfStep = do
+  guard (length args >= 2)
+  arg0 <- listNth args 0
+  arg1 <- listNth args 1
+  let arg0' = iterWhnfStep whnfStep arg0 100
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  n <- getNatLit arg0'
+  m <- getNatLit arg1'
+  let result = NatLit (natGcd n m)
   let remaining = listDrop 2 args
   pure (mkApp result remaining)
 
@@ -1362,6 +1390,7 @@ tryNativeEval e whnfStep = do
       else if name == natSuccName then tryNatSucc args step
       else if name == natDivName then tryNatDiv args step
       else if name == natModName then tryNatMod args step
+      else if name == natGcdName then tryNatGcd args step
       -- Nat bitwise operations
       else if name == natLandName then tryNatLand args step
       else if name == natLorName then tryNatLor args step

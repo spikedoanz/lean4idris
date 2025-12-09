@@ -1113,6 +1113,27 @@ ofNatClassName = Str "OfNat" Anonymous
 ofNatOfNatName : Name
 ofNatOfNatName = Str "ofNat" ofNatClassName
 
+-- OfNat.ofNat reduction: OfNat.ofNat α n inst => n (when α is Nat)
+-- The args are: [α, n, inst]
+covering
+tryOfNatOfNat : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryOfNatOfNat args whnfStep = do
+  guard (length args >= 3)
+  -- Get the type argument α
+  tyArg <- listNth args 0
+  let tyArg' = iterWhnfStep whnfStep tyArg 100
+  -- Check if α is Nat
+  case tyArg' of
+    Const n _ =>
+      if n == natName
+        then do
+          -- Return the nat literal argument n
+          nArg <- listNth args 1
+          let remaining = listDrop 3 args
+          Just (mkApp nArg remaining)
+        else Nothing
+    _ => Nothing
+
 -- UInt32.ofBitVec name
 uint32OfBitVecName : Name
 uint32OfBitVecName = Str "ofBitVec" uint32Name
@@ -1447,6 +1468,8 @@ tryNativeEval e whnfStep = do
       -- decide with decidability instances (both Decidable.decide and decide)
       else if name == decideFnName then tryDecide args step
       else if name == decidableDecideName then tryDecide args step
+      -- OfNat.ofNat for Nat - reduce to the literal
+      else if name == ofNatOfNatName then tryOfNatOfNat args step
       else Nothing
 
 ------------------------------------------------------------------------
@@ -1533,10 +1556,10 @@ whnfCore e = pure (whnfCorePure 1000 e)
       Just e' => whnfCorePure k e'
 
 export
-getAppHead : ClosedExpr -> Maybe (Name, List ClosedExpr)
+getAppHead : ClosedExpr -> Maybe (Name, List Level, List ClosedExpr)
 getAppHead expr = go expr []
   where
-    go : ClosedExpr -> List ClosedExpr -> Maybe (Name, List ClosedExpr)
+    go : ClosedExpr -> List ClosedExpr -> Maybe (Name, List Level, List ClosedExpr)
     go (App f' arg) args = go f' (arg :: args)
-    go (Const name _) args = Just (name, args)
+    go (Const name levels) args = Just (name, levels, args)
     go _ _ = Nothing

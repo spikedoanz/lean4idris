@@ -106,11 +106,11 @@ data TCError : Type where
 
 export
 showExprHead : ClosedExpr -> String
-showExprHead (Sort _) = "Sort"
+showExprHead (Sort l) = "Sort " ++ show l
 showExprHead (Const n _) = "Const " ++ show n
 showExprHead (App f _) = "App (" ++ showExprHead f ++ " ...)"
 showExprHead (Lam _ _ _ _) = "Lam"
-showExprHead (Pi _ _ _ _) = "Pi"
+showExprHead (Pi _ _ dom _) = "Pi (" ++ showExprHead dom ++ " -> ...)"
 showExprHead (Let _ _ _ _) = "Let"
 showExprHead (BVar i) = "BVar " ++ show (finToNat i)
 showExprHead (Local id _) = "Local " ++ show id

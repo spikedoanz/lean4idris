@@ -141,6 +141,7 @@ checkAllDeclsIO fuel cont verbose profile env (d :: ds) cache passed failed time
         Left err => do
           putStrLn "FAIL"
           let errMsg = show err ++ " (in " ++ name ++ ")"
+          when verbose $ putStrLn $ "  Error: " ++ errMsg
           let stat = MkDeclStats name 0 elapsed "fail"  -- Can't know fuel used on error
           if cont
             then checkAllDeclsIO fuel cont verbose profile env ds cache passed (S failed) timedOut cached (errMsg :: errors) (stat :: stats)

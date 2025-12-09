@@ -27,6 +27,7 @@ modules = Lean4Idris
         , Lean4Idris.TypeChecker
         , Lean4Idris.TypeChecker.Monad
         , Lean4Idris.TypeChecker.Reduction
+        , Lean4Idris.TypeChecker.NativeReduction
         , Lean4Idris.TypeChecker.Infer
         , Lean4Idris.TypeChecker.DefEq
         , Lean4Idris.TypeChecker.Validate

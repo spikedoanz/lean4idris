@@ -357,42 +357,44 @@ tryNatRecIota e =
 
 export covering
 normalizeTypeOpenWithEnv : TCEnv -> {n : Nat} -> Expr n -> TC (Expr n)
-normalizeTypeOpenWithEnv env e = case betaReduceN e of
-  Just e' => normalizeTypeOpenWithEnv env e'
-  Nothing => case e of
-    Pi name bi dom cod => do
-      dom' <- normalizeTypeOpenWithEnv env dom
-      cod' <- normalizeTypeOpenWithEnv env cod
-      pure (Pi name bi dom' cod')
-    Lam name bi ty body => do
-      ty' <- normalizeTypeOpenWithEnv env ty
-      body' <- normalizeTypeOpenWithEnv env body
-      pure (Lam name bi ty' body')
-    App f arg => do
-      f' <- normalizeTypeOpenWithEnv env f
-      arg' <- normalizeTypeOpenWithEnv env arg
-      let app = App f' arg'
-      case betaReduceN app of
-        Just reduced => normalizeTypeOpenWithEnv env reduced
-        Nothing => case tryNatRecIota app of
+normalizeTypeOpenWithEnv env e = do
+  useFuel  -- Consume fuel on each normalization step to prevent infinite loops
+  case betaReduceN e of
+    Just e' => normalizeTypeOpenWithEnv env e'
+    Nothing => case e of
+      Pi name bi dom cod => do
+        dom' <- normalizeTypeOpenWithEnv env dom
+        cod' <- normalizeTypeOpenWithEnv env cod
+        pure (Pi name bi dom' cod')
+      Lam name bi ty body => do
+        ty' <- normalizeTypeOpenWithEnv env ty
+        body' <- normalizeTypeOpenWithEnv env body
+        pure (Lam name bi ty' body')
+      App f arg => do
+        f' <- normalizeTypeOpenWithEnv env f
+        arg' <- normalizeTypeOpenWithEnv env arg
+        let app = App f' arg'
+        case betaReduceN app of
           Just reduced => normalizeTypeOpenWithEnv env reduced
-          Nothing => case tryDeltaOpenN env app of
+          Nothing => case tryNatRecIota app of
             Just reduced => normalizeTypeOpenWithEnv env reduced
-            Nothing => case tryProjReductionN env f' of
-              Just fReduced => normalizeTypeOpenWithEnv env (App fReduced arg')
-              Nothing => pure app
-    Let name ty val body => normalizeTypeOpenWithEnv env (instantiate1N body val)
-    Proj n i e => do
-      e' <- normalizeTypeOpenWithEnv env e
-      let proj = Proj n i e'
-      case tryProjReductionN env proj of
-        Just reduced => normalizeTypeOpenWithEnv env reduced
-        Nothing => pure proj
-    Sort l => pure (Sort (simplify l))
-    Const name levels => case unfoldConstN env name levels of
-      Just unfolded => normalizeTypeOpenWithEnv env unfolded
-      Nothing => pure (Const name levels)
-    e => pure e
+            Nothing => case tryDeltaOpenN env app of
+              Just reduced => normalizeTypeOpenWithEnv env reduced
+              Nothing => case tryProjReductionN env f' of
+                Just fReduced => normalizeTypeOpenWithEnv env (App fReduced arg')
+                Nothing => pure app
+      Let name ty val body => normalizeTypeOpenWithEnv env (instantiate1N body val)
+      Proj n i e => do
+        e' <- normalizeTypeOpenWithEnv env e
+        let proj = Proj n i e'
+        case tryProjReductionN env proj of
+          Just reduced => normalizeTypeOpenWithEnv env reduced
+          Nothing => pure proj
+      Sort l => pure (Sort (simplify l))
+      Const name levels => case unfoldConstN env name levels of
+        Just unfolded => normalizeTypeOpenWithEnv env unfolded
+        Nothing => pure (Const name levels)
+      e => pure e
 
 export covering
 normalizeType : TCEnv -> ClosedExpr -> TC ClosedExpr
@@ -403,14 +405,17 @@ normalizeType env e = do
     covering
     normalizeDeep : ClosedExpr -> TC ClosedExpr
     normalizeDeep (Pi name bi dom cod) = do
+      useFuel  -- Consume fuel on each normalization step to prevent infinite loops
       dom' <- normalizeType env dom
       cod' <- normalizeTypeOpenWithEnv env cod
       pure (Pi name bi dom' cod')
     normalizeDeep (Lam name bi ty body) = do
+      useFuel
       ty' <- normalizeType env ty
       body' <- normalizeTypeOpenWithEnv env body
       pure (Lam name bi ty' body')
     normalizeDeep (App f arg) = do
+      useFuel
       f' <- normalizeType env f
       arg' <- normalizeType env arg
       -- After normalizing arguments, we need to try reductions like iota
@@ -421,11 +426,13 @@ normalizeType env e = do
         App _ _ => pure app'  -- whnf didn't reduce to a different form, so we're done
         _ => normalizeDeep app'  -- whnf reduced, continue normalizing
     normalizeDeep (Let name ty val body) = do
+      useFuel
       ty' <- normalizeType env ty
       val' <- normalizeType env val
       body' <- normalizeTypeOpenWithEnv env body
       pure (Let name ty' val' body')
     normalizeDeep (Proj n i e) = do
+      useFuel
       e' <- normalizeType env e
       pure (Proj n i e')
     normalizeDeep (Sort l) = pure (Sort (simplify l))

@@ -164,6 +164,30 @@ getCtorFromMajor (NatLit (S n)) args = Just (iotaNatSuccName, [], [NatLit n])
 getCtorFromMajor (Const name levels) args = Just (name, levels, args)
 getCtorFromMajor _ _ = Nothing
 
+-- Name for Eq.refl constructor (for K-like reduction)
+eqReflName : Name
+eqReflName = Str "refl" (Str "Eq" Anonymous)
+
+-- Try K-like reduction for Eq.rec when a == b in Eq α a b
+-- This allows reduction even when the proof isn't a visible Eq.refl constructor
+tryKLikeReduction : RecursorInfo -> List Level -> List ClosedExpr ->
+                   (ClosedExpr -> Maybe ClosedExpr) -> Maybe (Name, List Level, List ClosedExpr)
+tryKLikeReduction recInfo recLevels args whnfStep =
+  if not recInfo.isK then Nothing
+  else if length args <= recInfo.numParams + recInfo.numMotives + recInfo.numMinors + recInfo.numIndices then Nothing
+  else case listNth args 0 of
+    Nothing => Nothing
+    Just alpha => case listNth args 1 of
+      Nothing => Nothing
+      Just a => case listNth args (recInfo.numParams + recInfo.numMotives + recInfo.numMinors) of
+        Nothing => Nothing
+        Just b =>
+          let a' = iterWhnfStep whnfStep a 100
+              b' = iterWhnfStep whnfStep b 100
+          in if exprEq a' b'
+             then Just (eqReflName, recLevels, [alpha, a])
+             else Nothing
+
 export covering
 tryIotaReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryIotaReduction env e whnfStep = do
@@ -176,8 +200,9 @@ tryIotaReduction env e whnfStep = do
   let major' = iterWhnfStep whnfStep major 100
   let _ = if debugIota then trace "IOTA: major after whnf=\{ppClosedExpr major'}" () else ()
   let (majorHead, majorArgs) = getAppSpine major'
-  -- Use getCtorFromMajor to handle NatLit as well as regular constructors
-  (ctorName, _, ctorFieldArgs) <- getCtorFromMajor majorHead majorArgs
+  -- First try direct constructor, then K-like reduction for Eq.rec
+  (ctorName, _, ctorFieldArgs) <- getCtorFromMajor majorHead majorArgs <|>
+                                   tryKLikeReduction recInfo recLevels args whnfStep
   let _ = if debugIota then trace "IOTA: constructor=\{show ctorName}" () else ()
   (_, ctorIdx, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
   let _ = if debugIota then trace "IOTA: ctorIdx=\{show ctorIdx} ctorNumParams=\{show ctorNumParams} ctorNumFields=\{show ctorNumFields}" () else ()

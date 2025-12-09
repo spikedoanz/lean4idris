@@ -156,6 +156,95 @@ tryEtaExpansion recurEq env t s = do
     Nothing => tryEtaExpansionCore recurEq env s t
 
 ------------------------------------------------------------------------
+-- Structure Eta Expansion
+------------------------------------------------------------------------
+
+-- Check if a type is a structure (single-constructor inductive)
+-- Returns: (structName, ctorName, levels, numParams, numFields)
+getStructureInfo : TCEnv -> ClosedExpr -> Maybe (Name, Name, List Level, Nat, Nat)
+getStructureInfo env ty =
+  let (head, params) = getAppSpine ty in
+  case head of
+    Const typeName levels =>
+      case lookupDecl typeName env of
+        Just (IndDecl info _) =>
+          case info.constructors of
+            [ctor] =>  -- Single constructor = structure
+              case lookupDecl ctor.name env of
+                Just (CtorDecl _ _ _ _ numParams numFields _) =>
+                  Just (typeName, ctor.name, levels, numParams, numFields)
+                _ => Nothing
+            _ => Nothing  -- Multiple constructors = not a structure
+        _ => Nothing
+    _ => Nothing
+
+-- Check if expression is a constructor application
+isCtorApp : TCEnv -> ClosedExpr -> Bool
+isCtorApp env e =
+  let (head, _) = getAppSpine e in
+  case head of
+    Const name _ =>
+      case lookupDecl name env of
+        Just (CtorDecl _ _ _ _ _ _ _) => True
+        _ => False
+    _ => False
+
+-- Build projections for structure eta expansion
+-- Given struct of type T, build [Proj T 0 struct, Proj T 1 struct, ...]
+buildProjections : Name -> Nat -> ClosedExpr -> List ClosedExpr
+buildProjections structName numFields struct = go 0 numFields
+  where
+    go : Nat -> Nat -> List ClosedExpr
+    go i Z = []
+    go i (S remaining) = Proj structName i struct :: go (S i) remaining
+
+-- Eta-expand a term of structure type to constructor form
+-- Given e : Prod A B, returns Prod.mk A B (e.fst) (e.snd)
+etaExpandStruct : Name -> List Level -> List ClosedExpr -> Nat -> ClosedExpr -> ClosedExpr
+etaExpandStruct ctorName levels params numFields struct =
+  let projections = buildProjections (ctorParent ctorName) numFields struct
+      ctor = Const ctorName levels
+  in mkApp ctor (params ++ projections)
+  where
+    -- Get parent type name from constructor name (e.g., Prod.mk -> Prod)
+    ctorParent : Name -> Name
+    ctorParent (Str _ parent) = parent
+    ctorParent n = n
+
+-- Try structure eta expansion for definitional equality
+-- If one side is a constructor application and the other is not,
+-- eta-expand the non-constructor side and compare.
+covering
+tryStructureEtaCore : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                      TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryStructureEtaCore recurEq env t s = do
+  -- Only try if t is a ctor app and s is not
+  if isCtorApp env t && not (isCtorApp env s)
+    then do
+      -- Get type of s to know the structure info
+      sTy <- inferType env s
+      sTy' <- whnf env sTy
+      case getStructureInfo env sTy' of
+        Just (structName, ctorName, levels, numParams, numFields) =>
+          let (_, params) = getAppSpine sTy'
+              -- params should have at least numParams elements
+              typeParams = listTake numParams params
+              sExpanded = etaExpandStruct ctorName levels typeParams numFields s
+          in do result <- recurEq env t sExpanded
+                pure (Just result)
+        Nothing => pure Nothing
+    else pure Nothing
+
+covering
+tryStructureEta : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                  TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryStructureEta recurEq env t s = do
+  result1 <- tryStructureEtaCore recurEq env t s
+  case result1 of
+    Just b => pure (Just b)
+    Nothing => tryStructureEtaCore recurEq env s t
+
+------------------------------------------------------------------------
 -- Definitional Equality
 ------------------------------------------------------------------------
 
@@ -241,13 +330,18 @@ mutual
         case etaResult of
           Just b => pure b
           Nothing => do
-            -- WHNF structural comparison failed, try full normalization as fallback
-            t' <- normalizeType env t
-            s' <- normalizeType env s
-            -- Check if normalization made progress
-            if exprEq t t' && exprEq s s'
-              then pure False  -- No progress, give up
-              else isDefEqNormalized env t' s'
+            -- Try structure eta expansion
+            structEtaResult <- tryStructureEta isDefEq env t s
+            case structEtaResult of
+              Just b => pure b
+              Nothing => do
+                -- WHNF structural comparison failed, try full normalization as fallback
+                t' <- normalizeType env t
+                s' <- normalizeType env s
+                -- Check if normalization made progress
+                if exprEq t t' && exprEq s s'
+                  then pure False  -- No progress, give up
+                  else isDefEqNormalized env t' s'
 
 ------------------------------------------------------------------------
 -- Convenience Functions

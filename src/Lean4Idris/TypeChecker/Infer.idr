@@ -275,6 +275,12 @@ getStructCtor env structName = do
       _ => Just ctorInfo
     _ => Nothing
 
+||| Build projections of earlier fields for substitution.
+||| For field at index `idx`, we need projections 0..(idx-1) of the struct.
+buildFieldProjections : Name -> Nat -> ClosedExpr -> List ClosedExpr
+buildFieldProjections structName idx structExpr =
+  map (\i => Proj structName i structExpr) [0 .. (minus idx 1)]
+
 export covering
 getProjType : TCEnv -> Name -> Nat -> List ClosedExpr -> Maybe ClosedExpr
 getProjType env structName idx structParams = do
@@ -282,6 +288,19 @@ getProjType env structName idx structParams = do
   let numParams = indInfo.numParams
   ctor <- getStructCtor env structName
   getNthPiDomSubst (numParams + idx) structParams ctor.type
+
+||| Get the type of a projection, accounting for dependent fields.
+||| For dependent fields (like Subtype.property), the field type may depend
+||| on projections of earlier fields.
+export covering
+getProjTypeWithStruct : TCEnv -> Name -> Nat -> List ClosedExpr -> ClosedExpr -> Maybe ClosedExpr
+getProjTypeWithStruct env structName idx structParams structExpr = do
+  indInfo <- getInductiveInfo env structName
+  let numParams = indInfo.numParams
+  ctor <- getStructCtor env structName
+  let fieldProjs = buildFieldProjections structName idx structExpr
+  -- Substitute both type parameters AND earlier field projections
+  getNthPiDomSubst (numParams + idx) (structParams ++ fieldProjs) ctor.type
 
 ------------------------------------------------------------------------
 -- Normalization
@@ -764,9 +783,13 @@ mutual
       Just (tyName, _) =>
         if tyName /= structName
           then throw (OtherError $ "projection: type mismatch, expected " ++ show structName ++ " got " ++ show tyName)
-          else case getProjType env1 structName idx params of
-            Nothing => throw (OtherError $ "projection: could not compute field type")
-            Just fieldTy => pure (env1, ctx1, fieldTy)
+          else
+            -- Use getProjTypeWithStruct to handle dependent fields properly.
+            -- Cast the open structExpr to ClosedExpr since the runtime representation is the same.
+            let structClosed : ClosedExpr = believe_me structExpr
+            in case getProjTypeWithStruct env1 structName idx params structClosed of
+              Nothing => throw (OtherError $ "projection: could not compute field type")
+              Just fieldTy => pure (env1, ctx1, fieldTy)
   inferTypeOpenE env ctx (NatLit _) = pure (env, ctx, Const (Str "Nat" Anonymous) [])
   inferTypeOpenE env ctx (StringLit _) = pure (env, ctx, Const (Str "String" Anonymous) [])
 

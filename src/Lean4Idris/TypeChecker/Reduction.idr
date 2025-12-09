@@ -1088,6 +1088,14 @@ instDecidableLtNatName = Str "instDecidableLtNat" Anonymous
 instDecidableLtBitVecName : Name
 instDecidableLtBitVecName = Str "instDecidableLtBitVec" Anonymous
 
+-- instDecidableLeBitVec
+instDecidableLeBitVecName : Name
+instDecidableLeBitVecName = Str "instDecidableLeBitVec" Anonymous
+
+-- instDecidableEqBitVec
+instDecidableEqBitVecName : Name
+instDecidableEqBitVecName = Str "instDecidableEqBitVec" Anonymous
+
 -- UInt32.decLt
 uint32DecLtName : Name
 uint32DecLtName = Str "decLt" uint32Name
@@ -1354,6 +1362,26 @@ tryDecide args whnfStep = do
         na <- tryGetBitVecAsNat whnfStep a
         nb <- tryGetBitVecAsNat whnfStep b
         let result = mkBool (na < nb)
+        let remaining = listDrop 2 args
+        pure (mkApp result remaining)
+      -- instDecidableLeBitVec w a b
+      else if name == instDecidableLeBitVecName then do
+        guard (length instArgs >= 3)
+        a <- listNth instArgs 1
+        b <- listNth instArgs 2
+        na <- tryGetBitVecAsNat whnfStep a
+        nb <- tryGetBitVecAsNat whnfStep b
+        let result = mkBool (na <= nb)
+        let remaining = listDrop 2 args
+        pure (mkApp result remaining)
+      -- instDecidableEqBitVec w a b
+      else if name == instDecidableEqBitVecName then do
+        guard (length instArgs >= 3)
+        a <- listNth instArgs 1
+        b <- listNth instArgs 2
+        na <- tryGetBitVecAsNat whnfStep a
+        nb <- tryGetBitVecAsNat whnfStep b
+        let result = mkBool (na == nb)
         let remaining = listDrop 2 args
         pure (mkApp result remaining)
       -- Nat.decLe a b

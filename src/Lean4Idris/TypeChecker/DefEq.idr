@@ -194,7 +194,8 @@ mutual
 
   export covering
   isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
-  isDefEq env e1 e2 =
+  isDefEq env e1 e2 = do
+    useFuel  -- Consume fuel to prevent infinite loops in complex equalities
     -- Fast path: syntactic equality check before any reduction
     if exprEq e1 e2
       then pure True

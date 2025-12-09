@@ -160,8 +160,8 @@ checkThmDecl env name ty value levelParams = do
       if eq
         then pure ()
         else throw (OtherError $ "theorem proof type mismatch for " ++ show name
-                   ++ "\n  inferred: " ++ show valueTy
-                   ++ "\n  declared: " ++ show ty)
+                   ++ "\n  inferred: " ++ ppClosedExpr valueTy
+                   ++ "\n  declared: " ++ ppClosedExpr ty)
 
 ------------------------------------------------------------------------
 -- Add Validated Declarations

@@ -15,6 +15,45 @@ import Debug.Trace
 %default total
 
 ------------------------------------------------------------------------
+-- NatLit/Nat constructor equality
+------------------------------------------------------------------------
+
+-- Nat constructor names
+natZeroName : Name
+natZeroName = Str "zero" (Str "Nat" Anonymous)
+
+natSuccName : Name
+natSuccName = Str "succ" (Str "Nat" Anonymous)
+
+-- Convert a NatLit to Nat.zero/Nat.succ form
+-- NatLit 0 -> Const Nat.zero []
+-- NatLit (S n) -> App (Const Nat.succ []) (NatLit n)
+natLitToNatExpr : Nat -> ClosedExpr
+natLitToNatExpr Z = Const natZeroName []
+natLitToNatExpr (S n) = App (Const natSuccName []) (NatLit n)
+
+-- Try to extract a Nat from Nat.zero/Nat.succ constructors
+-- Returns Just n if the expression is a valid Nat representation
+-- This works recursively to handle nested succ applications
+covering
+getNatFromExpr : ClosedExpr -> Maybe Nat
+getNatFromExpr (NatLit n) = Just n
+getNatFromExpr (Const n []) = if n == natZeroName then Just 0 else Nothing
+getNatFromExpr (App f arg) = case f of
+  Const n [] => if n == natSuccName
+                  then map S (getNatFromExpr arg)
+                  else Nothing
+  _ => Nothing
+getNatFromExpr _ = Nothing
+
+-- Check if a NatLit equals a constructor-based Nat representation
+covering
+natLitEqNatExpr : Nat -> ClosedExpr -> Bool
+natLitEqNatExpr n e = case getNatFromExpr e of
+  Just m => n == m
+  Nothing => False
+
+------------------------------------------------------------------------
 -- Proof Irrelevance
 ------------------------------------------------------------------------
 
@@ -278,6 +317,9 @@ mutual
   isDefEqNormalized env (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
     if sn1 == sn2 && i1 == i2 then isDefEq env s1 s2 else pure False
   isDefEqNormalized env (NatLit n1) (NatLit n2) = pure (n1 == n2)
+  -- NatLit vs Nat.zero/Nat.succ: these should be definitionally equal
+  isDefEqNormalized env (NatLit n) other = pure (natLitEqNatExpr n other)
+  isDefEqNormalized env other (NatLit n) = pure (natLitEqNatExpr n other)
   isDefEqNormalized env (StringLit s1) (StringLit s2) = pure (s1 == s2)
   isDefEqNormalized env _ _ = pure False
 
@@ -324,6 +366,9 @@ mutual
       isDefEqWhnf (Proj sn1 i1 s1) (Proj sn2 i2 s2) =
         if sn1 == sn2 && i1 == i2 then isDefEq env s1 s2 else pure False
       isDefEqWhnf (NatLit n1) (NatLit n2) = pure (n1 == n2)
+      -- NatLit vs Nat.zero/Nat.succ: these should be definitionally equal
+      isDefEqWhnf (NatLit n) other = pure (natLitEqNatExpr n other)
+      isDefEqWhnf other (NatLit n) = pure (natLitEqNatExpr n other)
       isDefEqWhnf (StringLit s1) (StringLit s2) = pure (s1 == s2)
       isDefEqWhnf t s = do
         etaResult <- tryEtaExpansion isDefEq env t s

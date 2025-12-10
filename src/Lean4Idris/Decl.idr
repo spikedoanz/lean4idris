@@ -175,3 +175,12 @@ Show Declaration where
   show (IndDecl info _) = show info
   show (CtorDecl n _ ind _ _ _ _) = "constructor " ++ show n ++ " of " ++ show ind
   show (RecDecl info _) = "recursor " ++ show info.name
+
+||| Make a declaration opaque (non-unfoldable)
+||| Used when a declaration times out or fails type checking - we still add it
+||| to the environment for type lookups but prevent unfolding its value
+public export
+makeDeclOpaque : Declaration -> Declaration
+makeDeclOpaque (DefDecl n ty val _ safety ps) = DefDecl n ty val Opaq safety ps
+makeDeclOpaque (ThmDecl n ty val ps) = OpaqueDecl n ty val ps
+makeDeclOpaque d = d  -- Other declarations don't have values to unfold

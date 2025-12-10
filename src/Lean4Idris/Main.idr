@@ -135,16 +135,22 @@ checkAllDeclsIO fuel cont verbose profile env (d :: ds) cache passed failed time
           putStrLn "TIMEOUT"
           let errMsg = "fuel exhausted (in " ++ name ++ ")"
           let stat = MkDeclStats name fuel elapsed "timeout"
+          -- Add declaration to env as OPAQUE to prevent cascading "unknown constant" errors
+          -- while avoiding hangs from unfolding expensive computations
+          let env' = addDecl (makeDeclOpaque d) env
           if cont
-            then checkAllDeclsIO fuel cont verbose profile env ds cache passed failed (S timedOut) cached (errMsg :: errors) (stat :: stats)
+            then checkAllDeclsIO fuel cont verbose profile env' ds cache passed failed (S timedOut) cached (errMsg :: errors) (stat :: stats)
             else pure (Left errMsg, cache, reverse (stat :: stats))
         Left err => do
           putStrLn "FAIL"
           let errMsg = show err ++ " (in " ++ name ++ ")"
           when verbose $ putStrLn $ "  Error: " ++ errMsg
           let stat = MkDeclStats name 0 elapsed "fail"  -- Can't know fuel used on error
+          -- Add declaration to env as OPAQUE to prevent cascading "unknown constant" errors
+          -- while avoiding hangs from unfolding expensive computations
+          let env' = addDecl (makeDeclOpaque d) env
           if cont
-            then checkAllDeclsIO fuel cont verbose profile env ds cache passed (S failed) timedOut cached (errMsg :: errors) (stat :: stats)
+            then checkAllDeclsIO fuel cont verbose profile env' ds cache passed (S failed) timedOut cached (errMsg :: errors) (stat :: stats)
             else pure (Left errMsg, cache, reverse (stat :: stats))
         Right (remainingFuel, env') => do
           putStrLn "ok"

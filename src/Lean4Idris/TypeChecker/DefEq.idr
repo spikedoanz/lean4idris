@@ -195,6 +195,43 @@ tryEtaExpansion recurEq env t s = do
     Nothing => tryEtaExpansionCore recurEq env s t
 
 ------------------------------------------------------------------------
+-- Stuck Recursor Equality
+------------------------------------------------------------------------
+
+-- Check if two stuck recursor applications are definitionally equal.
+-- Two stuck recursors are equal if they have:
+-- 1. Same recursor name and universe levels
+-- 2. All arguments are pairwise definitionally equal
+-- This handles cases like (List.rec motive minor ... l) on both sides
+-- where l is a bound variable that can't reduce.
+covering
+tryStuckRecursorEq : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                     TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryStuckRecursorEq recurEq env t s = do
+  case (getAppConst t, getAppConst s) of
+    (Just (n1, ls1, args1), Just (n2, ls2, args2)) =>
+      -- Check if both heads are recursors
+      case (getRecursorInfo env n1, getRecursorInfo env n2) of
+        (Just _, Just _) =>
+          -- Both are recursor applications
+          if n1 == n2 && levelListEq ls1 ls2 && length args1 == length args2
+            then do
+              -- Compare all arguments pairwise
+              argsEq <- allDefEq args1 args2
+              pure (Just argsEq)
+            else pure Nothing
+        _ => pure Nothing
+    _ => pure Nothing
+  where
+    covering
+    allDefEq : List ClosedExpr -> List ClosedExpr -> TC Bool
+    allDefEq [] [] = pure True
+    allDefEq (x :: xs) (y :: ys) = do
+      eq <- recurEq env x y
+      if eq then allDefEq xs ys else pure False
+    allDefEq _ _ = pure False
+
+------------------------------------------------------------------------
 -- Structure Eta Expansion
 ------------------------------------------------------------------------
 
@@ -351,8 +388,17 @@ mutual
               (Just ty1, Just ty2) => isDefEq env ty1 ty2
               _ => pure False
       isDefEqWhnf (App f1 a1) (App f2 a2) = do
+        -- First try direct structural comparison
         eqF <- isDefEq env f1 f2
-        if eqF then isDefEq env a1 a2 else pure False
+        if eqF
+          then isDefEq env a1 a2
+          else do
+            -- If direct comparison fails, try stuck recursor equality
+            -- for the entire application spine
+            stuckResult <- tryStuckRecursorEq isDefEq env (App f1 a1) (App f2 a2)
+            case stuckResult of
+              Just b => pure b
+              Nothing => pure False
       isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
         eqTy <- isDefEq env ty1 ty2
         if eqTy then isDefEqBodyWithNameAndType name1 ty1 isDefEq env body1 body2 else pure False
@@ -371,22 +417,27 @@ mutual
       isDefEqWhnf other (NatLit n) = pure (natLitEqNatExpr n other)
       isDefEqWhnf (StringLit s1) (StringLit s2) = pure (s1 == s2)
       isDefEqWhnf t s = do
-        etaResult <- tryEtaExpansion isDefEq env t s
-        case etaResult of
+        -- Try stuck recursor equality first (handles List.rec l = List.rec l where l is bound)
+        stuckRecResult <- tryStuckRecursorEq isDefEq env t s
+        case stuckRecResult of
           Just b => pure b
           Nothing => do
-            -- Try structure eta expansion
-            structEtaResult <- tryStructureEta isDefEq env t s
-            case structEtaResult of
+            etaResult <- tryEtaExpansion isDefEq env t s
+            case etaResult of
               Just b => pure b
               Nothing => do
-                -- WHNF structural comparison failed, try full normalization as fallback
-                t' <- normalizeType env t
-                s' <- normalizeType env s
-                -- Check if normalization made progress
-                if exprEq t t' && exprEq s s'
-                  then pure False  -- No progress, give up
-                  else isDefEqNormalized env t' s'
+                -- Try structure eta expansion
+                structEtaResult <- tryStructureEta isDefEq env t s
+                case structEtaResult of
+                  Just b => pure b
+                  Nothing => do
+                    -- WHNF structural comparison failed, try full normalization as fallback
+                    t' <- normalizeType env t
+                    s' <- normalizeType env s
+                    -- Check if normalization made progress
+                    if exprEq t t' && exprEq s s'
+                      then pure False  -- No progress, give up
+                      else isDefEqNormalized env t' s'
 
 ------------------------------------------------------------------------
 -- Convenience Functions

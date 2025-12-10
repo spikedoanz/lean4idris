@@ -553,6 +553,35 @@ isDefEqBodySimple binderType recur env b1 b2 =
       e2' : ClosedExpr = instantiate1 (believe_me b2) localVar
   in recur env' e1' e2'
 
+-- Stuck recursor equality for simple defEq
+-- Two stuck recursor applications are equal if they have the same name, levels, and all args are equal
+covering
+tryStuckRecursorEqSimple : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
+                           TCEnv -> ClosedExpr -> ClosedExpr -> TC (Maybe Bool)
+tryStuckRecursorEqSimple recurEq env t s = do
+  case (getAppConst t, getAppConst s) of
+    (Just (n1, ls1, args1), Just (n2, ls2, args2)) =>
+      -- Check if both heads are recursors
+      case (getRecursorInfo env n1, getRecursorInfo env n2) of
+        (Just _, Just _) =>
+          -- Both are recursor applications
+          if n1 == n2 && levelListEq ls1 ls2 && length args1 == length args2
+            then do
+              -- Compare all arguments pairwise
+              argsEq <- allDefEq args1 args2
+              pure (Just argsEq)
+            else pure Nothing
+        _ => pure Nothing
+    _ => pure Nothing
+  where
+    covering
+    allDefEq : List ClosedExpr -> List ClosedExpr -> TC Bool
+    allDefEq [] [] = pure True
+    allDefEq (x :: xs) (y :: ys) = do
+      eq <- recurEq env x y
+      if eq then allDefEq xs ys else pure False
+    allDefEq _ _ = pure False
+
 -- Eta expansion for lambdas
 covering
 tryEtaExpansionSimple : (TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool) ->
@@ -600,8 +629,17 @@ isDefEqSimple env e1 e2 =
             (Just ty1, Just ty2) => isDefEqSimple env ty1 ty2
             _ => pure False
     isDefEqWhnf (App f1 a1) (App f2 a2) = do
+      -- First try direct structural comparison
       eqF <- isDefEqSimple env f1 f2
-      if eqF then isDefEqSimple env a1 a2 else pure False
+      if eqF
+        then isDefEqSimple env a1 a2
+        else do
+          -- If direct comparison fails, try stuck recursor equality
+          -- for the entire application spine
+          stuckResult <- tryStuckRecursorEqSimple isDefEqSimple env (App f1 a1) (App f2 a2)
+          case stuckResult of
+            Just b => pure b
+            Nothing => pure False
     isDefEqWhnf (Lam name1 _ ty1 body1) (Lam _ _ ty2 body2) = do
       eqTy <- isDefEqSimple env ty1 ty2
       if eqTy then isDefEqBodySimple ty1 isDefEqSimple env body1 body2 else pure False
@@ -617,10 +655,15 @@ isDefEqSimple env e1 e2 =
     isDefEqWhnf (NatLit n1) (NatLit n2) = pure (n1 == n2)
     isDefEqWhnf (StringLit s1) (StringLit s2) = pure (s1 == s2)
     isDefEqWhnf t s = do
-      etaResult <- tryEtaExpansionSimple isDefEqSimple env t s
-      case etaResult of
+      -- Try stuck recursor equality first
+      stuckRecResult <- tryStuckRecursorEqSimple isDefEqSimple env t s
+      case stuckRecResult of
         Just b => pure b
-        Nothing => pure False
+        Nothing => do
+          etaResult <- tryEtaExpansionSimple isDefEqSimple env t s
+          case etaResult of
+            Just b => pure b
+            Nothing => pure False
 
 ------------------------------------------------------------------------
 -- Type Inference

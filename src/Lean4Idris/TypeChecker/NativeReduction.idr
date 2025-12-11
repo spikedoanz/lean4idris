@@ -87,6 +87,9 @@ natSuccName : Name
 natSuccName = Str "succ" natName
 
 -- Nat bitwise operations
+natBitwiseName : Name
+natBitwiseName = Str "bitwise" natName
+
 natLandName : Name
 natLandName = Str "land" natName
 
@@ -424,6 +427,60 @@ natXorNat n m = go (n + m) n m
     go (S fuel) n' m' =
       let bit = if (natMod n' 2 == 1) /= (natMod m' 2 == 1) then 1 else 0
       in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Generic Nat.bitwise with a function parameter
+-- natBitwiseNat f n m computes bitwise operation using f on each bit pair
+-- f is represented as a 4-bit truth table: (f false false, f false true, f true false, f true true)
+natBitwiseNat : (Bool, Bool, Bool, Bool) -> Nat -> Nat -> Nat
+natBitwiseNat (ff, ft, tf, tt) n m = go (n + m + 1) n m
+  where
+    applyF : Bool -> Bool -> Bool
+    applyF False False = ff
+    applyF False True  = ft
+    applyF True  False = tf
+    applyF True  True  = tt
+
+    go : Nat -> Nat -> Nat -> Nat
+    go Z _ _ = 0  -- fuel exhausted
+    go (S fuel) Z Z = 0  -- base case: both zero
+    go (S fuel) n' m' =
+      let b1 = natMod n' 2 == 1
+          b2 = natMod m' 2 == 1
+          bit = if applyF b1 b2 then 1 else 0
+      in bit + 2 * go fuel (natDiv n' 2) (natDiv m' 2)
+
+-- Try to reduce Nat.bitwise f n m to a NatLit
+-- Nat.bitwise : (Bool → Bool → Bool) → Nat → Nat → Nat
+-- We evaluate the function on all 4 input combinations to get its truth table
+covering
+tryNatBitwise : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryNatBitwise args whnfStep = do
+  guard (length args >= 3)
+  fArg <- listNth args 0  -- f : Bool → Bool → Bool
+  arg1 <- listNth args 1  -- n : Nat
+  arg2 <- listNth args 2  -- m : Nat
+  let arg1' = iterWhnfStep whnfStep arg1 100
+  let arg2' = iterWhnfStep whnfStep arg2 100
+  n <- getNatLit arg1'
+  m <- getNatLit arg2'
+  -- Evaluate f on all 4 combinations to get truth table
+  let applyF : ClosedExpr -> ClosedExpr -> Maybe Bool
+      applyF b1 b2 = do
+        let app = App (App fArg b1) b2
+        let result = iterWhnfStep whnfStep app 100
+        case result of
+          Const name [] =>
+            if name == boolTrueName then Just True
+            else if name == boolFalseName then Just False
+            else Nothing
+          _ => Nothing
+  ff <- applyF (Const boolFalseName []) (Const boolFalseName [])
+  ft <- applyF (Const boolFalseName []) (Const boolTrueName [])
+  tf <- applyF (Const boolTrueName []) (Const boolFalseName [])
+  tt <- applyF (Const boolTrueName []) (Const boolTrueName [])
+  let result = NatLit (natBitwiseNat (ff, ft, tf, tt) n m)
+  let remaining = listDrop 3 args
+  pure (mkApp result remaining)
 
 -- Try to reduce Nat.shiftRight n k to a NatLit
 tryNatShiftRight : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
@@ -1145,9 +1202,11 @@ tryNativeEvalNat name args step =
   else if name == natPowName then tryNatPow args step
   else Nothing
 
+covering
 tryNativeEvalNatBitwise : Name -> List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryNativeEvalNatBitwise name args step =
-  if name == natLandName then tryNatLand args step
+  if name == natBitwiseName then tryNatBitwise args step
+  else if name == natLandName then tryNatLand args step
   else if name == natLorName then tryNatLor args step
   else if name == natXorName then tryNatXor args step
   else if name == natShiftLeftName then tryNatShiftLeft args step

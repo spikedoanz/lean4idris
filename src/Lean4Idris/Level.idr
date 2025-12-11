@@ -331,3 +331,273 @@ params (Succ l) = params l
 params (Max l1 l2) = params l1 ++ params l2
 params (IMax l1 l2) = params l1 ++ params l2
 params (Param n) = [n]
+
+------------------------------------------------------------------------
+-- Level Normalization (Géran's Canonical Form)
+--
+-- Based on "A Canonical Form for Universe Levels in Impredicative Type Theory"
+-- by Yoan Géran, and the implementation in lean4lean.
+--
+-- The normal form represents a level as a collection of "nodes", where each
+-- node is indexed by an "imax path" (a sorted list of parameter names that
+-- represents nested imax conditions).
+------------------------------------------------------------------------
+
+||| Variable node: a parameter with an offset
+||| Represents terms like `u + 3`
+public export
+record VarNode where
+  constructor MkVarNode
+  var : Name
+  offset : Nat
+
+public export
+Eq VarNode where
+  v1 == v2 = v1.var == v2.var && v1.offset == v2.offset
+
+public export
+Show VarNode where
+  show v = show v.var ++ (if v.offset == 0 then "" else "+" ++ show v.offset)
+
+||| Compare VarNodes by name first, then offset
+public export
+compareVarNode : VarNode -> VarNode -> Ordering
+compareVarNode v1 v2 = case compareName v1.var v2.var of
+  EQ => compare v1.offset v2.offset
+  c => c
+  where
+    compareName : Name -> Name -> Ordering
+    compareName n1 n2 = compare (show n1) (show n2)
+
+||| Normalized node: represents one component of the canonical form
+||| Each node is associated with an "imax path" (List Name) in NormLevel
+public export
+record NormNode where
+  constructor MkNormNode
+  const : Nat           -- constant term (e.g., 3 in "max 3 u")
+  vars : List VarNode   -- variable terms with offsets, sorted by name
+
+public export
+Eq NormNode where
+  n1 == n2 = n1.const == n2.const && n1.vars == n2.vars
+
+public export
+Show NormNode where
+  show n = "NormNode{const=" ++ show n.const ++ ", vars=" ++ show n.vars ++ "}"
+
+||| Default empty node
+public export
+defaultNormNode : NormNode
+defaultNormNode = MkNormNode 0 []
+
+||| Normalized level: a map from imax paths to nodes
+||| The path represents the condition under which this node applies.
+||| Empty path [] is the unconditional part.
+||| Path [u] means "when u > 0".
+||| Path [u, v] means "when u > 0 and v > 0".
+public export
+NormLevel : Type
+NormLevel = List (List Name, NormNode)
+
+showNormLevelEntries : List (List Name, NormNode) -> String
+showNormLevelEntries [] = ""
+showNormLevelEntries [(p, n)] = "(" ++ show p ++ ", " ++ show n ++ ")"
+showNormLevelEntries ((p, n) :: rest) = "(" ++ show p ++ ", " ++ show n ++ "), " ++ showNormLevelEntries rest
+
+public export
+Show NormLevel where
+  show [] = "NormLevel[]"
+  show xs = "NormLevel[" ++ showNormLevelEntries xs ++ "]"
+
+||| Compare two lists of names lexicographically
+comparePath : List Name -> List Name -> Ordering
+comparePath [] [] = EQ
+comparePath [] (_ :: _) = LT
+comparePath (_ :: _) [] = GT
+comparePath (n1 :: ns1) (n2 :: ns2) = case compare (show n1) (show n2) of
+  EQ => comparePath ns1 ns2
+  c => c
+
+||| Insert into path-sorted list, replacing if path exists
+insertNormLevel : List Name -> NormNode -> NormLevel -> NormLevel
+insertNormLevel path node [] = [(path, node)]
+insertNormLevel path node ((p, n) :: rest) = case comparePath path p of
+  LT => (path, node) :: (p, n) :: rest
+  EQ => (path, node) :: rest
+  GT => (p, n) :: insertNormLevel path node rest
+
+||| Lookup a path in NormLevel
+lookupNormLevel : List Name -> NormLevel -> Maybe NormNode
+lookupNormLevel path [] = Nothing
+lookupNormLevel path ((p, n) :: rest) = case comparePath path p of
+  EQ => Just n
+  _ => lookupNormLevel path rest
+
+||| Modify a node at a path (or insert default if not present)
+modifyNormLevel : List Name -> (NormNode -> NormNode) -> NormLevel -> NormLevel
+modifyNormLevel path f nl = case lookupNormLevel path nl of
+  Just n => insertNormLevel path (f n) nl
+  Nothing => insertNormLevel path (f defaultNormNode) nl
+
+||| Add a variable to a sorted list of VarNodes
+||| If variable already exists, keep maximum offset
+addVarToList : Name -> Nat -> List VarNode -> List VarNode
+addVarToList v k [] = [MkVarNode v k]
+addVarToList v k (vn :: rest) = case compare (show v) (show vn.var) of
+  LT => MkVarNode v k :: vn :: rest
+  EQ => MkVarNode v (max k vn.offset) :: rest
+  GT => vn :: addVarToList v k rest
+
+||| Add a variable term to a NormLevel at a given path
+addVar : Name -> Nat -> List Name -> NormLevel -> NormLevel
+addVar v k path = modifyNormLevel path (\n => { vars := addVarToList v k n.vars } n)
+
+||| Add a node entry for a variable at a given path
+addNode : Name -> List Name -> NormLevel -> NormLevel
+addNode v path = modifyNormLevel path (\n => { vars := addVarToList v 0 n.vars } n)
+
+||| Add a constant term to a NormLevel at a given path
+||| Constants 0 and 1 at non-empty paths are trivially dominated, so skip them
+addConst : Nat -> List Name -> NormLevel -> NormLevel
+addConst k path nl =
+  if k == 0 || (k == 1 && not (isNil path))
+    then nl
+    else modifyNormLevel path (\n => { const := max k n.const } n) nl
+
+||| Insert a name into a sorted path, returning Nothing if already present
+orderedInsertName : Name -> List Name -> Maybe (List Name)
+orderedInsertName n [] = Just [n]
+orderedInsertName n (m :: ms) = case compare (show n) (show m) of
+  LT => Just (n :: m :: ms)
+  EQ => Nothing  -- Already present
+  GT => map (m ::) (orderedInsertName n ms)
+
+||| Core normalization function
+||| Recursively processes a level, building up the normalized representation
+|||
+||| @l The level to normalize
+||| @path The current imax path (sorted list of parameters we're "inside")
+||| @k The current offset (number of Succ wrappers)
+||| @acc The accumulated normal form
+export covering
+normalizeAux : (l : Level) -> (path : List Name) -> (k : Nat) -> (acc : NormLevel) -> NormLevel
+normalizeAux Zero path k acc = addConst k path acc
+normalizeAux (Succ u) path k acc = normalizeAux u path (S k) acc
+normalizeAux (Max u v) path k acc = normalizeAux v path k (normalizeAux u path k acc)
+-- imax u 0 = 0, so just add constant
+normalizeAux (IMax _ Zero) path k acc = addConst k path acc
+-- imax u (succ v) = max u (succ v), since succ v is always > 0
+normalizeAux (IMax u (Succ v)) path k acc =
+  normalizeAux v path (S k) (normalizeAux u path k acc)
+-- imax u (max v w) = max (imax u v) (imax u w)
+normalizeAux (IMax u (Max v w)) path k acc =
+  normalizeAux (IMax u w) path k (normalizeAux (IMax u v) path k acc)
+-- imax u (imax v w) = max (imax u w) (imax v w)
+normalizeAux (IMax u (IMax v w)) path k acc =
+  normalizeAux (IMax v w) path k (normalizeAux (IMax u w) path k acc)
+-- imax u (param v): enter the "v > 0" branch
+normalizeAux (IMax u (Param v)) path k acc =
+  case orderedInsertName v path of
+    Just path' => normalizeAux u path' k (addNode v path' acc)
+    Nothing => normalizeAux u path k acc  -- v already in path, skip
+-- param v: add variable term
+normalizeAux (Param v) path k acc =
+  case orderedInsertName v path of
+    Just path' =>
+      let acc' = addConst k path (addNode v path' acc)
+      in if k == 0 then acc' else addVar v k path' acc'
+    Nothing =>
+      if k == 0 then acc else addVar v k path acc
+
+||| Check if path1 is a subset of path2 (both sorted)
+isSubsetPath : List Name -> List Name -> Bool
+isSubsetPath [] _ = True
+isSubsetPath (_ :: _) [] = False
+isSubsetPath (x :: xs) (y :: ys) = case compare (show x) (show y) of
+  LT => False  -- x not in ys
+  EQ => isSubsetPath xs ys
+  GT => isSubsetPath (x :: xs) ys
+
+||| Remove variables from v1 that are dominated by v2
+||| Both lists must be sorted by variable name
+subsumeVars : List VarNode -> List VarNode -> List VarNode
+subsumeVars [] _ = []
+subsumeVars xs [] = xs
+subsumeVars (x :: xs) (y :: ys) = case compare (show x.var) (show y.var) of
+  LT => x :: subsumeVars xs (y :: ys)
+  EQ => if x.offset <= y.offset
+          then subsumeVars xs ys  -- x dominated by y, remove it
+          else x :: subsumeVars xs ys
+  GT => subsumeVars (x :: xs) ys
+
+||| Check if vars1 <= vars2 (for level ordering)
+leVars : List VarNode -> List VarNode -> Bool
+leVars [] _ = True
+leVars (_ :: _) [] = False
+leVars (x :: xs) (y :: ys) = case compare (show x.var) (show y.var) of
+  LT => False  -- x.var not in ys
+  EQ => x.offset <= y.offset && leVars xs ys
+  GT => leVars (x :: xs) ys
+
+||| Get max offset from a list of VarNodes
+maxVarOffset : List VarNode -> Nat
+maxVarOffset [] = 0
+maxVarOffset (v :: vs) = foldl (\a, vn => max a vn.offset) v.offset vs
+
+||| Check if n2 at p2 subsumes parts of n1 at p1
+subsumeBy : List Name -> NormNode -> (List Name, NormNode) -> NormNode
+subsumeBy p1 n1 (p2, n2) =
+  if not (isSubsetPath p2 p1) then n1
+  else
+    let same = length p1 == length p2
+        -- Remove constant if dominated
+        n1' = if n1.const == 0 ||
+                 ((same || n1.const > n2.const) &&
+                  (isNil n2.vars || n1.const > maxVarOffset n1.vars + 1))
+                then n1
+                else { const := 0 } n1
+        -- Remove dominated variables
+        n1'' = if same || isNil n2.vars then n1'
+               else { vars := subsumeVars n1'.vars n2.vars } n1'
+    in n1''
+
+||| Process a single node, removing terms dominated by other nodes
+processNode : NormLevel -> (List Name, NormNode) -> (List Name, NormNode)
+processNode nl (p1, n1) =
+  let n1' = foldl (subsumeBy p1) n1 nl
+  in (p1, n1')
+
+||| Apply subsumption to remove dominated terms
+||| For each node n1 at path p1, check if any other node n2 at path p2
+||| dominates it (when p2 is a subset of p1)
+export
+subsumption : NormLevel -> NormLevel
+subsumption acc = map (processNode acc) acc
+
+||| Normalize a level to canonical form
+export covering
+normalize : Level -> NormLevel
+normalize l =
+  let initial = insertNormLevel [] defaultNormNode []
+  in subsumption (normalizeAux l [] 0 initial)
+
+||| Check if two NormLevels are equal
+export
+normLevelEq : NormLevel -> NormLevel -> Bool
+normLevelEq nl1 nl2 =
+  all (\(p, n) => lookupNormLevel p nl2 == Just n) nl1 &&
+  all (\(p, n) => lookupNormLevel p nl1 == Just n) nl2
+
+||| Check if two levels are equivalent using canonical form normalization
+||| This is the main entry point for level comparison
+export covering
+isLevelEquiv : Level -> Level -> Bool
+isLevelEquiv u v =
+  u == v || normLevelEq (normalize u) (normalize v)
+
+||| Check if two lists of levels are pairwise equivalent
+export covering
+isLevelEquivList : List Level -> List Level -> Bool
+isLevelEquivList [] [] = True
+isLevelEquivList (u :: us) (v :: vs) = isLevelEquiv u v && isLevelEquivList us vs
+isLevelEquivList _ _ = False

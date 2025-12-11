@@ -41,6 +41,31 @@ Eq Level where
   (Param n1) == (Param n2) = n1 == n2
   _ == _ = False
 
+||| Comparison for Levels (for use in SortedMap)
+||| Order is arbitrary but consistent
+levelCmp : Level -> Level -> Ordering
+levelCmp Zero Zero = EQ
+levelCmp Zero _ = LT
+levelCmp _ Zero = GT
+levelCmp (Succ l1) (Succ l2) = levelCmp l1 l2
+levelCmp (Succ _) _ = LT
+levelCmp _ (Succ _) = GT
+levelCmp (Max a1 b1) (Max a2 b2) = case levelCmp a1 a2 of
+  EQ => levelCmp b1 b2
+  x => x
+levelCmp (Max _ _) _ = LT
+levelCmp _ (Max _ _) = GT
+levelCmp (IMax a1 b1) (IMax a2 b2) = case levelCmp a1 a2 of
+  EQ => levelCmp b1 b2
+  x => x
+levelCmp (IMax _ _) _ = LT
+levelCmp _ (IMax _ _) = GT
+levelCmp (Param n1) (Param n2) = compare n1 n2
+
+export
+Ord Level where
+  compare = levelCmp
+
 export
 Show Level where
   show Zero = "0"

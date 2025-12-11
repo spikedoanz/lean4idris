@@ -383,8 +383,14 @@ tryQuotReduction e whnfStep = do
 export covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
 whnf env e = do
-  useFuel
-  pure (whnfPure 1000 e)
+  cached <- lookupWhnfCache e
+  case cached of
+    Just result => pure result
+    Nothing => do
+      useFuel
+      let result = whnfPure 1000 e
+      insertWhnfCache e result
+      pure result
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)

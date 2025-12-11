@@ -34,6 +34,19 @@ Eq BinderInfo where
   _ == _ = False
 
 export
+Ord BinderInfo where
+  compare Default Default = EQ
+  compare Default _ = LT
+  compare _ Default = GT
+  compare Implicit Implicit = EQ
+  compare Implicit _ = LT
+  compare _ Implicit = GT
+  compare StrictImplicit StrictImplicit = EQ
+  compare StrictImplicit _ = LT
+  compare _ StrictImplicit = GT
+  compare Instance Instance = EQ
+
+export
 Show BinderInfo where
   show Default = "#BD"
   show Implicit = "#BI"
@@ -146,6 +159,72 @@ exprEq _ _ = False
 export
 Eq (Expr n) where
   (==) = exprEq
+
+||| Comparison for expressions (for use in SortedMap)
+||| Order is arbitrary but consistent
+cmpFin : Fin n -> Fin m -> Ordering
+cmpFin FZ FZ = EQ
+cmpFin FZ (FS _) = LT
+cmpFin (FS _) FZ = GT
+cmpFin (FS i) (FS j) = cmpFin i j
+
+export
+exprCmp : Expr n -> Expr m -> Ordering
+exprCmp (BVar i) (BVar j) = cmpFin i j
+exprCmp (BVar _) _ = LT
+exprCmp _ (BVar _) = GT
+exprCmp (Local id1 _) (Local id2 _) = compare id1 id2
+exprCmp (Local _ _) _ = LT
+exprCmp _ (Local _ _) = GT
+exprCmp (Sort l1) (Sort l2) = compare l1 l2
+exprCmp (Sort _) _ = LT
+exprCmp _ (Sort _) = GT
+exprCmp (Const n1 ls1) (Const n2 ls2) = case compare n1 n2 of
+  EQ => compare ls1 ls2
+  x => x
+exprCmp (Const _ _) _ = LT
+exprCmp _ (Const _ _) = GT
+exprCmp (App f1 x1) (App f2 x2) = case exprCmp f1 f2 of
+  EQ => exprCmp x1 x2
+  x => x
+exprCmp (App _ _) _ = LT
+exprCmp _ (App _ _) = GT
+exprCmp (Lam _ bi1 ty1 b1) (Lam _ bi2 ty2 b2) = case compare bi1 bi2 of
+  EQ => case exprCmp ty1 ty2 of
+    EQ => exprCmp b1 b2
+    x => x
+  x => x
+exprCmp (Lam _ _ _ _) _ = LT
+exprCmp _ (Lam _ _ _ _) = GT
+exprCmp (Pi _ bi1 ty1 b1) (Pi _ bi2 ty2 b2) = case compare bi1 bi2 of
+  EQ => case exprCmp ty1 ty2 of
+    EQ => exprCmp b1 b2
+    x => x
+  x => x
+exprCmp (Pi _ _ _ _) _ = LT
+exprCmp _ (Pi _ _ _ _) = GT
+exprCmp (Let _ ty1 v1 b1) (Let _ ty2 v2 b2) = case exprCmp ty1 ty2 of
+  EQ => case exprCmp v1 v2 of
+    EQ => exprCmp b1 b2
+    x => x
+  x => x
+exprCmp (Let _ _ _ _) _ = LT
+exprCmp _ (Let _ _ _ _) = GT
+exprCmp (Proj n1 i1 s1) (Proj n2 i2 s2) = case compare n1 n2 of
+  EQ => case compare i1 i2 of
+    EQ => exprCmp s1 s2
+    x => x
+  x => x
+exprCmp (Proj _ _ _) _ = LT
+exprCmp _ (Proj _ _ _) = GT
+exprCmp (NatLit n1) (NatLit n2) = compare n1 n2
+exprCmp (NatLit _) _ = LT
+exprCmp _ (NatLit _) = GT
+exprCmp (StringLit s1) (StringLit s2) = compare s1 s2
+
+export
+Ord (Expr n) where
+  compare = exprCmp
 
 ||| Is this expression a sort?
 public export

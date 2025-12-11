@@ -697,8 +697,13 @@ mutual
   export covering
   inferType : TCEnv -> ClosedExpr -> TC ClosedExpr
   inferType env e = do
-    (_, ty) <- inferTypeE env e
-    pure ty
+    cached <- lookupInferCache e
+    case cached of
+      Just ty => pure ty
+      Nothing => do
+        (_, ty) <- inferTypeE env e
+        insertInferCache e ty
+        pure ty
 
   export covering
   inferTypeOpenE : TCEnv -> LocalCtx n -> Expr n -> TC (TCEnv, LocalCtx n, ClosedExpr)

@@ -12,6 +12,24 @@ import Data.Vect
 %default total
 
 ------------------------------------------------------------------------
+-- Type Checker Cache (for memoization)
+------------------------------------------------------------------------
+
+||| Cache for memoizing expensive operations during type checking.
+||| Following lean4lean's approach:
+||| - whnfCache: memoizes whnf results
+||| - inferCache: memoizes inferType results
+public export
+record TCCache where
+  constructor MkTCCache
+  whnfCache : SortedMap ClosedExpr ClosedExpr
+  inferCache : SortedMap ClosedExpr ClosedExpr
+
+public export
+emptyCache : TCCache
+emptyCache = MkTCCache empty empty
+
+------------------------------------------------------------------------
 -- Environment
 ------------------------------------------------------------------------
 
@@ -141,17 +159,28 @@ Show TCError where
 -- TC Monad
 ------------------------------------------------------------------------
 
+||| TC monad state: (fuel, cache)
+public export
+TCState : Type
+TCState = (Nat, TCCache)
+
 public export
 defaultFuel : Nat
 defaultFuel = 100000
 
 public export
 data TC : Type -> Type where
-  MkTC : (Nat -> Either TCError (Nat, a)) -> TC a
+  MkTC : (TCState -> Either TCError (TCState, a)) -> TC a
+
+export
+runTCState : TCState -> TC a -> Either TCError (TCState, a)
+runTCState st (MkTC f) = f st
 
 export
 runTCFuel : Nat -> TC a -> Either TCError (Nat, a)
-runTCFuel fuel (MkTC f) = f fuel
+runTCFuel fuel tc = case runTCState (fuel, emptyCache) tc of
+  Left err => Left err
+  Right ((fuel', _), a) => Right (fuel', a)
 
 export
 runTC : TC a -> Either TCError a
@@ -164,34 +193,62 @@ runTCWithFuel fuel tc = map snd (runTCFuel fuel tc)
 export
 liftEither : Either TCError a -> TC a
 liftEither (Left err) = MkTC (\_ => Left err)
-liftEither (Right x) = MkTC (\fuel => Right (fuel, x))
+liftEither (Right x) = MkTC (\st => Right (st, x))
 
 export
 Functor TC where
-  map f (MkTC tc) = MkTC (\fuel => case tc fuel of
+  map f (MkTC tc) = MkTC (\st => case tc st of
     Left err => Left err
-    Right (fuel', x) => Right (fuel', f x))
+    Right (st', x) => Right (st', f x))
 
 export
 Applicative TC where
-  pure x = MkTC (\fuel => Right (fuel, x))
-  (MkTC tf) <*> (MkTC tx) = MkTC (\fuel => case tf fuel of
+  pure x = MkTC (\st => Right (st, x))
+  (MkTC tf) <*> (MkTC tx) = MkTC (\st => case tf st of
     Left err => Left err
-    Right (fuel', f) => case tx fuel' of
+    Right (st', f) => case tx st' of
       Left err => Left err
-      Right (fuel'', x) => Right (fuel'', f x))
+      Right (st'', x) => Right (st'', f x))
 
 export
 Monad TC where
-  (MkTC tx) >>= f = MkTC (\fuel => case tx fuel of
+  (MkTC tx) >>= f = MkTC (\st => case tx st of
     Left err => Left err
-    Right (fuel', x) => runTCFuel fuel' (f x))
+    Right (st', x) => runTCState st' (f x))
 
 export
 useFuel : TC ()
-useFuel = MkTC (\fuel => case fuel of
+useFuel = MkTC (\(fuel, cache) => case fuel of
   0 => Left FuelExhausted
-  S k => Right (k, ()))
+  S k => Right ((k, cache), ()))
+
+------------------------------------------------------------------------
+-- Cache Operations
+------------------------------------------------------------------------
+
+||| Look up a cached whnf result
+export
+lookupWhnfCache : ClosedExpr -> TC (Maybe ClosedExpr)
+lookupWhnfCache e = MkTC (\(fuel, cache) =>
+  Right ((fuel, cache), lookup e cache.whnfCache))
+
+||| Insert a whnf result into the cache
+export
+insertWhnfCache : ClosedExpr -> ClosedExpr -> TC ()
+insertWhnfCache e result = MkTC (\(fuel, cache) =>
+  Right ((fuel, { whnfCache $= insert e result } cache), ()))
+
+||| Look up a cached inferType result
+export
+lookupInferCache : ClosedExpr -> TC (Maybe ClosedExpr)
+lookupInferCache e = MkTC (\(fuel, cache) =>
+  Right ((fuel, cache), lookup e cache.inferCache))
+
+||| Insert an inferType result into the cache
+export
+insertInferCache : ClosedExpr -> ClosedExpr -> TC ()
+insertInferCache e result = MkTC (\(fuel, cache) =>
+  Right ((fuel, { inferCache $= insert e result } cache), ()))
 
 export
 throw : TCError -> TC a

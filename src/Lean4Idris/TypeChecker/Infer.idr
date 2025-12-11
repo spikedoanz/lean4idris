@@ -497,45 +497,16 @@ alphaEq = go
 
 ------------------------------------------------------------------------
 -- Level Equality (for isDefEqSimple)
+-- Uses the canonical form normalization from Level.idr
 ------------------------------------------------------------------------
-
-flattenMax : Level -> List Level
-flattenMax (Max a b) = flattenMax a ++ flattenMax b
-flattenMax l = [l]
-
-sortLevels : List Level -> List Level
-sortLevels = sortBy (\a, b => if levelLt a b then LT else if a == b then EQ else GT)
-
-covering
-levelEqCore : Level -> Level -> Bool
-
-covering
-levelListEqCore : List Level -> List Level -> Bool
-levelListEqCore [] [] = True
-levelListEqCore (x :: xs) (y :: ys) = levelEqCore x y && levelListEqCore xs ys
-levelListEqCore _ _ = False
-
-levelEqCore Zero Zero = True
-levelEqCore (Succ l1) (Succ l2) = levelEqCore l1 l2
-levelEqCore l1@(Max _ _) l2@(Max _ _) =
-  let terms1 = sortLevels (flattenMax l1)
-      terms2 = sortLevels (flattenMax l2)
-  in levelListEqCore terms1 terms2
-levelEqCore (IMax a1 b1) (IMax a2 b2) = levelEqCore a1 a2 && levelEqCore b1 b2
-levelEqCore (Param n1) (Param n2) = n1 == n2
-levelEqCore _ _ = False
 
 covering
 levelEq : Level -> Level -> Bool
-levelEq l1 l2 = let l1' = simplify l1
-                    l2' = simplify l2
-                in levelEqCore l1' l2'
+levelEq = isLevelEquiv
 
 covering
 levelListEq : List Level -> List Level -> Bool
-levelListEq [] [] = True
-levelListEq (l1 :: ls1) (l2 :: ls2) = levelEq l1 l2 && levelListEq ls1 ls2
-levelListEq _ _ = False
+levelListEq = isLevelEquivList
 
 ------------------------------------------------------------------------
 -- Simple Definitional Equality (without proof irrelevance)

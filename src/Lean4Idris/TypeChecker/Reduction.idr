@@ -95,12 +95,6 @@ getRecursorInfo env name = case lookupDecl name env of
   Just (RecDecl info _) => Just info
   _ => Nothing
 
--- Check if a name is a recursor
-isRecursor : TCEnv -> Name -> Bool
-isRecursor env name = case getRecursorInfo env name of
-  Just _ => True
-  Nothing => False
-
 export
 getRecursorInfoWithLevels : TCEnv -> Name -> Maybe (RecursorInfo, List Name)
 getRecursorInfoWithLevels env name = case lookupDecl name env of
@@ -132,12 +126,6 @@ export
 getConstHead : ClosedExpr -> Maybe (Name, List Level)
 getConstHead (Const n ls) = Just (n, ls)
 getConstHead _ = Nothing
-
-export
-substArgs : {n : Nat} -> List (Expr n) -> Expr n -> Expr n
-substArgs [] ty = ty
-substArgs {n} (arg :: args) (Pi _ _ _ cod) = substArgs args (subst0 cod arg)
-substArgs _ ty = ty
 
 export covering
 getNthPiDomSubst : {n : Nat} -> Nat -> List (Expr n) -> Expr n -> Maybe (Expr n)

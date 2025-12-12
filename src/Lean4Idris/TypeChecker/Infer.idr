@@ -277,6 +277,13 @@ getInductiveInfo env name = case lookupDecl name env of
   Just (IndDecl info _) => Just info
   _ => Nothing
 
+||| Get inductive info along with its level parameters
+export
+getInductiveInfoWithLevels : TCEnv -> Name -> Maybe (InductiveInfo, List Name)
+getInductiveInfoWithLevels env name = case lookupDecl name env of
+  Just (IndDecl info levelParams) => Just (info, levelParams)
+  _ => Nothing
+
 export
 getStructCtor : TCEnv -> Name -> Maybe ConstructorInfo
 getStructCtor env structName = do
@@ -304,15 +311,19 @@ getProjType env structName idx structParams = do
 ||| Get the type of a projection, accounting for dependent fields.
 ||| For dependent fields (like Subtype.property), the field type may depend
 ||| on projections of earlier fields.
+|||
+||| @levels The universe levels from the structure type (e.g., from `Applicative.{u_1, u_2}`)
 export covering
-getProjTypeWithStruct : TCEnv -> Name -> Nat -> List ClosedExpr -> ClosedExpr -> Maybe ClosedExpr
-getProjTypeWithStruct env structName idx structParams structExpr = do
-  indInfo <- getInductiveInfo env structName
+getProjTypeWithStruct : TCEnv -> Name -> Nat -> List Level -> List ClosedExpr -> ClosedExpr -> Maybe ClosedExpr
+getProjTypeWithStruct env structName idx typeLevels structParams structExpr = do
+  (indInfo, levelParams) <- getInductiveInfoWithLevels env structName
   let numParams = indInfo.numParams
   ctor <- getStructCtor env structName
   let fieldProjs = buildFieldProjections structName idx structExpr
-  -- Substitute both type parameters AND earlier field projections
-  getNthPiDomSubst (numParams + idx) (structParams ++ fieldProjs) ctor.type
+  -- First, instantiate the constructor type with the actual universe levels
+  let ctorTyInstantiated = instantiateLevelParams levelParams typeLevels ctor.type
+  -- Then substitute type parameters AND earlier field projections
+  getNthPiDomSubst (numParams + idx) (structParams ++ fieldProjs) ctorTyInstantiated
 
 ------------------------------------------------------------------------
 -- Normalization
@@ -792,14 +803,14 @@ mutual
     let (head, params) = getAppSpine structTy'
     case getConstHead head of
       Nothing => throw (OtherError $ "projection: expected structure type for " ++ show structName)
-      Just (tyName, _) =>
+      Just (tyName, typeLevels) =>
         if tyName /= structName
           then throw (OtherError $ "projection: type mismatch, expected " ++ show structName ++ " got " ++ show tyName)
           else
             -- Use getProjTypeWithStruct to handle dependent fields properly.
             -- Cast the open structExpr to ClosedExpr since the runtime representation is the same.
             let structClosed : ClosedExpr = believe_me structExpr
-            in case getProjTypeWithStruct env1 structName idx params structClosed of
+            in case getProjTypeWithStruct env1 structName idx typeLevels params structClosed of
               Nothing => throw (OtherError $ "projection: could not compute field type")
               Just fieldTy => pure (env1, ctx1, fieldTy)
   inferTypeOpenE env ctx (NatLit _) = pure (env, ctx, Const (Str "Nat" Anonymous) [])

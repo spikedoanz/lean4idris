@@ -140,6 +140,10 @@ getNthPiDomSubst _ _ _ = Nothing
 debugIota : Bool
 debugIota = False
 
+-- Debug flag for whnf steps
+debugWhnf : Bool
+debugWhnf = False
+
 -- Names for Nat constructors (used in iota reduction for NatLit handling)
 iotaNatName : Name
 iotaNatName = Str "Nat" Anonymous
@@ -327,13 +331,22 @@ tryIotaReduction env e whnfStep = do
 -- Projection Reduction
 ------------------------------------------------------------------------
 
-export
+-- Debug flag for projection reduction
+debugProj : Bool
+debugProj = False
+
+export covering
 tryProjReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryProjReduction env (Proj structName idx struct) whnfStep = do
   let struct' = iterWhnfStep whnfStep struct 100
+  let _ = if debugProj then trace "PROJ: struct=\{show structName} idx=\{show idx}" () else ()
+  let _ = if debugProj then trace "PROJ: struct'=\{ppClosedExpr struct'}" () else ()
   let (head, args) = getAppSpine struct'
+  let _ = if debugProj then trace "PROJ: head=\{ppClosedExpr head} args=\{show (length args)}" () else ()
   (ctorName, _) <- getConstHead head
+  let _ = if debugProj then trace "PROJ: ctorName=\{show ctorName}" () else ()
   (_, _, numParams, numFields) <- getConstructorInfo env ctorName
+  let _ = if debugProj then trace "PROJ: numParams=\{show numParams} numFields=\{show numFields}" () else ()
   guard (idx < numFields)
   listNth args (numParams + idx)
 tryProjReduction _ _ _ = Nothing
@@ -489,49 +502,70 @@ whnf env e = do
       Just e' => Just e'
       Nothing => unfoldHead env e
 
-    -- Full step function that includes native evaluation, iota and projection reduction
-    -- This is passed to native eval functions so they can reduce arguments
-    whnfStepFull : ClosedExpr -> Maybe ClosedExpr
-    whnfStepFull e = case whnfStepCore e of
-      Just e' => Just e'
-      Nothing => case tryProjReduction env e whnfStepWithDelta of
+    mutual
+      -- Full step function that includes native evaluation, iota and projection reduction
+      -- This is passed to native eval functions so they can reduce arguments
+      whnfStepFull : ClosedExpr -> Maybe ClosedExpr
+      whnfStepFull e = case whnfStepCore e of
         Just e' => Just e'
-        Nothing => case tryNativeEval e whnfStepFull of
+        Nothing => case reduceAppHead e of
           Just e' => Just e'
-          Nothing => case tryIotaReduction env e whnfStepFull of
+          Nothing => case tryProjReduction env e whnfStepWithDelta of
             Just e' => Just e'
-            Nothing => unfoldHead env e
+            Nothing => case tryNativeEval e whnfStepFull of
+              Just e' => Just e'
+              Nothing => case tryIotaReduction env e whnfStepFull of
+                Just e' => Just e'
+                Nothing => unfoldHead env e
 
-    reduceAppHead : ClosedExpr -> Maybe ClosedExpr
-    reduceAppHead (App f arg) = case reduceAppHead f of
-      Just f' => Just (App f' arg)
-      Nothing => case tryProjReduction env f whnfStepFull of
+      reduceAppHead : ClosedExpr -> Maybe ClosedExpr
+      reduceAppHead (App f arg) = case reduceAppHead f of
         Just f' => Just (App f' arg)
-        Nothing => case unfoldHead env f of
+        Nothing => case tryProjReduction env f whnfStepFull of
           Just f' => Just (App f' arg)
-          Nothing => Nothing
-    reduceAppHead _ = Nothing
+          Nothing => case unfoldHead env f of
+            Just f' => Just (App f' arg)
+            Nothing => Nothing
+      reduceAppHead _ = Nothing
 
     whnfPure : Nat -> ClosedExpr -> ClosedExpr
-    whnfPure 0 e = e
+    whnfPure 0 e =
+      let _ = if debugWhnf then trace "WHNF: fuel exhausted on \{ppClosedExpr e}" () else ()
+      in e
     whnfPure (S k) e = case whnfStepCore e of
-      Just e' => whnfPure k e'
+      Just e' =>
+        let _ = if debugWhnf then trace "WHNF-core: \{ppClosedExpr e} -> ..." () else ()
+        in whnfPure k e'
       -- Try native eval BEFORE unfolding heads, so we can catch
       -- Decidable.decide, UInt32.decLt etc before they unfold
       Nothing => case tryNativeEval e whnfStepFull of
-        Just e' => whnfPure k e'
+        Just e' =>
+          let _ = if debugWhnf then trace "WHNF-native: \{ppClosedExpr e} -> ..." () else ()
+          in whnfPure k e'
         Nothing => case reduceAppHead e of
-          Just e' => whnfPure k e'
+          Just e' =>
+            let _ = if debugWhnf then trace "WHNF-apphead: \{ppClosedExpr e} -> ..." () else ()
+            in whnfPure k e'
           Nothing => case tryProjReduction env e whnfStepFull of
-            Just e' => whnfPure k e'
+            Just e' =>
+              let _ = if debugWhnf then trace "WHNF-proj: \{ppClosedExpr e} -> ..." () else ()
+              in whnfPure k e'
             Nothing => case (if env.quotInit then tryQuotReduction e whnfStepFull else Nothing) of
-              Just e' => whnfPure k e'
+              Just e' =>
+                let _ = if debugWhnf then trace "WHNF-quot: \{ppClosedExpr e} -> ..." () else ()
+                in whnfPure k e'
               Nothing => case tryIotaReduction env e whnfStepFull of
-                Just e' => whnfPure k e'
+                Just e' =>
+                  let _ = if debugWhnf then trace "WHNF-iota: \{ppClosedExpr e} -> ..." () else ()
+                  in whnfPure k e'
                 Nothing => case tryIotaReduction env e whnfStepWithDelta of
-                  Just e' => whnfPure k e'
+                  Just e' =>
+                    let _ = if debugWhnf then trace "WHNF-iota-delta: \{ppClosedExpr e} -> ..." () else ()
+                    in whnfPure k e'
                   Nothing => case unfoldHead env e of
-                    Just e' => whnfPure k e'
+                    Just e' =>
+                      let _ = if debugWhnf then trace "WHNF-unfold: \{ppClosedExpr e} -> ..." () else ()
+                      in whnfPure k e'
                     Nothing => e
 
 export covering

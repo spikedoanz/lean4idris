@@ -73,16 +73,24 @@ getAppConst e = go e []
     go (Const name levels) args = Just (name, levels, args)
     go _ _ = Nothing
 
-export covering
+debugUnfold : Bool
+debugUnfold = False
+
+covering
 unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 unfoldHead env e =
   case getAppConst e of
     Just (name, levels, args) =>
       case unfoldConst env name levels of
-        Just value => Just (mkApp value args)
+        Just value =>
+          let _ = if debugUnfold && show name == "UInt64.size" then trace "UNFOLD: \{show name} -> ..." () else ()
+          in Just (mkApp value args)
         Nothing => Nothing
     Nothing => case e of
-      Const name levels => unfoldConst env name levels
+      Const name levels =>
+        let result = unfoldConst env name levels
+            _ = if debugUnfold && show name == "UInt64.size" then trace "UNFOLD-CONST: \{show name}" () else ()
+        in result
       _ => Nothing
 
 ------------------------------------------------------------------------
@@ -282,6 +290,7 @@ tryIotaReduction env e whnfStep = do
   let major' = iterWhnfStep whnfStep major 100
   let _ = if debugIota then trace "IOTA: major after whnf=\{ppClosedExpr major'}" () else ()
   let (majorHead, majorArgs) = getAppSpine major'
+  let _ = if debugIota then trace "IOTA: majorHead=\{ppClosedExpr majorHead} majorArgs=\{show (length majorArgs)}" () else ()
   -- First try direct constructor, then K-like reduction for Eq.rec, then structure eta expansion
   -- Note: We do NOT synthesize Acc.intro for Acc.rec - if the major premise doesn't
   -- reduce to Acc.intro, we leave the term unreduced and let proof irrelevance
@@ -505,14 +514,16 @@ whnf env e = do
     mutual
       -- Full step function that includes native evaluation, iota and projection reduction
       -- This is passed to native eval functions so they can reduce arguments
+      -- IMPORTANT: tryNativeEval must come BEFORE reduceAppHead so that functions like
+      -- Nat.ble can be natively evaluated before being unfolded
       whnfStepFull : ClosedExpr -> Maybe ClosedExpr
       whnfStepFull e = case whnfStepCore e of
         Just e' => Just e'
-        Nothing => case reduceAppHead e of
+        Nothing => case tryNativeEval e whnfStepFull of
           Just e' => Just e'
-          Nothing => case tryProjReduction env e whnfStepWithDelta of
+          Nothing => case reduceAppHead e of
             Just e' => Just e'
-            Nothing => case tryNativeEval e whnfStepFull of
+            Nothing => case tryProjReduction env e whnfStepWithDelta of
               Just e' => Just e'
               Nothing => case tryIotaReduction env e whnfStepFull of
                 Just e' => Just e'

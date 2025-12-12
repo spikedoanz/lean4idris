@@ -3,7 +3,9 @@ module Lean4Idris.TypeChecker.NativeReduction
 import Lean4Idris.Name
 import Lean4Idris.Level
 import Lean4Idris.Expr
+import Lean4Idris.Pretty
 import Data.List
+import Debug.Trace
 
 %default total
 
@@ -194,6 +196,10 @@ mkBool : Bool -> ClosedExpr
 mkBool True = Const boolTrueName []
 mkBool False = Const boolFalseName []
 
+-- Debug flag for native reduction
+debugNative : Bool
+debugNative = False
+
 -- Try to reduce Nat.ble n m to true/false
 -- Nat.ble : Nat → Nat → Bool
 tryNatBle : List ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
@@ -203,6 +209,7 @@ tryNatBle args whnfStep = do
   arg1 <- listNth args 1
   let arg0' = iterWhnfStep whnfStep arg0 100
   let arg1' = iterWhnfStep whnfStep arg1 100
+  let _ = if debugNative then trace "NATIVE Nat.ble: arg0'=\{ppClosedExpr arg0'} arg1'=\{ppClosedExpr arg1'}" () else ()
   n <- getNatLit arg0'
   m <- getNatLit arg1'
   let result = mkBool (n <= m)
@@ -1191,11 +1198,14 @@ tryNativeEvalDecide name args step =
 
 export covering
 tryNativeEval : ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
-tryNativeEval e whnfStep = do
-  (name, _, args) <- getAppConst e
-  tryNativeEvalNat name args whnfStep
-    <|> tryNativeEvalNatBitwise name args whnfStep
-    <|> tryNativeEvalString name args whnfStep
-    <|> tryNativeEvalTypeclass name args whnfStep
-    <|> tryNativeEvalOther name args whnfStep
-    <|> tryNativeEvalDecide name args whnfStep
+tryNativeEval e whnfStep =
+  case getAppConst e of
+    Nothing => Nothing
+    Just (name, _, args) =>
+      let _ = if debugNative then trace "NATIVE tryNativeEval: name=\{show name} args=\{show (length args)}" () else () in
+      tryNativeEvalNat name args whnfStep
+        <|> tryNativeEvalNatBitwise name args whnfStep
+        <|> tryNativeEvalString name args whnfStep
+        <|> tryNativeEvalTypeclass name args whnfStep
+        <|> tryNativeEvalOther name args whnfStep
+        <|> tryNativeEvalDecide name args whnfStep

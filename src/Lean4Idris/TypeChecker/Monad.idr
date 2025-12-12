@@ -123,7 +123,7 @@ covering
 Show TCError where
   show (TypeExpected e) = "type expected: " ++ showExprHead e
   show (FunctionExpected e) = "function expected: " ++ showExprHead e
-  show (AppTypeMismatch dom argTy) = "application type mismatch: expected " ++ showExprHead dom ++ ", got " ++ showExprHead argTy
+  show (AppTypeMismatch dom argTy) = "application type mismatch:\n  expected: " ++ ppClosedExpr dom ++ "\n  got:      " ++ ppClosedExpr argTy
   show (LetTypeMismatch expected actual) = "let type mismatch: expected " ++ showExprHead expected ++ ", got " ++ showExprHead actual
   show (UnknownConst n) = "unknown constant: " ++ show n
   show (WrongNumLevels exp act n) = "wrong number of universe levels for " ++ show n ++ ": expected " ++ show exp ++ ", got " ++ show act

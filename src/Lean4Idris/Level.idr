@@ -308,20 +308,44 @@ substParam n replacement = simplify . go
     go (IMax l1 l2) = IMax (go l1) (go l2)
     go (Param m) = if n == m then replacement else Param m
 
-||| Substitute all parameters using a list of replacements (with occur check)
+||| Substitute all parameters using a list of replacements (SIMULTANEOUS, with occur check)
 ||| Returns Nothing if any substitution would create a cycle
 public export covering
 substParamsSafe : List (Name, Level) -> Level -> Maybe Level
-substParamsSafe [] l = Just l
-substParamsSafe ((n, repl) :: rest) l = do
-  l' <- substParamSafe n repl l
-  substParamsSafe rest l'
+substParamsSafe ps level =
+  -- Check for cycles: ensure no param name appears as proper subterm in its replacement
+  if any (\(n, repl) => occursInProper n repl) ps
+    then Nothing
+    else Just (simplify (go level))
+  where
+    go : Level -> Level
+    go Zero = Zero
+    go (Succ l) = Succ (go l)
+    go (Max l1 l2) = Max (go l1) (go l2)
+    go (IMax l1 l2) = IMax (go l1) (go l2)
+    go (Param m) = case lookup m ps of
+                     Just replacement => replacement
+                     Nothing => Param m
 
-||| Substitute all parameters using a list of replacements
+||| Substitute all parameters using a list of replacements (SIMULTANEOUS substitution)
 ||| NOTE: This version does not check for cycles. Use substParamsSafe for untrusted input.
+|||
+||| Important: This performs simultaneous substitution, not sequential!
+||| For [(u, v), (v, u)] applied to Param u:
+|||   - Sequential would give: Param u -> Param v -> Param u (wrong!)
+|||   - Simultaneous gives: Param u -> Param v (correct swap)
 public export covering
 substParams : List (Name, Level) -> Level -> Level
-substParams ps l = foldl (\acc, (n, repl) => substParam n repl acc) l ps
+substParams ps = simplify . go
+  where
+    go : Level -> Level
+    go Zero = Zero
+    go (Succ l) = Succ (go l)
+    go (Max l1 l2) = Max (go l1) (go l2)
+    go (IMax l1 l2) = IMax (go l1) (go l2)
+    go (Param m) = case lookup m ps of
+                     Just replacement => replacement
+                     Nothing => Param m
 
 ||| Collect all parameter names in a level
 public export

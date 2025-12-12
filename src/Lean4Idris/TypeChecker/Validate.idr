@@ -7,7 +7,7 @@ import Lean4Idris.Decl
 import Lean4Idris.Subst
 import Lean4Idris.Pretty
 import Lean4Idris.TypeChecker.Monad
-import Lean4Idris.TypeChecker.Reduction
+import Lean4Idris.TypeChecker.Reduction as Reduction
 import Lean4Idris.TypeChecker.Infer
 import Lean4Idris.TypeChecker.DefEq
 import Data.List
@@ -146,6 +146,26 @@ checkDefDecl env name ty value levelParams = do
                ++ "\n  inferred: " ++ show valueTy
                ++ "\n  declared: " ++ show ty)
 
+-- Helper to extract arguments from an App chain
+getAppArgsLocal : ClosedExpr -> (ClosedExpr, List ClosedExpr)
+getAppArgsLocal e = go e []
+  where
+    go : ClosedExpr -> List ClosedExpr -> (ClosedExpr, List ClosedExpr)
+    go (App f x) acc = go f (x :: acc)
+    go head acc = (head, acc)
+
+-- Try to reduce inside a Pi to get the Eq body
+covering
+reduceUnderPi : TCEnv -> ClosedExpr -> TC (TCEnv, ClosedExpr)
+reduceUnderPi env (Pi pname pbi dom cod) = do
+  let localId = env.nextLocalId
+  let localVar : ClosedExpr = Local localId pname
+  let env' = addLocalType localId dom ({ nextLocalId := S localId } env)
+  let cod' : ClosedExpr = instantiate1 (believe_me cod) localVar
+  (env'', result) <- reduceUnderPi env' cod'
+  pure (env'', result)
+reduceUnderPi env e = pure (env, e)
+
 export covering
 checkThmDecl : TCEnv -> Name -> ClosedExpr -> ClosedExpr -> List Name -> TC ()
 checkThmDecl env name ty value levelParams = do
@@ -159,9 +179,61 @@ checkThmDecl env name ty value levelParams = do
       eq <- isDefEq env' valueTy ty
       if eq
         then pure ()
-        else throw (OtherError $ "theorem proof type mismatch for " ++ show name
+        else do
+          -- Also show WHNF'd versions for debugging
+          valueTyWhnf <- whnf env' valueTy
+          tyWhnf <- whnf env' ty
+          -- Try to extract the arguments of Eq to see what we're comparing
+          let (vHead, vArgs) = getAppArgsLocal valueTyWhnf
+          let (dHead, dArgs) = getAppArgsLocal tyWhnf
+          -- Try to reduce inside the Pi to see the actual Eq being compared
+          (envInner, vInner) <- reduceUnderPi env' valueTy
+          (_, dInner) <- reduceUnderPi env' ty
+          vInnerWhnf <- whnf envInner vInner
+          dInnerWhnf <- whnf envInner dInner
+          -- Extract Eq arguments
+          let (_, vEqArgs) = getAppArgsLocal vInnerWhnf
+          let (_, dEqArgs) = getAppArgsLocal dInnerWhnf
+          -- Show third Eq arg which should be the RHS of the equality
+          let vRhs = case Reduction.listNth vEqArgs 2 of
+                       Just e => e
+                       Nothing => vInnerWhnf
+          let dRhs = case Reduction.listNth dEqArgs 2 of
+                       Just e => e
+                       Nothing => dInnerWhnf
+          vRhsWhnf <- whnf envInner vRhs
+          dRhsWhnf <- whnf envInner dRhs
+          -- Try to find and reduce (m + 1) specifically
+          let mPlusOne = case Reduction.listNth vEqArgs 1 of  -- Second arg of Eq (the LHS)
+                           Just e => e
+                           Nothing => vInnerWhnf
+          mPlusOneWhnf <- whnf envInner mPlusOne
+          -- Also try to get nested (m + 1) from vRhs if it's a mul application
+          let (vRhsHead, vRhsArgs) = getAppArgsLocal vRhs
+          -- Get the (m+1) argument - it's at position 4 in HMul.hMul Nat Nat Nat inst n (m+1)
+          let innerArg = case Reduction.listNth vRhsArgs 5 of  -- The (m+1) in n * (m+1)
+                           Just e => e
+                           Nothing => vRhs
+          innerArgWhnf <- whnf envInner innerArg
+          throw (OtherError $ "theorem proof type mismatch for " ++ show name
                    ++ "\n  inferred: " ++ ppClosedExpr valueTy
-                   ++ "\n  declared: " ++ ppClosedExpr ty)
+                   ++ "\n  declared: " ++ ppClosedExpr ty
+                   ++ "\n  inferred (whnf): " ++ ppClosedExpr valueTyWhnf
+                   ++ "\n  declared (whnf): " ++ ppClosedExpr tyWhnf
+                   ++ "\n  vHead: " ++ ppClosedExpr vHead ++ " vArgs count: " ++ show (length vArgs)
+                   ++ "\n  dHead: " ++ ppClosedExpr dHead ++ " dArgs count: " ++ show (length dArgs)
+                   ++ "\n  vInner: " ++ ppClosedExpr vInner
+                   ++ "\n  dInner: " ++ ppClosedExpr dInner
+                   ++ "\n  vInnerWhnf: " ++ ppClosedExpr vInnerWhnf
+                   ++ "\n  dInnerWhnf: " ++ ppClosedExpr dInnerWhnf
+                   ++ "\n  vRhs: " ++ ppClosedExpr vRhs
+                   ++ "\n  dRhs: " ++ ppClosedExpr dRhs
+                   ++ "\n  vRhsWhnf: " ++ ppClosedExpr vRhsWhnf
+                   ++ "\n  dRhsWhnf: " ++ ppClosedExpr dRhsWhnf
+                   ++ "\n  mPlusOne: " ++ ppClosedExpr mPlusOne
+                   ++ "\n  mPlusOneWhnf: " ++ ppClosedExpr mPlusOneWhnf
+                   ++ "\n  innerArg: " ++ ppClosedExpr innerArg
+                   ++ "\n  innerArgWhnf: " ++ ppClosedExpr innerArgWhnf)
 
 ------------------------------------------------------------------------
 -- Add Validated Declarations

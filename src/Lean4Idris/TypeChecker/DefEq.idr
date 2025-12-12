@@ -8,6 +8,7 @@ import Lean4Idris.Subst
 import Lean4Idris.TypeChecker.Monad
 import Lean4Idris.TypeChecker.Reduction
 import Lean4Idris.TypeChecker.Infer
+import Lean4Idris.Pretty
 import Data.Fin
 import Data.List
 import Debug.Trace

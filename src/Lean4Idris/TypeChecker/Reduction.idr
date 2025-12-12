@@ -163,6 +163,89 @@ getCtorFromMajor _ _ = Nothing
 eqReflName : Name
 eqReflName = Str "refl" (Str "Eq" Anonymous)
 
+------------------------------------------------------------------------
+-- Structure Eta Expansion for Iota Reduction
+------------------------------------------------------------------------
+
+-- Get the inductive name from a recursor name (e.g., Prod.rec -> Prod)
+getInductiveFromRecursor : Name -> Name
+getInductiveFromRecursor (Str "rec" parent) = parent
+getInductiveFromRecursor (Str "recOn" parent) = parent
+getInductiveFromRecursor (Str "casesOn" parent) = parent
+getInductiveFromRecursor n = n  -- Fallback
+
+-- Get the result sort of a type (skip past all Pi binders)
+-- Since we're traversing a well-formed type, this always terminates
+getResultSort : {n : Nat} -> Expr n -> Maybe Level
+getResultSort e@(Pi name bi dom cod) = getResultSort (assert_smaller e cod)
+getResultSort (Sort l) = Just l
+getResultSort _ = Nothing
+
+-- Check if the result sort is Prop (Sort Zero)
+covering
+isPropResult : ClosedExpr -> Bool
+isPropResult ty = case getResultSort ty of
+  Just l => simplify l == Zero
+  Nothing => False
+
+-- Check if an inductive is structure-like (single constructor, not recursive, NOT Prop)
+-- Returns: (ctorName, numParams, numFields, levelParams)
+-- Important: We skip Prop types since their proofs should be handled by K-like reduction
+-- or proof irrelevance, not structure eta expansion
+covering
+getStructureLikeInfo : TCEnv -> Name -> Maybe (Name, Nat, Nat, List Name)
+getStructureLikeInfo env indName = case lookupDecl indName env of
+  Just (IndDecl info levelParams) =>
+    -- Skip Prop types - they should use K-like reduction or proof irrelevance
+    if isPropResult info.type
+      then Nothing
+      else case info.constructors of
+        [ctor] =>
+          -- Single constructor - this is structure-like
+          case lookupDecl ctor.name env of
+            Just (CtorDecl _ _ _ _ numParams numFields _) =>
+              Just (ctor.name, numParams, numFields, levelParams)
+            _ => Nothing
+        _ => Nothing  -- Multiple or zero constructors
+  _ => Nothing
+
+-- Check if expression head is already a constructor
+isConstructorHead : TCEnv -> ClosedExpr -> Bool
+isConstructorHead env (Const name _) = case getConstructorInfo env name of
+  Just _ => True
+  Nothing => False
+isConstructorHead _ (NatLit _) = True
+isConstructorHead _ _ = False
+
+-- Try to eta-expand a major premise that is of structure-like type
+-- Takes the recursor's levels and first numParams args to construct the eta-expanded form
+-- Returns: (ctorName, ctorLevels, projections)
+-- Only expands if major is NOT already a constructor application
+-- Note: Constructor levels are taken from the inductive's level params, using recursor levels
+covering
+tryStructEtaExpand : TCEnv -> Name -> List Level -> List ClosedExpr -> ClosedExpr -> Maybe (Name, List Level, List ClosedExpr)
+tryStructEtaExpand env inductName recLevels typeParams major =
+  let (majorHead, _) = getAppSpine major
+  in if isConstructorHead env majorHead
+     then Nothing  -- Already a constructor, don't eta-expand
+     else
+       -- Check if inductName is structure-like
+       case getStructureLikeInfo env inductName of
+         Nothing => Nothing
+         Just (ctorName, numParams, numFields, ctorLevelParams) =>
+           -- major is not a constructor app, so eta-expand it
+           -- Build just the projections: (Proj inductName 0 major) (Proj inductName 1 major) ...
+           -- The constructor levels are the first (length ctorLevelParams) levels from recLevels
+           -- Note: We only return the field projections, NOT the type params - those are handled
+           -- separately by tryIotaReduction when building rhsWithParamsMotivesMinors
+           let ctorLevels = listTake (length ctorLevelParams) recLevels
+               projections = buildProjs inductName 0 numFields
+           in Just (ctorName, ctorLevels, projections)
+  where
+    buildProjs : Name -> Nat -> Nat -> List ClosedExpr
+    buildProjs _ _ Z = []
+    buildProjs structName i (S remaining) = Proj structName i major :: buildProjs structName (S i) remaining
+
 -- Try K-like reduction for Eq.rec when a == b in Eq α a b
 -- This allows reduction even when the proof isn't a visible Eq.refl constructor
 tryKLikeReduction : RecursorInfo -> List Level -> List ClosedExpr ->
@@ -195,13 +278,22 @@ tryIotaReduction env e whnfStep = do
   let major' = iterWhnfStep whnfStep major 100
   let _ = if debugIota then trace "IOTA: major after whnf=\{ppClosedExpr major'}" () else ()
   let (majorHead, majorArgs) = getAppSpine major'
-  -- First try direct constructor, then K-like reduction for Eq.rec
+  -- First try direct constructor, then K-like reduction for Eq.rec, then structure eta expansion
   -- Note: We do NOT synthesize Acc.intro for Acc.rec - if the major premise doesn't
   -- reduce to Acc.intro, we leave the term unreduced and let proof irrelevance
   -- handle it in DefEq. This matches lean4lean's approach.
   -- The third element of the tuple indicates whether the fields are already extracted (True) or need extraction from majorArgs (False)
   let ctorFromMajor = getCtorFromMajor majorHead majorArgs
   let kLike = tryKLikeReduction recInfo recLevels args whnfStep
+  -- Get inductive name and type params for structure eta expansion
+  let inductName = getInductiveFromRecursor recName
+  let typeParams = listTake recInfo.numParams args
+  let structEta = tryStructEtaExpand env inductName recLevels typeParams major'
+  let _ = if debugIota then trace "IOTA: inductName=\{show inductName} typeParams count=\{show (length typeParams)}" () else ()
+  -- The <|> chain tries each alternative in order
+  -- ctorFromMajor: Check if the whnf'd major is directly a constructor
+  -- kLike: For K-like recursors (like Eq.rec), synthesize the constructor
+  -- structEta: For structure-like types, eta-expand the major to a constructor
   (ctorName, _, ctorFieldArgs, fieldsProvided) <-
     (do (n, l, a) <- ctorFromMajor
         -- Verify this is actually a constructor, not just any Const
@@ -212,14 +304,13 @@ tryIotaReduction env e whnfStep = do
                          _ => False
         Just (n, l, a, provided)) <|>
     (do (n, l, a) <- kLike
-        -- K-like reduction returns synthesized constructor (Eq.refl)
+        Just (n, l, a, True)) <|>
+    (do (n, l, a) <- structEta
         Just (n, l, a, True))
-  let ctorInfo = getConstructorInfo env ctorName
-  (_, ctorIdx, ctorNumParams, ctorNumFields) <- ctorInfo
-  let _ = if debugIota then trace "IOTA: ctorIdx=\{show ctorIdx} ctorNumParams=\{show ctorNumParams} ctorNumFields=\{show ctorNumFields}" () else ()
+  (_, ctorIdx, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
   let ruleResult = findRecRule recInfo.rules ctorName
   rule <- ruleResult
-  -- For synthesized constructors (K-like, NatLit), ctorFieldArgs already contains the fields
+  -- For synthesized constructors (K-like, NatLit, struct eta), ctorFieldArgs already contains the fields
   -- For regular constructor from majorArgs, we need to drop params
   let ctorFields = if fieldsProvided
                      then ctorFieldArgs
@@ -230,7 +321,6 @@ tryIotaReduction env e whnfStep = do
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
   let rhsWithFields = mkApp rhsWithParamsMotivesMinors ctorFields
   let remainingArgs = listDrop (majorIdx + 1) args
-  let _ = if debugIota then trace "IOTA: SUCCESS" () else ()
   pure (mkApp rhsWithFields remainingArgs)
 
 ------------------------------------------------------------------------

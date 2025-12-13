@@ -512,33 +512,31 @@ whnf env e = do
       Just e' => Just e'
       Nothing => unfoldHead env e
 
-    mutual
-      -- Full step function that includes native evaluation, iota and projection reduction
-      -- This is passed to native eval functions so they can reduce arguments
-      -- IMPORTANT: tryNativeEval must come BEFORE reduceAppHead so that functions like
-      -- Nat.ble can be natively evaluated before being unfolded
-      whnfStepFull : ClosedExpr -> Maybe ClosedExpr
-      whnfStepFull e = case whnfStepCore e of
+    -- Full step function that includes native evaluation, iota and projection reduction
+    -- This is passed to native eval functions so they can reduce arguments
+    -- IMPORTANT: tryNativeEval comes BEFORE tryProjReduction so that functions like
+    -- Nat.ble can be natively evaluated before being unfolded
+    -- Note: reduceAppHead is NOT called here to avoid infinite loop - it's only called from whnfPure
+    whnfStepFull : ClosedExpr -> Maybe ClosedExpr
+    whnfStepFull e = case whnfStepCore e of
+      Just e' => Just e'
+      Nothing => case tryNativeEval e whnfStepFull of
         Just e' => Just e'
-        Nothing => case tryNativeEval e whnfStepFull of
+        Nothing => case tryProjReduction env e whnfStepWithDelta of
           Just e' => Just e'
-          Nothing => case reduceAppHead e of
+          Nothing => case tryIotaReduction env e whnfStepFull of
             Just e' => Just e'
-            Nothing => case tryProjReduction env e whnfStepWithDelta of
-              Just e' => Just e'
-              Nothing => case tryIotaReduction env e whnfStepFull of
-                Just e' => Just e'
-                Nothing => unfoldHead env e
+            Nothing => unfoldHead env e
 
-      reduceAppHead : ClosedExpr -> Maybe ClosedExpr
-      reduceAppHead (App f arg) = case reduceAppHead f of
+    reduceAppHead : ClosedExpr -> Maybe ClosedExpr
+    reduceAppHead (App f arg) = case reduceAppHead f of
+      Just f' => Just (App f' arg)
+      Nothing => case tryProjReduction env f whnfStepFull of
         Just f' => Just (App f' arg)
-        Nothing => case tryProjReduction env f whnfStepFull of
+        Nothing => case unfoldHead env f of
           Just f' => Just (App f' arg)
-          Nothing => case unfoldHead env f of
-            Just f' => Just (App f' arg)
-            Nothing => Nothing
-      reduceAppHead _ = Nothing
+          Nothing => Nothing
+    reduceAppHead _ = Nothing
 
     whnfPure : Nat -> ClosedExpr -> ClosedExpr
     whnfPure 0 e =

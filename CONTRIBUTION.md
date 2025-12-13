@@ -39,6 +39,15 @@ ls ~/.cache/lean4exports/tier01-init/*.export
    cp /tmp/*.export.log logs/$COMMIT/
    ```
 
+### Important: Preserving Log History
+
+**Never modify, move, or delete existing log directories.** Each log directory is a historical record tied to a specific commit hash. These logs enable comparing performance across different versions of the code.
+
+- Do NOT rename existing log directories
+- Do NOT move logs from one commit directory to another
+- Do NOT delete old log directories
+- Only ADD new log directories for new commits
+
 ### Analyzing Results
 
 1. **Get statistics for a commit:**

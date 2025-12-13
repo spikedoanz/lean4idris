@@ -11,23 +11,9 @@ import Lean4Idris.TypeChecker.Reduction as Reduction
 import Lean4Idris.TypeChecker.Infer
 import Lean4Idris.TypeChecker.DefEq
 import Data.List
-import System.File
 import Debug.Trace
 
 %default total
-
-debugFile : File
-debugFile = unsafePerformIO $ do
-  Right f <- openFile "/tmp/typecheck_debug.txt" Append
-    | Left _ => pure stdin
-  pure f
-
-debugPrint : String -> a -> a
-debugPrint msg x = unsafePerformIO $ do
-  Right () <- fPutStrLn debugFile (msg ++ "\n")
-    | Left _ => pure x
-  fflush debugFile
-  pure x
 
 ------------------------------------------------------------------------
 -- Name/Param Validation

@@ -136,12 +136,12 @@ getConstHead (Const n ls) = Just (n, ls)
 getConstHead _ = Nothing
 
 export covering
-getNthPiDomSubst : {n : Nat} -> Nat -> List (Expr n) -> Expr n -> Maybe (Expr n)
+getNthPiDomSubst : Nat -> List Expr -> Expr -> Maybe Expr
 getNthPiDomSubst Z _ (Pi _ _ dom _) = Just dom
-getNthPiDomSubst (S k) [] (Pi _ _ _ cod) = getNthPiDomSubst k [] (believe_me cod)
+getNthPiDomSubst (S k) [] (Pi _ _ _ cod) = getNthPiDomSubst k [] cod
 getNthPiDomSubst (S k) (arg :: args) (Pi _ _ _ cod) =
-  let result = instantiate1 (believe_me cod) (believe_me arg) in
-  getNthPiDomSubst k args (believe_me result)
+  let result = instantiate1 cod arg in
+  getNthPiDomSubst k args result
 getNthPiDomSubst _ _ _ = Nothing
 
 -- Debug flag: set to True to enable tracing
@@ -188,8 +188,9 @@ getInductiveFromRecursor n = n  -- Fallback
 
 -- Get the result sort of a type (skip past all Pi binders)
 -- Since we're traversing a well-formed type, this always terminates
-getResultSort : {n : Nat} -> Expr n -> Maybe Level
-getResultSort e@(Pi name bi dom cod) = getResultSort (assert_smaller e cod)
+covering
+getResultSort : Expr -> Maybe Level
+getResultSort (Pi name bi dom cod) = getResultSort cod
 getResultSort (Sort l) = Just l
 getResultSort _ = Nothing
 
@@ -376,11 +377,11 @@ quotLiftName = Str "lift" (Str "Quot" Anonymous)
 export quotIndName : Name
 quotIndName = Str "ind" (Str "Quot" Anonymous)
 
-mkQBVar : Nat -> ClosedExpr
-mkQBVar n = believe_me (the (Expr 1) (BVar (believe_me n)))
+mkQBVar : Nat -> Expr
+mkQBVar n = BVar n
 
-mkQPi : Name -> BinderInfo -> ClosedExpr -> ClosedExpr -> ClosedExpr
-mkQPi name bi ty body = believe_me (the (Expr 0) (Pi name bi (believe_me ty) (believe_me body)))
+mkQPi : Name -> BinderInfo -> Expr -> Expr -> Expr
+mkQPi name bi ty body = Pi name bi ty body
 
 export
 getQuotType : Name -> Maybe (ClosedExpr, List Name)
@@ -499,11 +500,11 @@ whnf env e = do
   pure (whnfPure 1000 e)
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
-    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 body arg)
     whnfStepCore (App f arg) = case whnfStepCore f of
       Just f' => Just (App f' arg)
       Nothing => Nothing
-    whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
+    whnfStepCore (Let _ _ val body) = Just (instantiate1 body val)
     whnfStepCore _ = Nothing
 
     whnfStepWithDelta : ClosedExpr -> Maybe ClosedExpr
@@ -584,8 +585,8 @@ whnfCore : ClosedExpr -> TC ClosedExpr
 whnfCore e = pure (whnfCorePure 1000 e)
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
-    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
-    whnfStepCore (Let _ _ val body) = Just (instantiate1 (believe_me body) val)
+    whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 body arg)
+    whnfStepCore (Let _ _ val body) = Just (instantiate1 body val)
     whnfStepCore _ = Nothing
 
     whnfCorePure : Nat -> ClosedExpr -> ClosedExpr

@@ -10,28 +10,11 @@ import Lean4Idris.Expr
 import Lean4Idris.Decl
 import Lean4Idris.Export.Token
 import Lean4Idris.Export.Lexer
-import Data.Fin
 import Data.List
 import Data.Maybe
 import Data.SortedMap
-import Decidable.Equality
 
 %default total
-
-------------------------------------------------------------------------
--- Scoped expression parsing
-------------------------------------------------------------------------
-
-||| An expression with unknown scope depth, stored as a function from depth
-||| to an expression at that depth. This lets us delay the scope resolution.
-public export
-ScopedExpr : Type
-ScopedExpr = (n : Nat) -> Maybe (Expr n)
-
-||| A closed scoped expression (at depth 0)
-export
-closeScopedExpr : ScopedExpr -> Maybe ClosedExpr
-closeScopedExpr f = f 0
 
 ------------------------------------------------------------------------
 -- Recursor rule (intermediate representation)
@@ -55,7 +38,7 @@ record ParseState where
   constructor MkParseState
   names : SortedMap Nat Name
   levels : SortedMap Nat Level
-  exprs : SortedMap Nat ScopedExpr
+  exprs : SortedMap Nat Expr
   recRules : SortedMap Nat ParsedRecRule
   decls : List Declaration
 
@@ -115,24 +98,12 @@ lookupLevel st idx =
     Just l => Right l
     Nothing => Left $ "Invalid level index: " ++ show idx
 
-||| Look up a scoped expression by index
-lookupScopedExpr : ParseState -> Nat -> Either String ScopedExpr
-lookupScopedExpr st idx =
+||| Look up an expression by index
+lookupExpr : ParseState -> Nat -> Either String Expr
+lookupExpr st idx =
   case lookup idx st.exprs of
     Just e => Right e
     Nothing => Left $ "Invalid expr index: " ++ show idx
-
-||| Look up an expression by index at a given scope depth
-lookupExprAt : ParseState -> Nat -> (depth : Nat) -> Either String (Expr depth)
-lookupExprAt st idx depth = do
-  se <- lookupScopedExpr st idx
-  case se depth of
-    Just e => Right e
-    Nothing => Left $ "Expression " ++ show idx ++ " invalid at depth " ++ show depth
-
-||| Look up a closed expression by index
-lookupExpr : ParseState -> Nat -> Either String ClosedExpr
-lookupExpr st idx = lookupExprAt st idx 0
 
 ||| Look up a recursor rule by index
 lookupRecRule : ParseState -> Nat -> Either String ParsedRecRule
@@ -148,12 +119,6 @@ parseBinderInfo (TCommand BI :: rest) = Right (Implicit, rest)
 parseBinderInfo (TCommand BS :: rest) = Right (StrictImplicit, rest)
 parseBinderInfo (TCommand BC :: rest) = Right (Instance, rest)
 parseBinderInfo toks = Left $ "Expected binder info, got " ++ show (take 1 toks)
-
-||| Convert a natural number to Fin n, if possible
-natToFinMaybe : (i : Nat) -> (n : Nat) -> Maybe (Fin n)
-natToFinMaybe i n = case isLT i n of
-  Yes prf => Just (natToFinLT i)
-  No _ => Nothing
 
 ||| Parse a name command: idx #NS parent_idx string | idx #NI parent_idx nat
 parseNameCmd : ParseState -> Nat -> List Token -> Result ParseState
@@ -205,52 +170,34 @@ parseLevelIndices st toks = go [] toks
         Right l => go (l :: acc) rest
     go acc toks' = (reverse acc, toks')
 
-||| Weaken a closed expression to any depth
-weakenToN : (n : Nat) -> ClosedExpr -> Expr n
-weakenToN Z e = e
-weakenToN (S k) e = weaken1 (weakenToN k e)
-
-||| Make a scoped expression from a closed one (can be used at any depth)
-liftClosed : ClosedExpr -> ScopedExpr
-liftClosed e = \n => Just (weakenToN n e)
-
 ||| Parse an expression command
-||| Expressions are stored as ScopedExpr to handle bound variables properly
 parseExprCmd : ParseState -> Nat -> List Token -> Result ParseState
 
 -- #EV i : bound variable with de Bruijn index i
 parseExprCmd st idx (TCommand EV :: rest) = do
   (i, rest1) <- expectNat rest
-  -- Create a scoped expr: at depth n, if i < n then BVar (natToFinLT i) else Nothing
-  let scopedE : ScopedExpr = \n => do
-        fin <- natToFinMaybe i n
-        Just (BVar fin)
-  Right ({ exprs $= insert idx scopedE } st, rest1)
+  Right ({ exprs $= insert idx (BVar i) } st, rest1)
 
 -- #ES level : Sort level
 parseExprCmd st idx (TCommand ES :: rest) = do
   (levelIdx, rest1) <- expectNat rest
   l <- lookupLevel st levelIdx
-  Right ({ exprs $= insert idx (liftClosed (Sort l)) } st, rest1)
+  Right ({ exprs $= insert idx (Sort l) } st, rest1)
 
 -- #EC name levels* : Const name [levels]
 parseExprCmd st idx (TCommand EC :: rest) = do
   (nameIdx, rest1) <- expectNat rest
   n <- lookupName st nameIdx
   let (lvls, rest2) = parseLevelIndices st rest1
-  Right ({ exprs $= insert idx (liftClosed (Const n lvls)) } st, rest2)
+  Right ({ exprs $= insert idx (Const n lvls) } st, rest2)
 
 -- #EA fn arg : App fn arg
 parseExprCmd st idx (TCommand EA :: rest) = do
   (fnIdx, rest1) <- expectNat rest
   (argIdx, rest2) <- expectNat rest1
-  fnScoped <- lookupScopedExpr st fnIdx
-  argScoped <- lookupScopedExpr st argIdx
-  let scopedE : ScopedExpr = \n => do
-        fn <- fnScoped n
-        arg <- argScoped n
-        Just (App fn arg)
-  Right ({ exprs $= insert idx scopedE } st, rest2)
+  fn <- lookupExpr st fnIdx
+  arg <- lookupExpr st argIdx
+  Right ({ exprs $= insert idx (App fn arg) } st, rest2)
 
 -- #EL binderInfo name domType body : Lam name binderInfo domType body
 parseExprCmd st idx (TCommand EL :: rest) = do
@@ -259,13 +206,9 @@ parseExprCmd st idx (TCommand EL :: rest) = do
   (domIdx, rest3) <- expectNat rest2
   (bodyIdx, rest4) <- expectNat rest3
   n <- lookupName st nameIdx
-  domScoped <- lookupScopedExpr st domIdx
-  bodyScoped <- lookupScopedExpr st bodyIdx
-  let scopedE : ScopedExpr = \depth => do
-        dom <- domScoped depth
-        body <- bodyScoped (S depth)  -- body is at depth+1
-        Just (Lam n bi dom body)
-  Right ({ exprs $= insert idx scopedE } st, rest4)
+  dom <- lookupExpr st domIdx
+  body <- lookupExpr st bodyIdx
+  Right ({ exprs $= insert idx (Lam n bi dom body) } st, rest4)
 
 -- #EP binderInfo name domType body : Pi name binderInfo domType body
 parseExprCmd st idx (TCommand EP :: rest) = do
@@ -274,13 +217,9 @@ parseExprCmd st idx (TCommand EP :: rest) = do
   (domIdx, rest3) <- expectNat rest2
   (bodyIdx, rest4) <- expectNat rest3
   n <- lookupName st nameIdx
-  domScoped <- lookupScopedExpr st domIdx
-  bodyScoped <- lookupScopedExpr st bodyIdx
-  let scopedE : ScopedExpr = \depth => do
-        dom <- domScoped depth
-        body <- bodyScoped (S depth)  -- body is at depth+1
-        Just (Pi n bi dom body)
-  Right ({ exprs $= insert idx scopedE } st, rest4)
+  dom <- lookupExpr st domIdx
+  body <- lookupExpr st bodyIdx
+  Right ({ exprs $= insert idx (Pi n bi dom body) } st, rest4)
 
 -- #EZ name type value body : Let name type value body
 parseExprCmd st idx (TCommand EZ :: rest) = do
@@ -289,15 +228,10 @@ parseExprCmd st idx (TCommand EZ :: rest) = do
   (valIdx, rest3) <- expectNat rest2
   (bodyIdx, rest4) <- expectNat rest3
   n <- lookupName st nameIdx
-  tyScoped <- lookupScopedExpr st tyIdx
-  valScoped <- lookupScopedExpr st valIdx
-  bodyScoped <- lookupScopedExpr st bodyIdx
-  let scopedE : ScopedExpr = \depth => do
-        ty <- tyScoped depth
-        val <- valScoped depth
-        body <- bodyScoped (S depth)  -- body is at depth+1
-        Just (Let n ty val body)
-  Right ({ exprs $= insert idx scopedE } st, rest4)
+  ty <- lookupExpr st tyIdx
+  val <- lookupExpr st valIdx
+  body <- lookupExpr st bodyIdx
+  Right ({ exprs $= insert idx (Let n ty val body) } st, rest4)
 
 -- #EJ structName fieldIdx expr : Proj structName fieldIdx expr
 parseExprCmd st idx (TCommand EJ :: rest) = do
@@ -305,23 +239,20 @@ parseExprCmd st idx (TCommand EJ :: rest) = do
   (fieldIdx, rest2) <- expectNat rest1
   (exprIdx, rest3) <- expectNat rest2
   sn <- lookupName st structNameIdx
-  exprScoped <- lookupScopedExpr st exprIdx
-  let scopedE : ScopedExpr = \depth => do
-        e <- exprScoped depth
-        Just (Proj sn fieldIdx e)
-  Right ({ exprs $= insert idx scopedE } st, rest3)
+  e <- lookupExpr st exprIdx
+  Right ({ exprs $= insert idx (Proj sn fieldIdx e) } st, rest3)
 
 -- #ELN n : NatLit n
 parseExprCmd st idx (TCommand ELN :: rest) = do
   (n, rest1) <- expectNat rest
-  Right ({ exprs $= insert idx (liftClosed (NatLit n)) } st, rest1)
+  Right ({ exprs $= insert idx (NatLit n) } st, rest1)
 
 -- #ELS hexbytes : StringLit (decoded)
 parseExprCmd st idx (TCommand ELS :: rest) = do
   -- For now, just collect hex tokens until newline and decode
   let (hexParts, rest1) = collectHex rest
   let s = decodeHexString hexParts
-  Right ({ exprs $= insert idx (liftClosed (StringLit s)) } st, rest1)
+  Right ({ exprs $= insert idx (StringLit s) } st, rest1)
   where
     collectHex : List Token -> (List String, List Token)
     collectHex (THex h :: rest') =
@@ -663,13 +594,10 @@ export
 getLevels : ParseState -> List (Nat, Level)
 getLevels st = toList st.levels
 
-||| Get all parsed expressions (only those that are valid at depth 0)
+||| Get all parsed expressions
 export
-getExprs : ParseState -> List (Nat, ClosedExpr)
-getExprs st = mapMaybe extractClosed (toList st.exprs)
-  where
-    extractClosed : (Nat, ScopedExpr) -> Maybe (Nat, ClosedExpr)
-    extractClosed (idx, se) = map (\e => (idx, e)) (se 0)
+getExprs : ParseState -> List (Nat, Expr)
+getExprs st = toList st.exprs
 
 ||| Get all parsed declarations
 export

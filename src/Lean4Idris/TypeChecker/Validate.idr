@@ -57,10 +57,10 @@ checkIsType env e = do
 -- Positivity Check
 ------------------------------------------------------------------------
 
-checkNegativeOccurrence : Name -> {n : Nat} -> Expr n -> Bool
+checkNegativeOccurrence : Name -> Expr -> Bool
 checkNegativeOccurrence indName = go 0
   where
-    go : {m : Nat} -> Nat -> Expr m -> Bool
+    go : Nat -> Expr -> Bool
     go _ (BVar _) = False
     go _ (Local _ _) = False
     go _ (Sort _) = False
@@ -87,13 +87,13 @@ checkPositivity indName (ctor :: ctors) =
 -- Constructor Validation
 ------------------------------------------------------------------------
 
-getReturnTypeHead : Expr n -> Maybe (Name, List Level)
+getReturnTypeHead : Expr -> Maybe (Name, List Level)
 getReturnTypeHead (Pi _ _ _ cod) = getReturnTypeHead cod
 getReturnTypeHead (App f _) = getReturnTypeHead f
 getReturnTypeHead (Const n ls) = Just (n, ls)
 getReturnTypeHead _ = Nothing
 
-countPiBinders : Expr n -> Nat
+countPiBinders : Expr -> Nat
 countPiBinders (Pi _ _ _ cod) = S (countPiBinders cod)
 countPiBinders _ = 0
 

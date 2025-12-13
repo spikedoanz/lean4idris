@@ -76,6 +76,10 @@ getAppConst e = go e []
 debugUnfold : Bool
 debugUnfold = False
 
+-- Helper to force trace execution
+traceUnfold : String -> a -> a
+traceUnfold msg x = if debugUnfold then trace msg x else x
+
 covering
 unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 unfoldHead env e =
@@ -83,14 +87,24 @@ unfoldHead env e =
     Just (name, levels, args) =>
       case unfoldConst env name levels of
         Just value =>
-          let _ = if debugUnfold && show name == "UInt64.size" then trace "UNFOLD: \{show name} -> ..." () else ()
-          in Just (mkApp value args)
+          let nameStr = show name
+              shouldTrace = isInfixOf (unpack "flatMap") (unpack nameStr) ||
+                            isInfixOf (unpack "brecOn") (unpack nameStr) ||
+                            isInfixOf (unpack "flatten") (unpack nameStr)
+          in if shouldTrace
+               then traceUnfold "UNFOLD: \{nameStr}" (Just (mkApp value args))
+               else Just (mkApp value args)
         Nothing => Nothing
     Nothing => case e of
       Const name levels =>
         let result = unfoldConst env name levels
-            _ = if debugUnfold && show name == "UInt64.size" then trace "UNFOLD-CONST: \{show name}" () else ()
-        in result
+            nameStr = show name
+            shouldTrace = isInfixOf (unpack "flatMap") (unpack nameStr) ||
+                          isInfixOf (unpack "brecOn") (unpack nameStr) ||
+                          isInfixOf (unpack "flatten") (unpack nameStr)
+        in if shouldTrace
+             then traceUnfold "UNFOLD-CONST: \{nameStr}" result
+             else result
       _ => Nothing
 
 ------------------------------------------------------------------------
@@ -151,6 +165,10 @@ debugIota = False
 -- Debug flag for whnf steps
 debugWhnf : Bool
 debugWhnf = False
+
+-- Debug flag for whnf results on List.flatMap
+debugFlatMap : Bool
+debugFlatMap = False
 
 -- Names for Nat constructors (used in iota reduction for NatLit handling)
 iotaNatName : Name
@@ -260,6 +278,7 @@ tryStructEtaExpand env inductName recLevels typeParams major =
 
 -- Try K-like reduction for Eq.rec when a == b in Eq α a b
 -- This allows reduction even when the proof isn't a visible Eq.refl constructor
+-- DEPRECATED: Use tryKLikeReductionM instead which properly consumes fuel
 tryKLikeReduction : RecursorInfo -> List Level -> List ClosedExpr ->
                    (ClosedExpr -> Maybe ClosedExpr) -> Maybe (Name, List Level, List ClosedExpr)
 tryKLikeReduction recInfo recLevels args whnfStep =
@@ -272,12 +291,64 @@ tryKLikeReduction recInfo recLevels args whnfStep =
       Just a => case listNth args (recInfo.numParams + recInfo.numMotives + recInfo.numMinors) of
         Nothing => Nothing
         Just b =>
-          let a' = iterWhnfStep whnfStep a 100
-              b' = iterWhnfStep whnfStep b 100
+          -- Limit iteration to 10 steps - main whnf should do heavy lifting
+          let a' = iterWhnfStep whnfStep a 10
+              b' = iterWhnfStep whnfStep b 10
           in if exprEq a' b'
              then Just (eqReflName, recLevels, [alpha, a])
              else Nothing
 
+
+-- Version of iota reduction that takes a pre-reduced major premise
+-- This is used when the caller has already called whnf on the major (consuming TC fuel)
+export covering
+tryIotaReductionWithMajor : TCEnv -> ClosedExpr -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
+tryIotaReductionWithMajor env e major' whnfStep = do
+  let (head, args) = getAppSpine e
+  (recName, recLevels) <- getConstHead head
+  (recInfo, recLevelParams) <- getRecursorInfoWithLevels env recName
+  let majorIdx = getMajorIdx recInfo
+  let _ = if debugIota then trace "IOTA: recursor=\{show recName} majorIdx=\{show majorIdx} numArgs=\{show (length args)}" () else ()
+  -- major' is already reduced by caller
+  let _ = if debugIota then trace "IOTA: major after whnf=\{ppClosedExpr major'}" () else ()
+  let (majorHead, majorArgs) = getAppSpine major'
+  let _ = if debugIota then trace "IOTA: majorHead=\{ppClosedExpr majorHead} majorArgs=\{show (length majorArgs)}" () else ()
+  -- First try direct constructor, then K-like reduction for Eq.rec, then structure eta expansion
+  let ctorFromMajor = getCtorFromMajor majorHead majorArgs
+  -- For K-like, use LIMITED iteration since caller already did main reduction
+  let kLike = tryKLikeReduction recInfo recLevels args whnfStep
+  -- Get inductive name and type params for structure eta expansion
+  let inductName = getInductiveFromRecursor recName
+  let typeParams = listTake recInfo.numParams args
+  let structEta = tryStructEtaExpand env inductName recLevels typeParams major'
+  let _ = if debugIota then trace "IOTA: inductName=\{show inductName} typeParams count=\{show (length typeParams)}" () else ()
+  (ctorName, _, ctorFieldArgs, fieldsProvided) <-
+    (do (n, l, a) <- ctorFromMajor
+        _ <- getConstructorInfo env n
+        let provided = case majorHead of
+                         NatLit _ => True
+                         _ => False
+        Just (n, l, a, provided)) <|>
+    (do (n, l, a) <- kLike
+        Just (n, l, a, True)) <|>
+    (do (n, l, a) <- structEta
+        Just (n, l, a, True))
+  (_, ctorIdx, ctorNumParams, ctorNumFields) <- getConstructorInfo env ctorName
+  let ruleResult = findRecRule recInfo.rules ctorName
+  rule <- ruleResult
+  let ctorFields = if fieldsProvided
+                     then ctorFieldArgs
+                     else listDrop ctorNumParams majorArgs
+  guard (length ctorFields >= ctorNumFields)
+  let firstIndexIdx = recInfo.numParams + recInfo.numMotives + recInfo.numMinors
+  let rhs = instantiateLevelParams recLevelParams recLevels rule.rhs
+  let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
+  let rhsWithFields = mkApp rhsWithParamsMotivesMinors ctorFields
+  let remainingArgs = listDrop (majorIdx + 1) args
+  pure (mkApp rhsWithFields remainingArgs)
+
+-- Original version that does its own major premise reduction
+-- DEPRECATED: Use tryIotaReductionWithMajor when possible to ensure proper fuel consumption
 export covering
 tryIotaReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryIotaReduction env e whnfStep = do
@@ -287,7 +358,8 @@ tryIotaReduction env e whnfStep = do
   let majorIdx = getMajorIdx recInfo
   let _ = if debugIota then trace "IOTA: recursor=\{show recName} majorIdx=\{show majorIdx} numArgs=\{show (length args)}" () else ()
   major <- listNth args majorIdx
-  let major' = iterWhnfStep whnfStep major 100
+  -- Limit iteration to 10 steps - the main whnf should do the heavy lifting
+  let major' = iterWhnfStep whnfStep major 10
   let _ = if debugIota then trace "IOTA: major after whnf=\{ppClosedExpr major'}" () else ()
   let (majorHead, majorArgs) = getAppSpine major'
   let _ = if debugIota then trace "IOTA: majorHead=\{ppClosedExpr majorHead} majorArgs=\{show (length majorArgs)}" () else ()
@@ -344,10 +416,28 @@ tryIotaReduction env e whnfStep = do
 debugProj : Bool
 debugProj = False
 
+-- Version that takes a pre-reduced struct - used when caller has already called whnf
+export covering
+tryProjReductionWithStruct : TCEnv -> Name -> Nat -> ClosedExpr -> Maybe ClosedExpr
+tryProjReductionWithStruct env structName idx struct' = do
+  let _ = if debugProj then trace "PROJ: struct=\{show structName} idx=\{show idx}" () else ()
+  let _ = if debugProj then trace "PROJ: struct'=\{ppClosedExpr struct'}" () else ()
+  let (head, args) = getAppSpine struct'
+  let _ = if debugProj then trace "PROJ: head=\{ppClosedExpr head} args=\{show (length args)}" () else ()
+  (ctorName, _) <- getConstHead head
+  let _ = if debugProj then trace "PROJ: ctorName=\{show ctorName}" () else ()
+  (_, _, numParams, numFields) <- getConstructorInfo env ctorName
+  let _ = if debugProj then trace "PROJ: numParams=\{show numParams} numFields=\{show numFields}" () else ()
+  guard (idx < numFields)
+  listNth args (numParams + idx)
+
+-- Original version that does its own struct reduction
+-- DEPRECATED: Use tryProjReductionWithStruct when possible to ensure proper fuel consumption
 export covering
 tryProjReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryProjReduction env (Proj structName idx struct) whnfStep = do
-  let struct' = iterWhnfStep whnfStep struct 100
+  -- Limit iteration to 10 steps - main whnf should do heavy lifting
+  let struct' = iterWhnfStep whnfStep struct 10
   let _ = if debugProj then trace "PROJ: struct=\{show structName} idx=\{show idx}" () else ()
   let _ = if debugProj then trace "PROJ: struct'=\{ppClosedExpr struct'}" () else ()
   let (head, args) = getAppSpine struct'
@@ -478,7 +568,8 @@ tryQuotReduction e whnfStep = do
     else Nothing
   guard (List.length args > mkPos)
   mkArg <- listNth args mkPos
-  let mkArg' = iterWhnfStep whnfStep mkArg 100
+  -- Limit iteration to 10 steps - main whnf should do heavy lifting
+  let mkArg' = iterWhnfStep whnfStep mkArg 10
   let (mkHead, mkArgs) = getAppSpine mkArg'
   (mkName, _) <- getConstHead mkHead
   guard (mkName == quotMkName && List.length mkArgs == 3)
@@ -492,11 +583,40 @@ tryQuotReduction e whnfStep = do
 -- WHNF
 ------------------------------------------------------------------------
 
+-- Helper to check if expression contains flatMap in head position
+isFlatMapHead : ClosedExpr -> Bool
+isFlatMapHead e =
+  let (head, _) = getAppSpine e in
+  case head of
+    Const n _ => isInfixOf (unpack "flatMap") (unpack (show n))
+    _ => False
+
+%inline
+traceWhnfFlatMap : ClosedExpr -> ClosedExpr -> ClosedExpr
+traceWhnfFlatMap input output =
+  assert_total $ trace "WHNF flatMap:\n  in:  \{ppClosedExpr input}\n  out: \{ppClosedExpr output}" output
+
+-- Helper to identify if an expression is a recursor application and extract major premise info
+getRecursorMajor : TCEnv -> ClosedExpr -> Maybe (RecursorInfo, Nat, ClosedExpr)
+getRecursorMajor env e =
+  let (head, args) = getAppSpine e
+  in do
+    (recName, _) <- getConstHead head
+    recInfo <- getRecursorInfo env recName
+    let majorIdx = getMajorIdx recInfo
+    major <- listNth args majorIdx
+    Just (recInfo, majorIdx, major)
+
+-- Helper to identify if an expression is a projection and extract struct
+getProjStruct : ClosedExpr -> Maybe (Name, Nat, ClosedExpr)
+getProjStruct (Proj structName idx struct) = Just (structName, idx, struct)
+getProjStruct _ = Nothing
+
 export covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
 whnf env e = do
   useFuel
-  pure (whnfPure 1000 e)
+  whnfLoop 1000 e
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
@@ -512,10 +632,36 @@ whnf env e = do
       Nothing => unfoldHead env e
 
     mutual
+      -- Simple app head reduction without projection - just recurse and unfold
+      -- Used to avoid infinite recursion through projection
+      reduceAppHeadSimple : ClosedExpr -> Maybe ClosedExpr
+      reduceAppHeadSimple (App f arg) = case reduceAppHeadSimple f of
+        Just f' => Just (App f' arg)
+        Nothing => case unfoldHead env f of
+          Just f' => Just (App f' arg)
+          Nothing => Nothing
+      reduceAppHeadSimple _ = Nothing
+
+      -- Step function with iota but NO projection
+      -- Used inside tryProjReduction to enable brecOn.go iota without infinite recursion
+      -- Uses whnfStepWithDelta internally to prevent exponential blowup from nested iterWhnfStep
+      whnfStepWithIota : ClosedExpr -> Maybe ClosedExpr
+      whnfStepWithIota e = case whnfStepCore e of
+        Just e' => Just e'
+        Nothing => case tryNativeEval e whnfStepWithDelta of
+          Just e' => Just e'
+          Nothing => case reduceAppHeadSimple e of
+            Just e' => Just e'
+            Nothing => case tryIotaReduction env e whnfStepWithDelta of
+              Just e' => Just e'
+              Nothing => unfoldHead env e
+
       -- Full step function that includes native evaluation, iota and projection reduction
       -- This is passed to native eval functions so they can reduce arguments
       -- IMPORTANT: tryNativeEval must come BEFORE reduceAppHead so that functions like
       -- Nat.ble can be natively evaluated before being unfolded
+      -- Note: tryProjReduction uses whnfStepWithIota (not whnfStepFull) to enable
+      -- iota reduction inside structs for brecOn.go, while avoiding infinite proj recursion
       whnfStepFull : ClosedExpr -> Maybe ClosedExpr
       whnfStepFull e = case whnfStepCore e of
         Just e' => Just e'
@@ -523,7 +669,7 @@ whnf env e = do
           Just e' => Just e'
           Nothing => case reduceAppHead e of
             Just e' => Just e'
-            Nothing => case tryProjReduction env e whnfStepWithDelta of
+            Nothing => case tryProjReduction env e whnfStepWithIota of
               Just e' => Just e'
               Nothing => case tryIotaReduction env e whnfStepFull of
                 Just e' => Just e'
@@ -532,7 +678,7 @@ whnf env e = do
       reduceAppHead : ClosedExpr -> Maybe ClosedExpr
       reduceAppHead (App f arg) = case reduceAppHead f of
         Just f' => Just (App f' arg)
-        Nothing => case tryProjReduction env f whnfStepFull of
+        Nothing => case tryProjReduction env f whnfStepWithIota of
           Just f' => Just (App f' arg)
           Nothing => case unfoldHead env f of
             Just f' => Just (App f' arg)
@@ -578,6 +724,44 @@ whnf env e = do
                       let _ = if debugWhnf then trace "WHNF-unfold: \{ppClosedExpr e} -> ..." () else ()
                       in whnfPure k e'
                     Nothing => e
+
+    -- Main monadic WHNF loop that properly consumes TC fuel for deep reductions
+    -- This is the key fix: when we encounter a recursor or projection, we recursively
+    -- call whnf on the major premise/struct, consuming TC fuel.
+    covering
+    whnfLoop : Nat -> ClosedExpr -> TC ClosedExpr
+    whnfLoop 0 e = pure e
+    whnfLoop (S k) e = do
+      -- First, do one round of pure reduction to handle simple cases
+      let e' = whnfPure 100 e  -- Limited fuel per round
+      -- Check if we need monadic reduction for recursor application
+      case getRecursorMajor env e' of
+        Just (recInfo, majorIdx, major) => do
+          -- Recursively reduce major premise - THIS CONSUMES TC FUEL
+          major' <- whnf env major
+          -- Try iota reduction with pre-reduced major
+          case tryIotaReductionWithMajor env e' major' whnfStepFull of
+            Just result => whnfLoop k result  -- Continue reducing the result
+            Nothing => do
+              -- Couldn't reduce with this major, try more pure reduction
+              let e'' = whnfPure 50 e'
+              if exprEq e' e'' then pure e'' else whnfLoop k e''
+        Nothing =>
+          -- Check if we need monadic reduction for projection
+          case getProjStruct e' of
+            Just (structName, idx, struct) => do
+              -- Recursively reduce struct - THIS CONSUMES TC FUEL
+              struct' <- whnf env struct
+              -- Try projection reduction with pre-reduced struct
+              case tryProjReductionWithStruct env structName idx struct' of
+                Just result => whnfLoop k result  -- Continue reducing the result
+                Nothing => do
+                  -- Couldn't reduce, try more pure reduction
+                  let e'' = whnfPure 50 e'
+                  if exprEq e' e'' then pure e'' else whnfLoop k e''
+            Nothing =>
+              -- No recursor or projection, just use pure result
+              pure e'
 
 export covering
 whnfCore : ClosedExpr -> TC ClosedExpr

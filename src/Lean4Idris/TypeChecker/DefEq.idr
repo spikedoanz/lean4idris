@@ -15,6 +15,14 @@ import Debug.Trace
 
 %default total
 
+-- Debug flag for isDefEq
+debugDefEq : Bool
+debugDefEq = False  -- Disable for now since it's too verbose
+
+-- Debug flag for flatMap specifically
+debugFlatMapDefEq : Bool
+debugFlatMapDefEq = False
+
 ------------------------------------------------------------------------
 -- NatLit/Nat constructor equality
 ------------------------------------------------------------------------
@@ -324,6 +332,18 @@ mutual
   isDefEqNormalized env (StringLit s1) (StringLit s2) = pure (s1 == s2)
   isDefEqNormalized env _ _ = pure False
 
+  -- Check if expression head is flatMap
+  isFlatMapHeadLocal : ClosedExpr -> Bool
+  isFlatMapHeadLocal expr =
+    let (h, _) = getAppSpine expr in
+    case h of
+      Const n _ => isInfixOf (unpack "flatMap") (unpack (show n))
+      _ => False
+
+  -- Simple containment check in pretty-printed string
+  containsFlatMapStr : String -> Bool
+  containsFlatMapStr s = isInfixOf (unpack "flatMap") (unpack s)
+
   export covering
   isDefEq : TCEnv -> ClosedExpr -> ClosedExpr -> TC Bool
   isDefEq env e1 e2 = do
@@ -332,8 +352,14 @@ mutual
     if exprEq e1 e2
       then pure True
       else do
+        let e1Str = ppClosedExpr e1
+        let e2Str = ppClosedExpr e2
+        let isFlatMapE1 = isFlatMapHeadLocal e1
         e1' <- whnf env e1
         e2' <- whnf env e2
+        let _ = if debugFlatMapDefEq && isFlatMapE1
+                  then trace "isDefEq FLATMAP:\n  in: \{e1Str}\n  out: \{ppClosedExpr e1'}" ()
+                  else ()
         proofIrrel <- tryProofIrrelevance isDefEq env e1' e2'
         case proofIrrel of
           Just result => pure result

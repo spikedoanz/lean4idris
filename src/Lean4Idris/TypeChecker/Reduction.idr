@@ -76,6 +76,10 @@ getAppConst e = go e []
 debugUnfold : Bool
 debugUnfold = False
 
+-- Helper to force trace execution
+traceUnfold : String -> a -> a
+traceUnfold msg x = if debugUnfold then trace msg x else x
+
 covering
 unfoldHead : TCEnv -> ClosedExpr -> Maybe ClosedExpr
 unfoldHead env e =
@@ -83,14 +87,24 @@ unfoldHead env e =
     Just (name, levels, args) =>
       case unfoldConst env name levels of
         Just value =>
-          let _ = if debugUnfold && show name == "UInt64.size" then trace "UNFOLD: \{show name} -> ..." () else ()
-          in Just (mkApp value args)
+          let nameStr = show name
+              shouldTrace = isInfixOf (unpack "flatMap") (unpack nameStr) ||
+                            isInfixOf (unpack "brecOn") (unpack nameStr) ||
+                            isInfixOf (unpack "flatten") (unpack nameStr)
+          in if shouldTrace
+               then traceUnfold "UNFOLD: \{nameStr}" (Just (mkApp value args))
+               else Just (mkApp value args)
         Nothing => Nothing
     Nothing => case e of
       Const name levels =>
         let result = unfoldConst env name levels
-            _ = if debugUnfold && show name == "UInt64.size" then trace "UNFOLD-CONST: \{show name}" () else ()
-        in result
+            nameStr = show name
+            shouldTrace = isInfixOf (unpack "flatMap") (unpack nameStr) ||
+                          isInfixOf (unpack "brecOn") (unpack nameStr) ||
+                          isInfixOf (unpack "flatten") (unpack nameStr)
+        in if shouldTrace
+             then traceUnfold "UNFOLD-CONST: \{nameStr}" result
+             else result
       _ => Nothing
 
 ------------------------------------------------------------------------
@@ -151,6 +165,10 @@ debugIota = False
 -- Debug flag for whnf steps
 debugWhnf : Bool
 debugWhnf = False
+
+-- Debug flag for whnf results on List.flatMap
+debugFlatMap : Bool
+debugFlatMap = False
 
 -- Names for Nat constructors (used in iota reduction for NatLit handling)
 iotaNatName : Name
@@ -492,11 +510,27 @@ tryQuotReduction e whnfStep = do
 -- WHNF
 ------------------------------------------------------------------------
 
+-- Helper to check if expression contains flatMap in head position
+isFlatMapHead : ClosedExpr -> Bool
+isFlatMapHead e =
+  let (head, _) = getAppSpine e in
+  case head of
+    Const n _ => isInfixOf (unpack "flatMap") (unpack (show n))
+    _ => False
+
+%inline
+traceWhnfFlatMap : ClosedExpr -> ClosedExpr -> ClosedExpr
+traceWhnfFlatMap input output =
+  assert_total $ trace "WHNF flatMap:\n  in:  \{ppClosedExpr input}\n  out: \{ppClosedExpr output}" output
+
 export covering
 whnf : TCEnv -> ClosedExpr -> TC ClosedExpr
 whnf env e = do
   useFuel
-  pure (whnfPure 1000 e)
+  let result = whnfPure 1000 e
+  if debugFlatMap && isFlatMapHead e
+    then pure (traceWhnfFlatMap e result)
+    else pure result
   where
     whnfStepCore : ClosedExpr -> Maybe ClosedExpr
     whnfStepCore (App (Lam _ _ _ body) arg) = Just (instantiate1 (believe_me body) arg)
@@ -512,10 +546,36 @@ whnf env e = do
       Nothing => unfoldHead env e
 
     mutual
+      -- Simple app head reduction without projection - just recurse and unfold
+      -- Used to avoid infinite recursion through projection
+      reduceAppHeadSimple : ClosedExpr -> Maybe ClosedExpr
+      reduceAppHeadSimple (App f arg) = case reduceAppHeadSimple f of
+        Just f' => Just (App f' arg)
+        Nothing => case unfoldHead env f of
+          Just f' => Just (App f' arg)
+          Nothing => Nothing
+      reduceAppHeadSimple _ = Nothing
+
+      -- Step function with iota but NO projection
+      -- Used inside tryProjReduction to enable brecOn.go iota without infinite recursion
+      -- Uses whnfStepWithDelta internally to prevent exponential blowup from nested iterWhnfStep
+      whnfStepWithIota : ClosedExpr -> Maybe ClosedExpr
+      whnfStepWithIota e = case whnfStepCore e of
+        Just e' => Just e'
+        Nothing => case tryNativeEval e whnfStepWithDelta of
+          Just e' => Just e'
+          Nothing => case reduceAppHeadSimple e of
+            Just e' => Just e'
+            Nothing => case tryIotaReduction env e whnfStepWithDelta of
+              Just e' => Just e'
+              Nothing => unfoldHead env e
+
       -- Full step function that includes native evaluation, iota and projection reduction
       -- This is passed to native eval functions so they can reduce arguments
       -- IMPORTANT: tryNativeEval must come BEFORE reduceAppHead so that functions like
       -- Nat.ble can be natively evaluated before being unfolded
+      -- Note: tryProjReduction uses whnfStepWithIota (not whnfStepFull) to enable
+      -- iota reduction inside structs for brecOn.go, while avoiding infinite proj recursion
       whnfStepFull : ClosedExpr -> Maybe ClosedExpr
       whnfStepFull e = case whnfStepCore e of
         Just e' => Just e'
@@ -523,7 +583,7 @@ whnf env e = do
           Just e' => Just e'
           Nothing => case reduceAppHead e of
             Just e' => Just e'
-            Nothing => case tryProjReduction env e whnfStepWithDelta of
+            Nothing => case tryProjReduction env e whnfStepWithIota of
               Just e' => Just e'
               Nothing => case tryIotaReduction env e whnfStepFull of
                 Just e' => Just e'
@@ -532,7 +592,7 @@ whnf env e = do
       reduceAppHead : ClosedExpr -> Maybe ClosedExpr
       reduceAppHead (App f arg) = case reduceAppHead f of
         Just f' => Just (App f' arg)
-        Nothing => case tryProjReduction env f whnfStepFull of
+        Nothing => case tryProjReduction env f whnfStepWithIota of
           Just f' => Just (App f' arg)
           Nothing => case unfoldHead env f of
             Just f' => Just (App f' arg)

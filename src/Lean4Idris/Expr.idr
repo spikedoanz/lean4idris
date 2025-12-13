@@ -1,12 +1,14 @@
-||| Expressions for Lean 4
+||| Well-scoped expressions for Lean 4
 |||
-||| Following lean4lean's approach, expressions are not indexed by scope depth.
-||| De Bruijn indices are plain Nat values. Scope correctness is ensured by
-||| the type checker operations rather than the type structure itself.
+||| Expressions are indexed by a natural number representing the number of
+||| bound variables in scope. This makes ill-scoped terms unrepresentable.
+||| De Bruijn indices are represented as `Fin n` ensuring they're always valid.
 module Lean4Idris.Expr
 
 import Lean4Idris.Name
 import Lean4Idris.Level
+import Data.Fin
+import Data.Vect
 import Data.List
 
 %default total
@@ -38,48 +40,97 @@ Show BinderInfo where
   show StrictImplicit = "#BS"
   show Instance = "#BC"
 
-||| Expressions (following lean4lean's flat approach)
+||| Well-scoped expressions indexed by the number of bound variables in scope
+|||
+||| @n The number of bound variables currently in scope
 public export
-data Expr : Type where
-  ||| Bound variable - de Bruijn index (0 = most recently bound)
-  BVar : Nat -> Expr
+data Expr : (n : Nat) -> Type where
+  ||| Bound variable - de Bruijn index guaranteed to be in scope
+  BVar : Fin n -> Expr n
   ||| Free variable (local) - used during type checking to represent
   ||| variables introduced by binders. Has a unique ID and a type.
   ||| Unlike BVar which uses de Bruijn indices, Local uses unique IDs
   ||| which makes comparison trivial (same ID = same variable).
-  Local : (id : Nat) -> (userName : Name) -> Expr
+  Local : (id : Nat) -> (userName : Name) -> Expr n
   ||| Sort (type universe)
-  Sort : Level -> Expr
+  Sort : Level -> Expr n
   ||| Constant reference with universe level instantiation
-  Const : Name -> List Level -> Expr
+  Const : Name -> List Level -> Expr n
   ||| Function application
-  App : Expr -> Expr -> Expr
+  App : Expr n -> Expr n -> Expr n
   ||| Lambda abstraction: λ (x : A). body
-  Lam : (binderName : Name) -> BinderInfo -> (binderType : Expr) -> (body : Expr) -> Expr
+  ||| The body has one more variable in scope
+  Lam : (binderName : Name) -> BinderInfo -> (binderType : Expr n) -> (body : Expr (S n)) -> Expr n
   ||| Pi type (dependent function type): (x : A) -> B
-  Pi : (binderName : Name) -> BinderInfo -> (binderType : Expr) -> (body : Expr) -> Expr
+  ||| The codomain has one more variable in scope
+  Pi : (binderName : Name) -> BinderInfo -> (binderType : Expr n) -> (body : Expr (S n)) -> Expr n
   ||| Let binding: let x : A := v in body
-  Let : (binderName : Name) -> (binderType : Expr) -> (val : Expr) -> (body : Expr) -> Expr
+  Let : (binderName : Name) -> (binderType : Expr n) -> (val : Expr n) -> (body : Expr (S n)) -> Expr n
   ||| Primitive projection from a structure
-  Proj : (structName : Name) -> (fieldIdx : Nat) -> (struct : Expr) -> Expr
+  Proj : (structName : Name) -> (fieldIdx : Nat) -> (struct : Expr n) -> Expr n
   ||| Natural number literal
-  NatLit : Nat -> Expr
+  NatLit : Nat -> Expr n
   ||| String literal
-  StringLit : String -> Expr
+  StringLit : String -> Expr n
 
 %name Expr e, e1, e2, f, g
 
-||| Alias for documentation purposes - a "closed" expression
-||| (no free BVars) is just a regular Expr. Scope correctness
-||| is enforced by type checker operations.
+||| A closed expression has no free de Bruijn variables
 public export
 ClosedExpr : Type
-ClosedExpr = Expr
+ClosedExpr = Expr 0
+
+||| Shift a Fin by m (adding m to the index)
+shiftFin : (m : Nat) -> Fin n -> Fin (n + m)
+shiftFin m FZ = FZ
+shiftFin m (FS i) = FS (shiftFin m i)
+
+||| Weaken an expression to a larger scope
+||| Shifts all de Bruijn indices up
+public export
+weaken : {m : Nat} -> Expr n -> Expr (n + m)
+weaken (BVar i) = BVar (shiftFin m i)
+weaken (Local id name) = Local id name
+weaken (Sort l) = Sort l
+weaken (Const name lvls) = Const name lvls
+weaken (App f x) = App (weaken f) (weaken x)
+weaken (Lam name bi ty body) = Lam name bi (weaken ty) (weaken body)
+weaken (Pi name bi ty body) = Pi name bi (weaken ty) (weaken body)
+weaken (Let name ty val body) = Let name (weaken ty) (weaken val) (weaken body)
+weaken (Proj sname idx s) = Proj sname idx (weaken s)
+weaken (NatLit k) = NatLit k
+weaken (StringLit s) = StringLit s
+
+||| Shift a Fin by 1
+shiftFin1 : Fin n -> Fin (S n)
+shiftFin1 FZ = FZ
+shiftFin1 (FS i) = FS (shiftFin1 i)
+
+||| Weaken by 1 - most common case
+public export
+weaken1 : Expr n -> Expr (S n)
+weaken1 (BVar i) = BVar (shiftFin1 i)
+weaken1 (Local id name) = Local id name
+weaken1 (Sort l) = Sort l
+weaken1 (Const name lvls) = Const name lvls
+weaken1 (App f x) = App (weaken1 f) (weaken1 x)
+weaken1 (Lam name bi ty body) = Lam name bi (weaken1 ty) (weaken1 body)
+weaken1 (Pi name bi ty body) = Pi name bi (weaken1 ty) (weaken1 body)
+weaken1 (Let name ty val body) = Let name (weaken1 ty) (weaken1 val) (weaken1 body)
+weaken1 (Proj sname idx s) = Proj sname idx (weaken1 s)
+weaken1 (NatLit k) = NatLit k
+weaken1 (StringLit s) = StringLit s
+
+-- For comparing expressions we need Eq on Fin
+eqFin : Fin n -> Fin m -> Bool
+eqFin FZ FZ = True
+eqFin (FS i) (FS j) = eqFin i j
+eqFin _ _ = False
 
 ||| Syntactic equality of expressions (ignoring binder names)
 export
-exprEq : Expr -> Expr -> Bool
-exprEq (BVar i) (BVar j) = i == j
+exprEq : Expr n -> Expr m -> Bool
+exprEq (BVar i) (BVar j) = eqFin i j
 exprEq (Local id1 _) (Local id2 _) = id1 == id2
 exprEq (Sort l1) (Sort l2) = l1 == l2
 exprEq (Const n1 ls1) (Const n2 ls2) = n1 == n2 && ls1 == ls2
@@ -93,59 +144,59 @@ exprEq (StringLit s1) (StringLit s2) = s1 == s2
 exprEq _ _ = False
 
 export
-Eq Expr where
+Eq (Expr n) where
   (==) = exprEq
 
 ||| Is this expression a sort?
 public export
-isSort : Expr -> Bool
+isSort : Expr n -> Bool
 isSort (Sort _) = True
 isSort _ = False
 
 ||| Is this expression a Pi type?
 public export
-isPi : Expr -> Bool
+isPi : Expr n -> Bool
 isPi (Pi _ _ _ _) = True
 isPi _ = False
 
 ||| Is this expression a lambda?
 public export
-isLam : Expr -> Bool
+isLam : Expr n -> Bool
 isLam (Lam _ _ _ _) = True
 isLam _ = False
 
 ||| Is this expression an application?
 public export
-isApp : Expr -> Bool
+isApp : Expr n -> Bool
 isApp (App _ _) = True
 isApp _ = False
 
 ||| Get the head of an application spine
 ||| e.g., for `f a b c` returns `f`
 public export
-getAppFn : Expr -> Expr
+getAppFn : Expr n -> Expr n
 getAppFn (App f _) = getAppFn f
 getAppFn e = e
 
 ||| Get arguments of an application spine
 ||| e.g., for `f a b c` returns `[a, b, c]`
 public export
-getAppArgs : Expr -> List Expr
+getAppArgs : Expr n -> List (Expr n)
 getAppArgs = go []
   where
-    go : List Expr -> Expr -> List Expr
+    go : List (Expr n) -> Expr n -> List (Expr n)
     go acc (App f x) = go (x :: acc) f
     go acc _ = acc
 
 ||| Build an application from a function and list of arguments
 public export
-mkApp : Expr -> List Expr -> Expr
+mkApp : Expr n -> List (Expr n) -> Expr n
 mkApp f [] = f
 mkApp f (x :: xs) = mkApp (App f x) xs
 
 ||| Collect all free constants referenced in an expression
 public export
-freeConsts : Expr -> List Name
+freeConsts : Expr n -> List Name
 freeConsts (BVar _) = []
 freeConsts (Local _ _) = []
 freeConsts (Sort _) = []
@@ -160,7 +211,7 @@ freeConsts (StringLit _) = []
 
 ||| Collect all universe level parameters in an expression
 public export
-levelParams : Expr -> List Name
+levelParams : Expr n -> List Name
 levelParams (BVar _) = []
 levelParams (Local _ _) = []
 levelParams (Sort l) = Level.params l

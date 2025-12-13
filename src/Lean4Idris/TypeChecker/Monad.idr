@@ -6,6 +6,7 @@ import Lean4Idris.Expr
 import Lean4Idris.Decl
 import Lean4Idris.Pretty
 import Data.SortedMap
+import Data.Fin
 import Data.Vect
 
 %default total
@@ -60,29 +61,26 @@ record LocalEntry where
   value : Maybe ClosedExpr
   placeholder : Maybe ClosedExpr
 
-||| Local context as a simple list (no indexing with flat Expr)
 public export
-LocalCtx : Type
-LocalCtx = List LocalEntry
+LocalCtx : Nat -> Type
+LocalCtx n = Vect n LocalEntry
 
 public export
-emptyCtx : LocalCtx
+emptyCtx : LocalCtx 0
 emptyCtx = []
 
 public export
-extendCtx : Name -> Expr -> LocalCtx -> LocalCtx
+extendCtx : Name -> ClosedExpr -> LocalCtx n -> LocalCtx (S n)
 extendCtx name ty ctx = MkLocalEntry name ty Nothing Nothing :: ctx
 
 public export
-extendCtxLet : Name -> Expr -> Expr -> LocalCtx -> LocalCtx
+extendCtxLet : Name -> ClosedExpr -> ClosedExpr -> LocalCtx n -> LocalCtx (S n)
 extendCtxLet name ty val ctx = MkLocalEntry name ty (Just val) Nothing :: ctx
 
-||| Look up entry by de Bruijn index (returns Nothing if out of bounds)
 public export
-lookupCtx : Nat -> LocalCtx -> Maybe LocalEntry
-lookupCtx _ [] = Nothing
-lookupCtx Z (entry :: _) = Just entry
-lookupCtx (S k) (_ :: ctx) = lookupCtx k ctx
+lookupCtx : Fin n -> LocalCtx n -> LocalEntry
+lookupCtx FZ (entry :: _) = entry
+lookupCtx (FS k) (_ :: ctx) = lookupCtx k ctx
 
 ------------------------------------------------------------------------
 -- Errors
@@ -114,7 +112,7 @@ showExprHead (App f _) = "App (" ++ showExprHead f ++ " ...)"
 showExprHead (Lam _ _ _ _) = "Lam"
 showExprHead (Pi _ _ dom _) = "Pi (" ++ showExprHead dom ++ " -> ...)"
 showExprHead (Let _ _ _ _) = "Let"
-showExprHead (BVar i) = "BVar " ++ show i
+showExprHead (BVar i) = "BVar " ++ show (finToNat i)
 showExprHead (Local id _) = "Local " ++ show id
 showExprHead (Proj sn _ _) = "Proj " ++ show sn
 showExprHead (NatLit n) = "NatLit " ++ show n

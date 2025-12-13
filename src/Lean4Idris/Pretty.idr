@@ -7,6 +7,7 @@ import Lean4Idris.Name
 import Lean4Idris.Level
 import Lean4Idris.Expr
 import Lean4Idris.Decl
+import Data.Fin
 import Data.String
 import Data.List
 
@@ -67,10 +68,10 @@ indentStr : PPContext -> String
 indentStr ctx = replicate ctx.indent ' '
 
 ||| Look up binder name by de Bruijn index
-lookupBinder : PPContext -> Nat -> String
+lookupBinder : PPContext -> Fin n -> String
 lookupBinder ctx i =
-  case getAt i ctx.binderNames of
-    Nothing => "#" ++ show i
+  case getAt (finToNat i) ctx.binderNames of
+    Nothing => "#" ++ show (finToNat i)
     Just n => show n
   where
     getAt : Nat -> List a -> Maybe a
@@ -80,14 +81,14 @@ lookupBinder ctx i =
 
 ||| Pretty print an expression
 export
-ppExpr : PPContext -> Expr -> String
+ppExpr : PPContext -> Expr n -> String
 ppExpr ctx (BVar i) = lookupBinder ctx i
 ppExpr ctx (Local id name) = "?" ++ show name ++ "." ++ show id
 ppExpr ctx (Sort l) = "Sort " ++ ppLevel l
 ppExpr ctx (Const n ls) = show n ++ ppLevelArgs ls
 ppExpr ctx (App f x) = ppApp ctx f [x]
   where
-    ppApp : PPContext -> Expr -> List Expr -> String
+    ppApp : PPContext -> Expr n -> List (Expr n) -> String
     ppApp ctx' (App f' x') args = ppApp ctx' f' (x' :: args)
     ppApp ctx' f' args = "(" ++ ppExpr ctx' f' ++ " " ++
                          joinBy " " (map (ppExpr ctx') args) ++ ")"
@@ -142,5 +143,5 @@ ppDecl (RecDecl info params) =
 ||| Simplified expression printer (no context)
 export
 covering
-Show Expr where
+Show (Expr n) where
   show = ppExpr initPPContext

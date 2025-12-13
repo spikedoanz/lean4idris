@@ -11,9 +11,23 @@ import Lean4Idris.TypeChecker.Reduction as Reduction
 import Lean4Idris.TypeChecker.Infer
 import Lean4Idris.TypeChecker.DefEq
 import Data.List
+import System.File
 import Debug.Trace
 
 %default total
+
+debugFile : File
+debugFile = unsafePerformIO $ do
+  Right f <- openFile "/tmp/typecheck_debug.txt" Append
+    | Left _ => pure stdin
+  pure f
+
+debugPrint : String -> a -> a
+debugPrint msg x = unsafePerformIO $ do
+  Right () <- fPutStrLn debugFile (msg ++ "\n")
+    | Left _ => pure x
+  fflush debugFile
+  pure x
 
 ------------------------------------------------------------------------
 -- Name/Param Validation
@@ -43,10 +57,10 @@ checkIsType env e = do
 -- Positivity Check
 ------------------------------------------------------------------------
 
-checkNegativeOccurrence : Name -> Expr -> Bool
+checkNegativeOccurrence : Name -> {n : Nat} -> Expr n -> Bool
 checkNegativeOccurrence indName = go 0
   where
-    go : Nat -> Expr -> Bool
+    go : {m : Nat} -> Nat -> Expr m -> Bool
     go _ (BVar _) = False
     go _ (Local _ _) = False
     go _ (Sort _) = False
@@ -73,13 +87,13 @@ checkPositivity indName (ctor :: ctors) =
 -- Constructor Validation
 ------------------------------------------------------------------------
 
-getReturnTypeHead : Expr -> Maybe (Name, List Level)
+getReturnTypeHead : Expr n -> Maybe (Name, List Level)
 getReturnTypeHead (Pi _ _ _ cod) = getReturnTypeHead cod
 getReturnTypeHead (App f _) = getReturnTypeHead f
 getReturnTypeHead (Const n ls) = Just (n, ls)
 getReturnTypeHead _ = Nothing
 
-countPiBinders : Expr -> Nat
+countPiBinders : Expr n -> Nat
 countPiBinders (Pi _ _ _ cod) = S (countPiBinders cod)
 countPiBinders _ = 0
 

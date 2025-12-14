@@ -90,7 +90,9 @@ unfoldHead env e =
           let nameStr = show name
               shouldTrace = isInfixOf (unpack "flatMap") (unpack nameStr) ||
                             isInfixOf (unpack "brecOn") (unpack nameStr) ||
-                            isInfixOf (unpack "flatten") (unpack nameStr)
+                            isInfixOf (unpack "flatten") (unpack nameStr) ||
+                            isInfixOf (unpack "instOfNatNat") (unpack nameStr) ||
+                            isInfixOf (unpack "OfNat.ofNat") (unpack nameStr)
           in if shouldTrace
                then traceUnfold "UNFOLD: \{nameStr}" (Just (mkApp value args))
                else Just (mkApp value args)
@@ -322,9 +324,12 @@ tryIotaReductionWithMajor env e major' whnfStep = do
   let typeParams = listTake recInfo.numParams args
   let structEta = tryStructEtaExpand env inductName recLevels typeParams major'
   let _ = if debugIota then trace "IOTA: inductName=\{show inductName} typeParams count=\{show (length typeParams)}" () else ()
+  let _ = if debugIota then trace "IOTA: ctorFromMajor=\{show ctorFromMajor}" () else ()
   (ctorName, _, ctorFieldArgs, fieldsProvided) <-
     (do (n, l, a) <- ctorFromMajor
-        _ <- getConstructorInfo env n
+        let ctorInfo = getConstructorInfo env n
+        let _ = if debugIota then trace "IOTA: checking ctor \{show n}" () else ()
+        _ <- ctorInfo
         let provided = case majorHead of
                          NatLit _ => True
                          _ => False
@@ -406,7 +411,9 @@ tryIotaReduction env e whnfStep = do
   let rhsWithParamsMotivesMinors = mkApp rhs (listTake firstIndexIdx args)
   let rhsWithFields = mkApp rhsWithParamsMotivesMinors ctorFields
   let remainingArgs = listDrop (majorIdx + 1) args
-  pure (mkApp rhsWithFields remainingArgs)
+  let result = mkApp rhsWithFields remainingArgs
+  let _ = if debugIota then trace "IOTA SUCCESS: \{show recName} ctor=\{show ctorName} -> result head=\{ppClosedExpr (fst (getAppSpine result))}" () else ()
+  pure result
 
 ------------------------------------------------------------------------
 -- Projection Reduction
@@ -436,8 +443,9 @@ tryProjReductionWithStruct env structName idx struct' = do
 export covering
 tryProjReduction : TCEnv -> ClosedExpr -> (ClosedExpr -> Maybe ClosedExpr) -> Maybe ClosedExpr
 tryProjReduction env (Proj structName idx struct) whnfStep = do
-  -- Limit iteration to 10 steps - main whnf should do heavy lifting
-  let struct' = iterWhnfStep whnfStep struct 10
+  -- Increased from 10 to 50 steps to handle typeclass projections like OfNat.ofNat
+  let _ = if debugProj then trace "PROJ-BEFORE: struct=\{show structName} struct=\{ppClosedExpr struct}" () else ()
+  let struct' = iterWhnfStep whnfStep struct 50
   let _ = if debugProj then trace "PROJ: struct=\{show structName} idx=\{show idx}" () else ()
   let _ = if debugProj then trace "PROJ: struct'=\{ppClosedExpr struct'}" () else ()
   let (head, args) = getAppSpine struct'
@@ -642,9 +650,10 @@ whnf env e = do
           Nothing => Nothing
       reduceAppHeadSimple _ = Nothing
 
-      -- Step function with iota but NO projection
+      -- Step function with iota but NO direct projection at top level
       -- Used inside tryProjReduction to enable brecOn.go iota without infinite recursion
-      -- Uses whnfStepWithDelta internally to prevent exponential blowup from nested iterWhnfStep
+      -- IMPORTANT: iota reduction uses whnfStepWithProj so major premise can reduce
+      -- typeclass projections like (OfNat.ofNat Nat 1 (instOfNatNat 1)) to NatLit
       whnfStepWithIota : ClosedExpr -> Maybe ClosedExpr
       whnfStepWithIota e = case whnfStepCore e of
         Just e' => Just e'
@@ -652,9 +661,26 @@ whnf env e = do
           Just e' => Just e'
           Nothing => case reduceAppHeadSimple e of
             Just e' => Just e'
-            Nothing => case tryIotaReduction env e whnfStepWithDelta of
+            -- Use whnfStepWithProj for iota to handle typeclass projections in major premise
+            Nothing => case tryIotaReduction env e whnfStepWithProj of
               Just e' => Just e'
               Nothing => unfoldHead env e
+
+      -- Step function with projection but limited iota (using whnfStepWithDelta)
+      -- Used for major premise reduction to avoid deep recursion
+      whnfStepWithProj : ClosedExpr -> Maybe ClosedExpr
+      whnfStepWithProj e = case whnfStepCore e of
+        Just e' => Just e'
+        Nothing => case tryNativeEval e whnfStepWithDelta of
+          Just e' => Just e'
+          Nothing => case reduceAppHeadSimple e of
+            Just e' => Just e'
+            -- Include projection but with limited iota to avoid deep recursion
+            Nothing => case tryProjReduction env e whnfStepWithDelta of
+              Just e' => Just e'
+              Nothing => case tryIotaReduction env e whnfStepWithDelta of
+                Just e' => Just e'
+                Nothing => unfoldHead env e
 
       -- Full step function that includes native evaluation, iota and projection reduction
       -- This is passed to native eval functions so they can reduce arguments
